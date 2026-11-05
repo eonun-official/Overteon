@@ -201,12 +201,19 @@ string mockBackendScript ()
     },
   };
 
+  // ?freeze=1 pins the meters and spectrum so two renders can be diffed
+  const FROZEN = /[?&]freeze=1/.test(location.search);
+
   // ---- metering: same shapes the editor expects -------------------------
   const t0 = performance.now();
   setInterval(() => {
-    const t = (performance.now() - t0) / 1000;
+    const t = FROZEN ? 1.0 : (performance.now() - t0) / 1000;
     const lvl = (x) => Math.max(-60, Math.min(6, x));
-    const inL  = lvl(-22 + 7 * Math.sin(t * 0.9) + 2 * Math.sin(t * 4.7));
+    // A rise-and-fall envelope (period 6 s) with a little ripple, so the
+    // peak-hold and its 1.1 s hold are visible: the ripple alone would keep
+    // resetting the hold and the peak would just follow the level.
+    const env = 0.5 + 0.5 * Math.sin(t * 2 * Math.PI / 6.0);   // 0..1
+    const inL  = lvl(-34 + 26 * env + 1.5 * Math.sin(t * 4.7));
     const inR  = lvl(inL - 1.7 + 0.8 * Math.sin(t * 1.3));
     emit("meter", { il: inL, ir: inR, ol: inL + 0.6, or: inR + 0.6,
                     hm: -14 + 3 * Math.sin(t * 0.6) });
@@ -345,6 +352,15 @@ void setupRoutes ()
     router.get ("/eonun_logo.png", (HTTPServerRequest req, HTTPServerResponse res) {
         res.writeBody (cast(ubyte[]) read (buildPath (currentRoot (), "eonun_logo.png")),
                        "image/png");
+    });
+
+    // The page posts its own geometry here when ?diag=1, so the state can be
+    // read from the server log of the same browser that took the screenshot.
+    router.post ("/diag", (HTTPServerRequest req, HTTPServerResponse res) {
+        import std.file : append;
+        const body = req.bodyReader.readAllUTF8 ();
+        append ("/tmp/overteon-diag.log", body ~ "\n");
+        res.writeBody ("ok", "text/plain");
     });
 
     router.get ("/healthz", (HTTPServerRequest req, HTTPServerResponse res) {

@@ -22,13 +22,18 @@ QtObject {
     // design space: #wrap is 1040 x 772 in the CSS
     readonly property real designW: 1040
     readonly property real designH: 772
-    readonly property real deckH:   101
+    readonly property real deckH:   110
     readonly property real headerH: 56
     readonly property real barH:    32
     readonly property real pitW:    640
 
     readonly property string displayFont: "EDIX"
     readonly property string uiFont:      "Inter"
+
+    // QML's font.pixelSize is an int, so a 10.5 px label would round to 10 and
+    // come out ~8 % narrow.  pointSize is a real, and at 96 dpi 1 pt = 4/3 px,
+    // so pt(10.5) gives exactly the CSS size.
+    function pt (cssPx) { return cssPx * 0.75 }
 
     function alpha (c, a) { return Qt.rgba (c.r, c.g, c.b, a) }
 }

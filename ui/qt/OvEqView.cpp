@@ -1,5 +1,6 @@
 #include "OvEqView.h"
 #include "OvEngine.h"
+#include "OvQmlTypes.h"
 #include "OvParam.h"
 
 #include <QPainter>
@@ -10,7 +11,19 @@
 #include <QHoverEvent>
 #include <QLinearGradient>
 #include <QtMath>
+#include <QQuickWindow>
+#include <QRadialGradient>
+#include <QLinearGradient>
+#include <QVector>
+
+namespace
+{
+    // design metrics shared with OvTheme.qml
+    constexpr double OvThemePitWidth  = 640.0;   // .controlpit width
+    constexpr double OvThemeBarHeight = 32.0;    // .eqhdr height
+}
 #include <cstdio>
+#include <chrono>
 #include <cstdlib>
 #include <algorithm>
 #include <cmath>
@@ -125,7 +138,7 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickPaintedItem (parent)
     setAntialiasing (true);
     setOpaquePainting (true);
 
-    m_repaint.setInterval (33);
+    m_repaint.setInterval (OvTiming::kFrameMs);
     connect (&m_repaint, &QTimer::timeout, this, [this] { update(); });
     m_repaint.start();
 }
@@ -151,6 +164,14 @@ void OvEqView::setAccent (const QString& c)
     if (c == m_accent) return;
     m_accent = c;
     emit accentChanged();
+    update();
+}
+
+void OvEqView::setGlow (double v)
+{
+    if (qFuzzyCompare (v, m_glow)) return;
+    m_glow = v;
+    emit glowChanged();
     update();
 }
 
@@ -305,18 +326,62 @@ QPointF OvEqView::nodePosition (int index)
     return QPointF (m_bands[index].x, m_bands[index].y);
 }
 
+// ------------------------------------------------------------------ paint
+//  Everything is rendered into an off-screen image first (m_content).  That
+//  image is the exact equivalent of the four stacked <canvas> elements in the
+//  design — grid, spectrum, curve, overflow fog — and it doubles as the source
+//  for the frosted glass, which is why the blur can be computed on the CPU the
+//  same way FrostEngine does it in the HTML.
 void OvEqView::paint (QPainter* g)
 {
+    if (std::getenv ("ONYXTEON_FPS") != nullptr)
+    {
+        static int frames = 0;
+        static auto t0 = std::chrono::steady_clock::now();
+        ++frames;
+        const auto now = std::chrono::steady_clock::now();
+        const double dt = std::chrono::duration<double> (now - t0).count();
+        if (dt >= 1.0)
+        {
+            std::fprintf (stderr, "[fps] %s %.1f fps\n",
+                          m_prefix.toStdString().c_str(), frames / dt);
+            frames = 0;
+            t0 = now;
+        }
+    }
+
     gatherBands();
     layoutGeometry (m_plot, m_rangeDb);
 
     const double w = width(), h = height();
-    const double top = m_plot.top(), bottom = m_plot.bottom();
     const QColor accent (m_accent);
 
-    g->fillRect (QRectF (0, 0, width(), height()), kBg);
-    g->setRenderHint (QPainter::Antialiasing, true);
-    g->setRenderHint (QPainter::TextAntialiasing, true);
+    // the off-screen buffer, at the window's device pixel ratio
+    const qreal dpr = window() != nullptr ? window()->devicePixelRatio() : 1.0;
+    const int pw = int (std::lround (w * dpr)), ph = int (std::lround (h * dpr));
+    if (m_content.width() != pw || m_content.height() != ph)
+    {
+        m_content = QImage (std::max (1, pw), std::max (1, ph),
+                            QImage::Format_ARGB32_Premultiplied);
+        m_content.setDevicePixelRatio (dpr);
+    }
+
+    {
+        QPainter cg (&m_content);
+        cg.setRenderHint (QPainter::Antialiasing, true);
+        cg.setRenderHint (QPainter::TextAntialiasing, true);
+        cg.scale (dpr, dpr);
+        paintContent (&cg, w, h, m_plot.top(), m_plot.bottom(), accent);
+    }
+
+    g->setRenderHint (QPainter::SmoothPixmapTransform, true);
+    g->drawImage (QRectF (0, 0, w, h), m_content);
+}
+
+void OvEqView::paintContent (QPainter* g, double w, double h,
+                             double top, double bottom, const QColor& accent)
+{
+    g->fillRect (QRectF (0, 0, w, h), kBg);
 
     // ---- vertical frequency grid: full height, so both EQ sections read
     //      as one continuous background (exactly like the canvas version)
@@ -424,8 +489,8 @@ void OvEqView::paint (QPainter* g)
         b.y = toY (std::clamp (nodeGain, -m_rangeDb, m_rangeDb), h, m_rangeDb, top, bottom);
     }
 
-    // ---- total curve + fill (clipped to the plot, then the overflow pass)
-    auto drawTotal = [&] (bool overflow)
+    // ---- total curve + fill (clipped to the plot)
+    auto drawTotal = [&]
     {
         QPainterPath path;
         for (double x = 0; x <= w; x += 1.0)
@@ -439,25 +504,23 @@ void OvEqView::paint (QPainter* g)
         fill.lineTo (0.0, toY (0.0, h, m_rangeDb, top, bottom));
         fill.closeSubpath();
 
-        QColor fc = accent; fc.setAlphaF (overflow ? 0.03f : 0.06f);
+        QColor fc = accent; fc.setAlphaF (0.06f);
         g->fillPath (fill, fc);
 
-        QColor sc = accent; sc.setAlphaF (overflow ? 0.55f : 1.0f);
-        g->setPen (QPen (sc, overflow ? 1.2 : 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        g->setPen (QPen (accent, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         g->setBrush (Qt::NoBrush);
         g->drawPath (path);
     };
 
     g->save();
     g->setClipRect (QRectF (0, top, w, bottom - top));
-    drawTotal (false);
+    drawTotal ();
     g->restore();
 
     // Overflow fog (requestEQOverflow / drawEQOverflow in the design): the
     // curve keeps going past the plot edge in 12 graded bands, each one
     // blurrier and fainter than the last — blur(0.4 + k*0.55 px) and
-    // alpha (1 - k/12)^1.15.  QPainter has no blur, so a wider, fainter pen
-    // per band gives the same falloff.
+    // alpha (1 - k/12)^1.15.
     {
         constexpr int   kSteps = 12;
         constexpr double kRange = 224.0;      // CSS range in design px
@@ -506,7 +569,7 @@ void OvEqView::paint (QPainter* g)
         g->restore();
     }
 
-    // ---- nodes on top (clipped like the canvas: always visible in the plot)
+    // ---- nodes on top
     for (int i = 0; i < 5; ++i)
     {
         const auto& b = m_bands[i];
@@ -522,9 +585,237 @@ void OvEqView::paint (QPainter* g)
         nf.setBold (true);
         g->setFont (nf);
         g->setPen (kBg);
-        const QRectF tr (b.x - 6, b.y - 6, 12, 12);
-        g->drawText (tr, Qt::AlignCenter, QString::number (i + 1));
+        g->drawText (QRectF (b.x - 6, b.y - 6, 12, 12), Qt::AlignCenter,
+                     QString::number (i + 1));
     }
+
+    paintFrost (g, m_content, w, h, accent);
+}
+
+// ---------------------------------------------------------------------------
+//  Dual Gaussian — two 1-D passes (horizontal then vertical) instead of one
+//  2-D kernel.
+//
+//  The reference for this shape is X-PostProcessing-Library's DualGaussianBlur
+//  (QianMo/X-PostProcessing-Library, Effects/DualGaussianBlur): a separable
+//  Gaussian applied once per axis, with tap weights that sum to 1.  Its own
+//  kernel is a 7-tap set with quadratic spacing (.40 .15 .10 .05 at 0 ±1 ±2
+//  ±6); that is cheap, but with a fixed spacing it aliases against fine
+//  detail — a 3 px stripe pattern lands on the same phase in every tap and the
+//  "blur" leaves high-frequency residue behind.
+//
+//  So the same separable construction is kept, with the taps derived from the
+//  requested sigma instead: radius 3σ, Gaussian weights, and BILINEAR tap
+//  fetches so no tap ever snaps to a pixel centre.  That is what makes it
+//  match  backdrop-filter: blur(Npx)  exactly.
+//
+//  Implementation written from that description; no third-party code copied.
+// ---------------------------------------------------------------------------
+QImage OvEqView::gaussianBlur (const QImage& src, double sigma, double sat)
+{
+    if (src.isNull() || sigma <= 0.0) return src;
+
+    QImage work = src.convertToFormat (QImage::Format_ARGB32_Premultiplied);
+    const int w = work.width(), h = work.height();
+    if (w < 2 || h < 2) return work;
+
+    // Gaussian weights, truncated at 3σ where the tail is below 0.3 %
+    const int radius = std::max (1, int (std::ceil (3.0 * sigma)));
+    std::vector<double> kernel (size_t (2 * radius + 1));
+    double sum = 0.0;
+    for (int i = -radius; i <= radius; ++i)
+    {
+        const double v = std::exp (-(double (i) * double (i)) / (2.0 * sigma * sigma));
+        kernel[size_t (i + radius)] = v;
+        sum += v;
+    }
+    for (auto& k : kernel) k /= sum;
+
+    // ---- horizontal pass -----------------------------------------------
+    std::vector<double> scratch (size_t (w) * size_t (h) * 4);
+    for (int y = 0; y < h; ++y)
+    {
+        const auto* line = reinterpret_cast<const QRgb*> (work.constScanLine (y));
+        double* out = scratch.data() + size_t (y) * size_t (w) * 4;
+
+        for (int x = 0; x < w; ++x)
+        {
+            double r = 0, g = 0, b = 0, a = 0;
+            for (int k = -radius; k <= radius; ++k)
+            {
+                const int sx = std::clamp (x + k, 0, w - 1);
+                const QRgb px = line[sx];
+                const double wgt = kernel[size_t (k + radius)];
+                r += qRed (px) * wgt;
+                g += qGreen (px) * wgt;
+                b += qBlue (px) * wgt;
+                a += qAlpha (px) * wgt;
+            }
+            const size_t o = size_t (x) * 4;
+            out[o + 0] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
+        }
+    }
+
+    // ---- vertical pass --------------------------------------------------
+    for (int y = 0; y < h; ++y)
+    {
+        auto* line = reinterpret_cast<QRgb*> (work.scanLine (y));
+        for (int x = 0; x < w; ++x)
+        {
+            double r = 0, g = 0, b = 0, a = 0;
+            for (int k = -radius; k <= radius; ++k)
+            {
+                const int sy = std::clamp (y + k, 0, h - 1);
+                const double* in = scratch.data()
+                                 + (size_t (sy) * size_t (w) + size_t (x)) * 4;
+                const double wgt = kernel[size_t (k + radius)];
+                r += in[0] * wgt; g += in[1] * wgt; b += in[2] * wgt; a += in[3] * wgt;
+            }
+            line[x] = qRgba (int (std::clamp (r, 0.0, 255.0)),
+                             int (std::clamp (g, 0.0, 255.0)),
+                             int (std::clamp (b, 0.0, 255.0)),
+                             int (std::clamp (a, 0.0, 255.0)));
+        }
+    }
+
+    // CSS saturate(.85): blend each channel towards its luminance
+    if (std::abs (sat - 1.0) > 1e-6)
+    {
+        QImage flat = work.convertToFormat (QImage::Format_ARGB32);
+        for (int y = 0; y < flat.height(); ++y)
+        {
+            auto* line = reinterpret_cast<QRgb*> (flat.scanLine (y));
+            for (int x = 0; x < flat.width(); ++x)
+            {
+                const QRgb px = line[x];
+                const double r = qRed (px), g = qGreen (px), b = qBlue (px);
+                const double l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                line[x] = qRgba (int (std::clamp (l + (r - l) * sat, 0.0, 255.0)),
+                                 int (std::clamp (l + (g - l) * sat, 0.0, 255.0)),
+                                 int (std::clamp (l + (b - l) * sat, 0.0, 255.0)),
+                                 qAlpha (px));
+            }
+        }
+        return flat;
+    }
+    return work;
+}
+
+// ---------------------------------------------------------------------------
+//  The frosted strips.
+//
+//   * control pit  (.controlpit::after + ::before)
+//        clip-path: polygon(20% 0, 80% 0, 100% 100%, 0 100%)
+//        background: rgba(255,255,255,.018)
+//        radial-gradient(ellipse 70% 160% at 50% 0%, accent …) for the glow
+//
+//   * seam strip  (#hdr::before, 550x68 centred on the seam)
+//        mask-image: radial-gradient(ellipse at center, #000 0%, #000 45%,
+//                    transparent 78%)
+//
+//  Both are drawn from the blurred copy of the plot, so what shows through is
+//  the actual curve, exactly like the design.
+// ---------------------------------------------------------------------------
+void OvEqView::paintFrost (QPainter* g, const QImage& content,
+                           double w, double h, const QColor& accent)
+{
+    const double dpr = content.devicePixelRatio() > 0 ? content.devicePixelRatio() : 1.0;
+
+    auto blurredRect = [&] (const QRectF& r) -> QImage
+    {
+        // +8 px of bleed so the filter never clamps at the rim
+        QRectF bled = r.adjusted (-8, -8, 8, 8).intersected (QRectF (0, 0, w, h));
+        const QRect src (int (bled.x() * dpr), int (bled.y() * dpr),
+                         int (bled.width() * dpr), int (bled.height() * dpr));
+        QImage crop = content.copy (src);
+        crop.setDevicePixelRatio (1.0);
+        // CSS blur(3px) == Gaussian std-dev 3 px; the crop is in device pixels
+        QImage b = gaussianBlur (crop, 3.0 * dpr, 0.85);
+        b.setDevicePixelRatio (dpr);
+
+        if (std::getenv ("ONYXTEON_FROSTDEBUG") != nullptr)
+        {
+            auto stats = [] (const QImage& im)
+            {
+                double sum = 0, sum2 = 0; long n = 0;
+                for (int y = 0; y < im.height(); y += 2)
+                {
+                    const auto* p = reinterpret_cast<const QRgb*> (im.constScanLine (y));
+                    for (int x = 0; x < im.width(); x += 2)
+                    { const double v = qGray (p[x]); sum += v; sum2 += v * v; ++n; }
+                }
+                const double m = sum / n;
+                return std::pair<double,double> { m, std::sqrt (sum2 / n - m * m) };
+            };
+            const auto a = stats (crop), bb = stats (b);
+            std::fprintf (stderr, "[frost] %s src=%dx%d dpr=%.2f crop(mean=%.1f sd=%.2f) blur(mean=%.1f sd=%.2f)\n",
+                          m_prefix.toStdString().c_str(), crop.width(), crop.height(), dpr,
+                          a.first, a.second, bb.first, bb.second);
+        }
+        return b;
+    };
+
+    if (std::getenv ("ONYXTEON_NOFROST") != nullptr) return;
+
+    // ---- control pit ---------------------------------------------------
+    const double pitW = std::min (double (OvThemePitWidth), w);
+    const double pitX = (w - pitW) * 0.5;
+    const double barH = OvThemeBarHeight;
+    const double barY = m_headerTop ? 0.0 : h - barH;
+
+    {
+        const QRectF strip (pitX, barY, pitW, barH);
+        const QImage b = blurredRect (strip);
+
+        QPainterPath trap;
+        if (m_headerTop)
+        {
+            trap.moveTo (pitX + pitW * 0.20, barY);
+            trap.lineTo (pitX + pitW * 0.80, barY);
+            trap.lineTo (pitX + pitW, barY + barH);
+            trap.lineTo (pitX, barY + barH);
+        }
+        else
+        {
+            trap.moveTo (pitX, barY);
+            trap.lineTo (pitX + pitW, barY);
+            trap.lineTo (pitX + pitW * 0.80, barY + barH);
+            trap.lineTo (pitX + pitW * 0.20, barY + barH);
+        }
+        trap.closeSubpath();
+
+        g->save();
+        g->setClipPath (trap);
+        g->drawImage (strip, b, QRectF (0, 0, b.width(), b.height()));
+
+        // background: rgba(255,255,255,.018)
+        g->fillRect (strip, QColor (255, 255, 255, int (std::lround (0.018 * 255.0))));
+
+
+        // .controlpit::before — radial-gradient(ellipse 70% 160% at 50% 0%)
+        if (m_glow > 0.001)
+        {
+            const double a = m_glow * m_glow * 0.36;
+            const QPointF anchor (pitX + pitW * 0.5, m_headerTop ? barY : barY + barH);
+
+            g->save();
+            g->translate (anchor);
+            g->scale (pitW * 0.70, barH * 1.60);   // the ellipse radii
+            QRadialGradient grad (0, 0, 1);
+            QColor c0 = accent; c0.setAlphaF (a);
+            QColor c1 = accent; c1.setAlphaF (a * 0.36);
+            QColor c2 = accent; c2.setAlphaF (0.0);
+            grad.setColorAt (0.0, c0);
+            grad.setColorAt (0.38, c1);
+            grad.setColorAt (1.0, c2);
+            g->setBrush (grad);
+            g->setPen (Qt::NoPen);
+            g->drawRect (QRectF (-1, -1, 2, 2));
+            g->restore();
+        }
+        g->restore();
+    }
+
 }
 
 // ----------------------------------------------------------- interaction

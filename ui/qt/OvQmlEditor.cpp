@@ -15,6 +15,7 @@
 #include <QWindow>
 #include <QAbstractEventDispatcher>
 #include <QFontDatabase>
+#include <QFont>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QPointingDevice>
@@ -57,6 +58,14 @@ namespace
         static char arg0[] = "OnyxTEON";
         static char* argv[] = { arg0, nullptr };
         new QGuiApplication (argc, argv);
+
+        // grayscale antialiasing, as a browser renders text
+        if (auto* app = qobject_cast<QGuiApplication*> (QCoreApplication::instance()))
+        {
+            QFont f = app->font();
+            f.setStyleStrategy (QFont::NoSubpixelAntialias);
+            app->setFont (f);
+        }
 
         for (const char* f : { ":/res/Inter-Regular.ttf", ":/res/Inter-Medium.ttf",
                                ":/res/Inter-SemiBold.ttf", ":/res/Inter-Bold.ttf",
@@ -275,7 +284,7 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
         impl->failed = true;
     }
 
-    startTimerHz (30);
+    startTimerHz (OvTiming::kFrameHz);
 }
 
 OvQmlEditor::~OvQmlEditor()

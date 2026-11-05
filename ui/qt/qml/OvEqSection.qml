@@ -30,38 +30,50 @@ Item {
     }
     readonly property bool limiterOn: limiterIndex > 0
 
+    // centre of the grid's 1fr column (preset trigger), measured on the design
+    readonly property real presetsCentreX: 519
+
     clip: true
 
     // ---------------------------------------------------------------- plot
-    OvEqView {
-        id: eq
-        anchors.fill: parent
-        engine: root.engine
-        prefix: root.prefix
-        accent: root.accent
-        headerTop: root.headerTop
-        opacity: root.inactive ? 0.22 : 1.0
-        Behavior on opacity { NumberAnimation { duration: 150 } }
+    // The plot itself lives in main.qml's plot layer, so the frosted glass can
+    // sample a subtree that contains only the EQ canvases.  Sampling this
+    // section instead would recursively capture the glass items inside it,
+    // which renders as a washed-out white slab.
+    property OvEqView view: null
 
-        onMenuRequested: (band, pos, currentType) => {
+    Binding {
+        target: root.view
+        property: "opacity"
+        value: root.inactive ? 0.22 : 1.0
+        when: root.view !== null
+    }
+
+    Connections {
+        target: root.view
+        enabled: root.view !== null
+
+        function onMenuRequested (band, pos, currentType) {
             bandMenu.band = band
             bandMenu.currentType = currentType
-            const p = eq.mapToItem (OvMenu.host ? OvMenu.host : root, pos)
-            const mw = bandMenu.width, mh = bandMenu.height
             const host = OvMenu.host ? OvMenu.host : root
+            const p = root.view.mapToItem (host, pos)
+            const mw = bandMenu.width, mh = bandMenu.height
             const x = Math.max (4, Math.min (host.width - mw - 4, p.x))
             const y = Math.max (4, Math.min (host.height - mh - 4, p.y))
             OvMenu.show (bandMenu, x, y)
         }
-        onHoverInfo: (text, pos) => {
+
+        function onHoverInfo (text, pos) {
             tip.text = text
-            const p = eq.mapToItem (root, pos)
+            const p = root.view.mapToItem (root, pos)
             tip.x = Math.max (4, Math.min (root.width - tip.width - 6, p.x + 12))
             tip.y = Math.max (4, p.y - 30)
             tip.visible = true
             tipTimer.restart()          // 1400 ms, as showTip() does
         }
-        onHoverEnded: { tip.visible = false; tipTimer.stop() }
+
+        function onHoverEnded () { tip.visible = false; tipTimer.stop() }
     }
 
     // ------------------------------------------------------ header bar area
@@ -74,26 +86,11 @@ Item {
 
         readonly property real pitW: Math.min (OvTheme.pitW, width)
 
-        // ---- frosted glass, .controlpit::after --------------------------
-        //   backdrop-filter: blur(3px) saturate(.85)   -> dual-Kawase pyramid
-        //   background: rgba(255,255,255,.018)         -> veil
-        //   clip-path: polygon(20% 0, 80% 0, 100% 100%, 0 100%)
-        //   .controlpit::before radial glow            -> glow
-        // The trapezoid, the glow and the veil are all computed inside the
-        // composite shader, so nothing has to be masked with overlays.
-        OvGlass {
-            anchors.fill: parent
-            source: eq
-            radius: 3.0
-            saturation: 0.85
-            veil: 0.018
-            shape: root.headerTop ? 1 : 2
-            pitWidth: bar.pitW / Math.max (1, width)
-            edgeSoftness: 1.0
-            glowColor: root.accent
-            glowStrength: root.glowAmount
-            glowFromBottom: ! root.headerTop
-        }
+        // The frosted glass (backdrop blur + veil + accent glow) is painted by
+        // OvEqView itself, in the same image it renders the plot into — the
+        // same construction as FrostEngine in web_fx/index.html.  Drawing it
+        // here with a ShaderEffectSource would capture a subtree that contains
+        // glass items, which renders as a flat white slab.
 
         // opaque side fills, clipped away from the trapezoid (eqhdr::before/after)
         Canvas {
@@ -151,7 +148,7 @@ Item {
             text: root.title
             color: root.accent
             font.family: OvTheme.uiFont
-            font.pixelSize: 12
+            font.pointSize: OvTheme.pt (11.5)
             font.letterSpacing: 2
             font.bold: true
             opacity: root.inactive ? 0.5 : 1.0
@@ -175,18 +172,24 @@ Item {
         }
 
         // ---- centre pit controls ------------------------------------------
-        Row {
-            anchors.centerIn: parent
-            spacing: 18
-            height: parent.height
+        // Positions come from the design's own layout:
+        //   SIDECHAIN  .pitcontrols is a 5-column grid inside the 640 px pit
+        //              with padding 0 110px and gap 6px, so the preset trigger
+        //              is centred between the two separators;
+        //   POST EQ    .pitcontrols is a centred flex row, gap 18px.
+        // The measured left edges of each group in the web render are used
+        // below so both front ends agree to the pixel.
+        Item {
+            id: pit
+            anchors.fill: parent
 
-            // SIDECHAIN: SAT OS | presets | LIM OS
-            Row {
+            // SIDECHAIN — grid: [SAT OS][sep][presets 1fr][sep][LIM OS]
+            Item {
                 visible: root.prefix === "sc"
-                spacing: 12
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.fill: parent
 
                 OvDropdown {
+                    x: 311
                     anchors.verticalCenter: parent.verticalCenter
                     param: root.engine ? root.engine.param ("osFactor") : null
                     label: "SAT OS"
@@ -195,14 +198,26 @@ Item {
                     accent: root.accent
                     dimmed: root.driveMode === 2
                 }
-                Rectangle { width: 1; height: 12; color: OvTheme.line; anchors.verticalCenter: parent.verticalCenter }
+
+                Rectangle {
+                    x: 401; width: 1; height: 12; color: OvTheme.line
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
                 OvPresetButton {
+                    x: root.presetsCentreX - width / 2
                     anchors.verticalCenter: parent.verticalCenter
                     engine: root.engine
                     accent: root.accent
                 }
-                Rectangle { width: 1; height: 12; color: OvTheme.line; anchors.verticalCenter: parent.verticalCenter }
+
+                Rectangle {
+                    x: 639; width: 1; height: 12; color: OvTheme.line
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
                 OvDropdown {
+                    x: 659
                     anchors.verticalCenter: parent.verticalCenter
                     param: root.engine ? root.engine.param ("limiterOs") : null
                     label: "LIM OS"
@@ -213,29 +228,41 @@ Item {
                 }
             }
 
-            // POST EQ: STEREO | MODE | SATURATION
-            Row {
+            // POST EQ — centred flex row, gap 18
+            Item {
                 visible: root.prefix === "pq"
-                spacing: 12
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.fill: parent
 
                 OvDropdown {
+                    x: 319
                     anchors.verticalCenter: parent.verticalCenter
                     param: root.engine ? root.engine.param ("msMode") : null
                     label: "STEREO"
                     labelColor: OvTheme.faint
                     accent: root.accent
                 }
-                Rectangle { width: 1; height: 12; color: OvTheme.line; anchors.verticalCenter: parent.verticalCenter }
+
+                Rectangle {
+                    x: 437; width: 1; height: 12; color: OvTheme.line
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
                 OvDropdown {
+                    x: 456
                     anchors.verticalCenter: parent.verticalCenter
                     param: root.engine ? root.engine.param ("driveMode") : null
                     label: "MODE"
                     labelColor: OvTheme.faint
                     accent: root.accent
                 }
-                Rectangle { width: 1; height: 12; color: OvTheme.line; anchors.verticalCenter: parent.verticalCenter }
+
+                Rectangle {
+                    x: 577; width: 1; height: 12; color: OvTheme.line
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
                 OvDropdown {
+                    x: 597
                     anchors.verticalCenter: parent.verticalCenter
                     param: root.engine ? root.engine.param ("driveType") : null
                     label: "SATURATION"
@@ -247,28 +274,25 @@ Item {
         }
 
         // ---- right hand controls ------------------------------------------
-        Row {
-            anchors.right: parent.right
-            anchors.rightMargin: 16
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 18
+        // The design puts the toggle and the range badge at fixed offsets from
+        // the bar's right edge (measured: dot at 862 / 873, badge text ending
+        // at 1015 in a 1040 wide design).
+        Item {
+            anchors.fill: parent
 
             OvToggle {
+                x: root.prefix === "sc" ? 862 : 873
                 anchors.verticalCenter: parent.verticalCenter
-                visible: root.prefix === "sc"
-                param: root.engine ? root.engine.param ("harmSolo") : null
-                label: "SOLO HARM"
-                accent: root.accent
-            }
-            OvToggle {
-                anchors.verticalCenter: parent.verticalCenter
-                visible: root.prefix === "pq"
-                param: root.engine ? root.engine.param ("autoGain") : null
-                label: "AUTO GAIN"
+                param: root.engine
+                       ? root.engine.param (root.prefix === "sc" ? "harmSolo" : "autoGain")
+                       : null
+                label: root.prefix === "sc" ? "SOLO HARM" : "AUTO GAIN"
                 accent: root.accent
             }
 
             OvRangeBadge {
+                anchors.right: parent.right
+                anchors.rightMargin: 11
                 anchors.verticalCenter: parent.verticalCenter
                 param: root.engine ? root.engine.param (root.prefix + "Range") : null
                 options: root.prefix === "sc"

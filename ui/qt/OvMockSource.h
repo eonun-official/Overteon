@@ -105,7 +105,9 @@ public:
     {
         const double t = frozen ? 1.0 : now();
         OvMeters m;
-        const double in = -22.0 + 7.0 * std::sin (t * 0.9) + 2.0 * std::sin (t * 4.7);
+        // rise-and-fall envelope (6 s) so the peak hold is observable
+        const double env = 0.5 + 0.5 * std::sin (t * 2.0 * 3.14159265 / 6.0);
+        const double in = -34.0 + 26.0 * env + 1.5 * std::sin (t * 4.7);
         m.inL  = (float) in;
         m.inR  = (float) (in - 1.7 + 0.8 * std::sin (t * 1.3));
         m.outL = (float) (in + 0.6);

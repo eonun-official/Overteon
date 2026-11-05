@@ -1,4 +1,5 @@
 import QtQuick
+import OnyxTEON 1.0
 
 // Overteon — Qt6/QML front end.
 // Layout numbers come straight from web_fx/index.html (#wrap is 1040x772);
@@ -40,7 +41,52 @@ Item {
             width: parent.width
             height: parent.eqH
 
-            // the layer the header frost samples from (no header in here)
+            // The plot layer holds ONLY the two EQ canvases.  Every frosted
+            // surface samples this subtree, so it must not contain glass
+            // items — a ShaderEffectSource that captures its own siblings
+            // renders as a washed-out slab.
+            Item {
+                id: plotLayer
+                anchors.fill: parent
+
+                OvEqView {
+                    id: scView
+                    x: 0; y: 0
+                    width: parent.width
+                    height: parent.height / 2
+                    engine: root.engine
+                    prefix: "sc"
+                    accent: OvTheme.sc
+                    headerTop: true
+                    glow: root.outLight * root.outLight * 0.36
+                }
+
+                OvEqView {
+                    id: pqView
+                    x: 0; y: parent.height / 2
+                    width: parent.width
+                    height: parent.height / 2
+                    engine: root.engine
+                    prefix: "pq"
+                    accent: OvTheme.pq
+                    headerTop: false
+                    glow: root.inLight * root.inLight * 0.36
+                }
+            }
+
+            // #hdr::before — the elliptical frost on the seam.  It spans both
+            // plots, so it is painted from both of their images at once.
+            OvSeamFrost {
+                id: seamFrost
+                width: 550
+                height: 68
+                x: (parent.width - width) / 2
+                y: parent.height / 2 - height / 2
+                topView: scView
+                bottomView: pqView
+            }
+
+            // the bars, controls and tooltips sit above the plots
             Item {
                 id: eqLayer
                 anchors.fill: parent
@@ -50,6 +96,7 @@ Item {
                     y: 0
                     width: parent.width
                     height: parent.height / 2
+                    view: scView
                     engine: root.engine
                     prefix: "sc"
                     headerTop: true
@@ -64,6 +111,7 @@ Item {
                     y: parent.height / 2
                     width: parent.width
                     height: parent.height / 2
+                    view: pqView
                     engine: root.engine
                     prefix: "pq"
                     headerTop: false
@@ -79,7 +127,7 @@ Item {
                 y: parent.height / 2 - height / 2
                 width: parent.width
                 engine: root.engine
-                sourceItem: eqLayer
+                sourceItem: plotLayer
                 schranz: root.driveMode === 2
                 onAboutRequested: about.open()
             }

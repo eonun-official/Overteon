@@ -4,13 +4,20 @@
 //
 //  A direct port of the canvas EQ engine in web_fx/index.html:
 //  same log frequency axis (5 Hz..24 kHz), same RBJ coefficient maths,
-//  same colours, same node geometry and the same "overflow" pass that
-//  lets the curve bleed into the header area (the frosted trapezoid
-//  above/blow the plot shows a blurred copy of it).
+//  same colours, same node geometry.
+//
+//  The frosted glass is painted here as well, exactly like the original's
+//  FrostEngine: the plot is rendered into an image, that image is run through
+//  a dual-Kawase pyramid, and the result is drawn clipped to the control-pit
+//  trapezoid (with the CSS veil and the elliptical accent glow).  Doing it in
+//  the painter rather than with a ShaderEffectSource keeps it deterministic —
+//  sampling a QQuickPaintedItem through a texture gives garbage.
 // ============================================================
 #include <QQuickPaintedItem>
 #include <QTimer>
 #include <QString>
+#include <QImage>
+#include <QPainterPath>
 
 class OvEngine;
 
@@ -22,6 +29,7 @@ class OvEqView : public QQuickPaintedItem
     Q_PROPERTY(QString prefix READ prefix WRITE setPrefix NOTIFY prefixChanged)
     Q_PROPERTY(QString accent READ accent WRITE setAccent NOTIFY accentChanged)
     Q_PROPERTY(bool headerTop READ headerTop WRITE setHeaderTop NOTIFY headerTopChanged)
+    Q_PROPERTY(double glow READ glow WRITE setGlow NOTIFY glowChanged)
 
 public:
     explicit OvEqView (QQuickItem* parent = nullptr);
@@ -38,11 +46,25 @@ public:
     bool headerTop() const { return m_headerTop; }
     void setHeaderTop (bool);
 
+    /// 0..1 accent glow inside the trapezoid, driven by the meter level of
+    /// this half of the signal path (.controlpit::before).
+    double glow() const { return m_glow; }
+    void setGlow (double);
+
     void paint (QPainter*) override;
 
     /// Centre of band `index` (0..4) in item coordinates, after refreshing
     /// the geometry from the current parameter values.
     Q_INVOKABLE QPointF nodePosition (int index);
+
+    /// The last rendered plot image; OvSeamFrost blurs it together with the
+    /// other half's.  Null until the view has painted once.
+    QImage contentImage() const { return m_content; }
+
+    /// Two-pass separable Gaussian (the "dual Gaussian": one horizontal, one
+    /// vertical convolution), sigma in item pixels, plus CSS saturate().
+    /// Shared with OvSeamFrost so both glass surfaces match.
+    static QImage gaussianBlur (const QImage& src, double sigma, double sat);
 
     // interaction
     void mousePressEvent (QMouseEvent*) override;
@@ -58,6 +80,7 @@ signals:
     void prefixChanged();
     void accentChanged();
     void headerTopChanged();
+    void glowChanged();
     void menuRequested (int band, QPointF pos, QString currentType);
     void hoverInfo (QString text, QPointF pos);
     void hoverEnded();
@@ -71,7 +94,6 @@ private:
         bool   active = false;
     };
 
-    // parameter helpers (band index 0..4)
     double  valueOf (const QString& id, double fallback) const;
     QString textOf (const QString& id) const;
     void    setValueOf (const QString& id, double v);
@@ -90,25 +112,35 @@ private:
     double totalMagAt (double atHz) const;
     double displayMult() const;
 
+    void refreshNodePositions();
+    double plotRangeDb() const;
+    double inactiveOpacity() const;
     int nodeAt (const QPointF& pos) const;
+
+    // ---- painting helpers ------------------------------------------
+    void paintContent (QPainter* g, double w, double h,
+                       double top, double bottom, const QColor& accent);
+    /// Paint the frosted strip for this half of the EQ.
+    void paintFrost (QPainter* g, const QImage& blurred,
+                     double w, double h, const QColor& accent);
 
     OvEngine* m_engine = nullptr;
     QString   m_prefix = QStringLiteral ("sc");
     QString   m_accent = QStringLiteral ("#ff5c8a");
     bool      m_headerTop = true;
+    double    m_glow = 0.0;
 
     Band   m_bands[5];
     QRectF m_plot;
     double m_rangeDb = 12.0;
 
-    void refreshNodePositions();
-    double plotRangeDb() const;
-    double inactiveOpacity() const;
-
     int    m_dragBand = -1;
     bool   m_dragMovesGain = false;
-    QPointF m_grabOffset;          // node position minus press position
+    QPointF m_grabOffset;
     int    m_hoverBand = -1;
 
+    QImage m_content;        // the plot, rendered off-screen
+    QImage m_blurred;        // its blurred copy (bar strip only)
+    int    m_contentW = 0, m_contentH = 0;
     QTimer m_repaint;
 };

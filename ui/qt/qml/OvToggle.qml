@@ -45,7 +45,7 @@ Item {
             color: root.on ? root.accent : (ma.containsMouse ? OvTheme.ink : OvTheme.faint)
             Behavior on color { ColorAnimation { duration: 120 } }
             font.family: OvTheme.uiFont
-            font.pixelSize: 10
+            font.pointSize: OvTheme.pt (10.5)
             font.letterSpacing: 1.4
         }
     }

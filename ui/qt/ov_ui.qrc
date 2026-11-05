@@ -5,7 +5,6 @@
         <file alias="qmldir">qml/qmldir</file>
         <file alias="OvTheme.qml">qml/OvTheme.qml</file>
         <file alias="OvMenu.qml">qml/OvMenu.qml</file>
-        <file alias="OvGlass.qml">qml/OvGlass.qml</file>
         <file alias="OvKnob.qml">qml/OvKnob.qml</file>
         <file alias="OvDropdown.qml">qml/OvDropdown.qml</file>
         <file alias="OvToggle.qml">qml/OvToggle.qml</file>

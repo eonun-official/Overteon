@@ -8,8 +8,24 @@
 // ============================================================
 #include <QtQml/qqml.h>
 
+// The UI refreshes at the display rate.  Every repainting item and every
+// polling core timer uses this, so the EQ plots, the meter pod and the
+// parameter polling stay in step (they used to be 30, 30 and 33 ms apart,
+// which produced a stuttering pod and 125 fps plots).
+namespace OvTiming
+{
+    constexpr int kFrameHz    = 120;
+    constexpr int kFrameMs    = 1000 / kFrameHz;
+    constexpr int kMeterHz    = kFrameHz;
+    // parameters are polled less often than the screen refreshes: 60 Hz is
+    // plenty for host automation and costs nothing
+    constexpr int kPollHz     = 60;
+    constexpr int kPollMs     = 1000 / kPollHz;
+}
+
 #include "OvEqView.h"
 #include "OvMeterView.h"
+#include "OvSeamFrost.h"
 
 inline void ovRegisterQmlTypes()
 {
@@ -19,4 +35,5 @@ inline void ovRegisterQmlTypes()
 
     qmlRegisterType<OvEqView>   ("OnyxTEON", 1, 0, "OvEqView");
     qmlRegisterType<OvMeterView>("OnyxTEON", 1, 0, "OvMeterView");
+    qmlRegisterType<OvSeamFrost>("OnyxTEON", 1, 0, "OvSeamFrost");
 }

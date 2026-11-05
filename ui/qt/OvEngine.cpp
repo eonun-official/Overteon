@@ -1,4 +1,5 @@
 #include "OvEngine.h"
+#include "OvQmlTypes.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -24,7 +25,7 @@ OvEngine::OvEngine (std::unique_ptr<OvSource> source, QObject* parent)
 
     refreshPresets();
 
-    m_timer.setInterval (33);            // ~30 Hz: meters, params, spectrum
+    m_timer.setInterval (OvTiming::kPollMs);   // parameters + spectrum
     connect (&m_timer, &QTimer::timeout, this, &OvEngine::tick);
     m_timer.start();
 }

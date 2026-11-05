@@ -68,7 +68,8 @@ Item {
             text: root.label
             color: root.labelColor
             font.family: OvTheme.uiFont
-            font.pixelSize: 9
+            font.pointSize: OvTheme.pt (9)
+            font.letterSpacing: 1.2
             anchors.verticalCenter: parent.verticalCenter
         }
 
@@ -92,7 +93,8 @@ Item {
                 // CSS: transition: .12s
                 Behavior on color { ColorAnimation { duration: 120 } }
                 font.family: OvTheme.uiFont
-                font.pixelSize: 10
+                font.pointSize: OvTheme.pt (10.5)
+                font.letterSpacing: 1.4
             }
 
             MouseArea {

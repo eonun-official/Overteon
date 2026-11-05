@@ -24,9 +24,12 @@
 #include <QTimer>
 #include <QStringList>
 #include <QFontDatabase>
+#include <QFont>
 #include <QImage>
 #include <QPainter>
 #include <cstdio>
+#include <cstdlib>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -38,6 +41,16 @@ int main (int argc, char** argv)
     qputenv ("QT_QUICK_BACKEND", "opengl");
 
     QGuiApplication app (argc, argv);
+
+    // Match the browser's text rendering: grayscale antialiasing.  Qt's
+    // default subpixel (LCD) antialiasing fringes glyph edges with colour,
+    // which the web page never shows.
+    {
+        QFont f = app.font();
+        f.setStyleStrategy (QFont::NoSubpixelAntialias);
+        app.setFont (f);
+    }
+
     ovRegisterQmlTypes();
 
     for (const char* f : { ":/res/Inter-Regular.ttf", ":/res/Inter-Medium.ttf",
@@ -114,6 +127,23 @@ int main (int argc, char** argv)
 
     view.resize (w, h);
     view.show();
+
+    // The only honest frame-rate number: frames the window actually presented.
+    if (std::getenv ("ONYXTEON_FPS") != nullptr)
+    {
+        QObject::connect (&view, &QQuickWindow::frameSwapped, [&view] {
+            static int n = 0;
+            static auto t0 = std::chrono::steady_clock::now();
+            ++n;
+            const auto now = std::chrono::steady_clock::now();
+            const double dt = std::chrono::duration<double> (now - t0).count();
+            if (dt >= 2.0)
+            {
+                std::fprintf (stderr, "[fps] window %.1f fps\n", n / dt);
+                n = 0; t0 = now;
+            }
+        });
+    }
 
     if (std::getenv ("ONYXTEON_DRAGTEST") != nullptr)
     {

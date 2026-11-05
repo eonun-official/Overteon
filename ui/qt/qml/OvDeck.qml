@@ -40,7 +40,8 @@ Item {
         return x
     }
 
-    readonly property real knobTop: Math.max (0, (height - 77) / 2)
+    // ring top measured on the design: deck top (662 of 772) + 11
+    readonly property real knobTop: 10
 
     function p (id) { return engine ? engine.param (id) : null }
 

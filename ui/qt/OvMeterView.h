@@ -9,8 +9,12 @@
 //  trick did in the browser.
 // ============================================================
 #include <QQuickPaintedItem>
+#include <QImage>
+#include <QSize>
+#include <QVector>
 #include <QPainterPath>
 #include <QTimer>
+#include <chrono>
 
 class OvEngine;
 
@@ -34,18 +38,41 @@ signals:
 private:
     void advance (double dtSeconds);
 
+    /// The pod graphics.  `glowOnly` marks the pre-blur pass that produces the
+    /// feGaussianBlur halo drawn underneath the sharp layer.
+    void drawPod (QPainter* g, bool glowOnly);
+
+    /// Separable Gaussian blur of a premultiplied ARGB image.
+    static QImage blurImage (const QImage& src, double sigma);
+
     OvEngine* m_engine = nullptr;
 
+    // One channel of the composite meter.  Mirrors the design exactly:
+    //   level     the instantaneous level  -> the bright bar   (#bOL …)
+    //   peak      the peak hold            -> the dim trail    (#pOL …)
+    //   holdUntil when the trail stops holding and starts falling
+    //   the cap dot (#cOL …) rides the trail tip, i.e. the peak position
     struct Channel
     {
         QPainterPath path;
-        double p = 0.0;         // displayed level 0..1
+        // The hook path flattened once (QPainterPath::pointAtPercent is O(n),
+        // and trimming three paths per bar per frame called it 1600 times a
+        // frame).  Trimming now copies a prefix of this polyline.
+        QVector<QPointF> poly;
+        double level = 0.0;
         double peak = 0.0;
-        double holdUntil = 0.0; // seconds
+        double holdUntil = 0.0;   // seconds
     };
 
     Channel m_outL, m_outR, m_inL, m_inR;
     double  m_harmFrac = 0.0;
     double  m_clock = 0.0;
+    std::chrono::steady_clock::time_point m_last {};
     QTimer  m_timer;
+    QImage  m_glowLayer;
+    QImage  m_glowBlurred;
+    // The glow only has to be re-blurred when the pod's own pixels change;
+    // re-running a separable Gaussian over the whole pod every frame cost
+    // ~15 fps.
+    quint64 m_glowKey = 0;
 };

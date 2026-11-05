@@ -101,7 +101,7 @@ target_sources(HarmonicInjector PRIVATE
 option(OVERTEON_QT_UI "Build the Qt6/QML editor instead of the WebView one" ON)
 
 if(OVERTEON_QT_UI)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick ShaderTools)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick)
 
     # HarmonicInjector was created by juce_add_plugin before this point, so
     # AUTOMOC has to be enabled on the target itself (not via CMAKE_AUTOMOC).
@@ -113,6 +113,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvJuceSource.cpp
         ui/qt/OvEqView.cpp
         ui/qt/OvMeterView.cpp
+        ui/qt/OvSeamFrost.cpp
         ui/qt/OvQmlEditor.cpp)
 
     target_include_directories(HarmonicInjector PRIVATE ui/qt src)
@@ -122,57 +123,39 @@ if(OVERTEON_QT_UI)
     target_link_libraries(HarmonicInjector PRIVATE
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
 
-    # ---------------------------------------------------------------------
-    #  Compile the dual-Kawase / glass shaders to .qsb.
-    #  Qt 6 refuses runtime GLSL strings, so these are baked at build time
-    #  (qt_add_shaders handles the qsb invocation and dependency tracking).
-    # ---------------------------------------------------------------------
-    # the editor maps foreign ancestors itself (see OvQmlEditor.cpp)
+    # OvQmlEditor walks and maps the host's X window chain itself
     if(UNIX AND NOT APPLE)
         find_package(X11 REQUIRED)
         target_link_libraries(HarmonicInjector PRIVATE X11::X11)
-        if(TARGET X11::Xext)
-            target_link_libraries(HarmonicInjector PRIVATE X11::Xext)
-        endif()
+        # XShapeCombineRectangles (input shape, used by the optional
+        # ONYXTEON_CLEAR_INPUT path) lives in libXext
+        foreach(_x11_ext X11::Xext Xext)
+            if(TARGET ${_x11_ext})
+                target_link_libraries(HarmonicInjector PRIVATE ${_x11_ext})
+                break()
+            endif()
+        endforeach()
     endif()
 
     # The QML + font bundle has to be compiled into every plugin binary: the
     # shared-code target is a static archive and nothing references the rcc
     # object, so a plain target_sources there would be dropped by the linker.
-    # Like the QML bundle, the compiled shaders must live inside each plugin
-    # binary: the shared-code target is a static archive and nothing would
-    # reference the generated resource object.
     foreach(_fmt ${PLUGIN_FORMATS})
         if(TARGET HarmonicInjector_${_fmt})
             target_sources(HarmonicInjector_${_fmt} PRIVATE ui/qt/ov_ui.qrc)
             set_target_properties(HarmonicInjector_${_fmt} PROPERTIES AUTORCC ON)
-
-            qt_add_shaders(HarmonicInjector_${_fmt} "ov_shaders_${_fmt}"
-                PREFIX "/shaders"
-                BASE "ui/qt/shaders"
-                FILES
-                    ui/qt/shaders/kawase_down.frag
-                    ui/qt/shaders/kawase_up.frag
-                    ui/qt/shaders/glass.frag)
         endif()
     endforeach()
 
-    # standalone preview window, drives the same QML with mock data
+    # host-free viewer: same QML, mock parameter source
     add_executable(overteon-qml-preview
         ui/qt/preview/main.cpp
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
         ui/qt/OvMeterView.cpp
+        ui/qt/OvSeamFrost.cpp
         ui/qt/ov_ui.qrc)
-
-    qt_add_shaders(overteon-qml-preview "ov_shaders_preview"
-        PREFIX "/shaders"
-        BASE "ui/qt/shaders"
-        FILES
-            ui/qt/shaders/kawase_down.frag
-            ui/qt/shaders/kawase_up.frag
-            ui/qt/shaders/glass.frag)
 
     target_include_directories(overteon-qml-preview PRIVATE ui/qt)
     target_link_libraries(overteon-qml-preview PRIVATE
@@ -182,6 +165,18 @@ if(OVERTEON_QT_UI)
     if(NOT WIN32)
         target_compile_definitions(overteon-qml-preview PRIVATE BUILD_UNIXLIKE=1)
     endif()
+
+    # headless check that the dual-Gaussian really blurs
+    add_executable(onyx-blur-test
+        tools/units/blur_test.cpp
+        ui/qt/OvEngine.cpp
+        ui/qt/OvParam.cpp
+        ui/qt/OvEqView.cpp
+        ui/qt/OvMeterView.cpp
+        ui/qt/OvSeamFrost.cpp)
+    target_include_directories(onyx-blur-test PRIVATE ui/qt)
+    target_link_libraries(onyx-blur-test PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+    set_target_properties(onyx-blur-test PROPERTIES AUTOMOC ON)
 endif()
 
 # Platform switch used by the sources: Windows vs. everything unix-like

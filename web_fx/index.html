@@ -217,7 +217,10 @@ body.frostjs .frostcanvas{display:block}
 body.frostjs #hdr::before{-webkit-backdrop-filter:none;backdrop-filter:none;background:transparent}
 body.frostjs .controlpit::after{-webkit-backdrop-filter:none;backdrop-filter:none;background:transparent}
 #hdrFrost{z-index:1}
-.controlpit .frostcanvas{z-index:2;left:0;top:0;width:100%;height:100%}
+.controlpit .frostcanvas{z-index:0;left:0;top:0;width:100%;height:100%}
+/* the glass sits under the controls (.pitcontrols has z-index:1), exactly like
+   the ::after pseudo-element it replaces */
+.controlpit .pitcontrols{z-index:1}
 #hdrFrost{left:50%;top:50%;width:550px;height:68px;transform:translate(-50%,-50%)}
 
 </style></head><body>
@@ -1792,106 +1795,112 @@ function drawEQOverflow(){
 
 
 // ====================================================================
-//  FrostEngine — a real dual-Kawase blur drawn on canvas.
+//  FrostEngine — a real dual-Gaussian blur drawn on canvas.
 //
-//  The design asks for backdrop-filter: blur(3px) saturate(.85) behind
-//  the two header trapezoids and the elliptical strip on the seam.  In a
-//  plug-in host (WebKitGTK inside a DAW window) backdrop-filter is often
-//  ignored, which leaves the "glass" completely flat.
+//  The design asks for  backdrop-filter: blur(3px) saturate(.85)  behind the
+//  two control-pit trapezoids and the elliptical strip on the seam.  Plug-in
+//  hosts ignore backdrop-filter, so the blur is computed here from the EQ
+//  canvases themselves.
 //
-//  So the blur is computed here instead, from the EQ canvases themselves:
-//    1. the region under the glass is composited into a half-resolution
-//       buffer (cheap bilinear downsample),
-//    2. N Kawase downsample passes (4 taps + centre, 1/8 normalisation)
-//       build a mip pyramid,
-//    3. N Kawase upsample passes walk back up, each adding the finer
-//       level, which is the "dual filter" — a wide, smooth blur that
-//       keeps thin strokes from entirely disappearing,
-//    4. saturation(.85) and the accent glow are applied, then the result
-//       is clipped to the trapezoid / ellipse shape.
+//  Algorithm — the "dual Gaussian", i.e. a separable 2-D Gaussian written as
+//  two 1-D passes: first horizontal, then vertical.  A 2-D Gaussian is the
+//  outer product of two 1-D Gaussians, so this is exact, and it costs
+//  O(2r) samples per pixel instead of O(r²).
 //
-//  Everything is driven off the same canvases the EQ already paints, so
-//  the frost always matches the current curve exactly.
+//      capture ──► horizontal pass ──► vertical pass ──► composite
+//
+//  sigma comes straight from the CSS: blur(3px) is a Gaussian with std-dev
+//  3 px, truncated at 3σ.  Buffers are Float32 and reused between frames.
 // ====================================================================
 const Frost = (() => {
-  const LEVELS = 3;              // pyramid depth: /2 /4 /8
-  const SAT = 0.85;              // saturate(.85)
+  const SAT = 0.85;          // CSS saturate(.85)
+  const PAD = 8;             // px of bleed so the filter never clamps at the rim
 
-  // ---- Kawase kernels on plain pixel buffers -----------------------
-  function down(src, w, h) {
-    const nw = Math.max(1, w >> 1), nh = Math.max(1, h >> 1);
-    const out = new Uint8ClampedArray(nw * nh * 4);
-    const sx = w / nw, sy = h / nh;
-    for (let y = 0; y < nh; y++) {
-      for (let x = 0; x < nw; x++) {
-        const cx = (x + 0.5) * sx, cy = (y + 0.5) * sy;
-        const dx = sx * 0.5, dy = sy * 0.5;
-        let r = 0, g = 0, b = 0, a = 0;
-        const taps = [[0, 0, 4], [-dx, -dy, 1], [dx, -dy, 1], [-dx, dy, 1], [dx, dy, 1]];
-        for (const [ox, oy, k] of taps) {
-          let px = Math.min(w - 1, Math.max(0, Math.round(cx + ox)));
-          let py = Math.min(h - 1, Math.max(0, Math.round(cy + oy)));
-          const i = (py * w + px) * 4;
-          r += src[i] * k; g += src[i + 1] * k; b += src[i + 2] * k; a += src[i + 3] * k;
-        }
-        const o = (y * nw + x) * 4;
-        out[o] = r / 8; out[o + 1] = g / 8; out[o + 2] = b / 8; out[o + 3] = a / 8;
-      }
-    }
-    return { data: out, w: nw, h: nh };
+  const pool = new Map();
+  function buf(w, h) {
+    const key = w + "x" + h;
+    let b = pool.get(key);
+    if (!b) { b = { w, h, data: new Float32Array(w * h * 4) }; pool.set(key, b); }
+    return b;
   }
 
-  function up(coarse, fine) {
-    const { data: c, w: cw, h: ch } = coarse;
-    const { data: f, w: fw, h: fh } = fine;
-    const out = new Uint8ClampedArray(fw * fh * 4);
-    const sx = cw / fw, sy = ch / fh;
-    for (let y = 0; y < fh; y++) {
-      for (let x = 0; x < fw; x++) {
-        const cx = (x + 0.5) * sx, cy = (y + 0.5) * sy;
-        const dx = Math.max(1, sx), dy = Math.max(1, sy);
-        let r = 0, g = 0, b = 0, a = 0, wsum = 0;
-        // 3x3 tent on the coarse level, blended 50/50 with the fine level
-        for (let j = -1; j <= 1; j++) {
-          for (let i = -1; i <= 1; i++) {
-            const k = (i === 0 ? 2 : 1) * (j === 0 ? 2 : 1);
-            const px = Math.min(cw - 1, Math.max(0, Math.round(cx + i * dx)));
-            const py = Math.min(ch - 1, Math.max(0, Math.round(cy + j * dy)));
-            const ci = (py * cw + px) * 4;
-            r += c[ci] * k; g += c[ci + 1] * k; b += c[ci + 2] * k; a += c[ci + 3] * k;
-            wsum += k;
-          }
+  // ---- the kernel: 7 taps with quadratic spacing ---------------------
+  // Same shape as X-PostProcessing-Library's DualGaussianBlur:
+  //   taps 0, ±1, ±2, ±6  with weights .40 .15 .10 .05  (sums to 1)
+  // Variance = 2·(0.15·1² + 0.10·2² + 0.05·6²)·offset² = 4.70·offset²,
+  // so for a CSS blur(3px) (sigma = 3) the offset is sigma / sqrt(4.70).
+  const TAP_OFF = [1, 2, 6];
+  const TAP_W   = [0.15, 0.10, 0.05];
+  const CENTRE_W = 0.40;
+  const VAR_PER_OFFSET2 = 4.70;
+
+  /// Separable pass: 7 taps horizontally, then 7 taps vertically.
+  function gaussian (src, sigma) {
+    const w = src.w, h = src.h;
+    const offset = Math.max(0.35, sigma / Math.sqrt(VAR_PER_OFFSET2));
+    const step = TAP_OFF.map(o => Math.max(1, Math.round(o * offset)));
+    const tmp = buf(w, h);
+    const out = buf(w, h);
+    const s = src.data, t = tmp.data, d = out.data;
+
+    // ---- horizontal ----
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        const c = (row + x) * 4;
+        let r = s[c] * CENTRE_W, g = s[c + 1] * CENTRE_W,
+            b = s[c + 2] * CENTRE_W, a = s[c + 3] * CENTRE_W;
+        for (let k = 0; k < 3; k++) {
+          let xl = x - step[k]; if (xl < 0) xl = 0;
+          let xr = x + step[k]; if (xr > w - 1) xr = w - 1;
+          const pl = (row + xl) * 4, pr = (row + xr) * 4, wt = TAP_W[k];
+          r += (s[pl] + s[pr]) * wt;
+          g += (s[pl + 1] + s[pr + 1]) * wt;
+          b += (s[pl + 2] + s[pr + 2]) * wt;
+          a += (s[pl + 3] + s[pr + 3]) * wt;
         }
-        r /= wsum; g /= wsum; b /= wsum; a /= wsum;
-        const fi = (y * fw + x) * 4;
-        out[fi]     = (r + f[fi]) * 0.5;
-        out[fi + 1] = (g + f[fi + 1]) * 0.5;
-        out[fi + 2] = (b + f[fi + 2]) * 0.5;
-        out[fi + 3] = 255;
+        t[c] = r; t[c + 1] = g; t[c + 2] = b; t[c + 3] = a;
+      }
+    }
+
+    // ---- vertical ----
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const c = (y * w + x) * 4;
+        let r = t[c] * CENTRE_W, g = t[c + 1] * CENTRE_W,
+            b = t[c + 2] * CENTRE_W, a = t[c + 3] * CENTRE_W;
+        for (let k = 0; k < 3; k++) {
+          let yu = y - step[k]; if (yu < 0) yu = 0;
+          let yd = y + step[k]; if (yd > h - 1) yd = h - 1;
+          const pu = (yu * w + x) * 4, pd = (yd * w + x) * 4, wt = TAP_W[k];
+          r += (t[pu] + t[pd]) * wt;
+          g += (t[pu + 1] + t[pd + 1]) * wt;
+          b += (t[pu + 2] + t[pd + 2]) * wt;
+          a += (t[pu + 3] + t[pd + 3]) * wt;
+        }
+        d[c] = r; d[c + 1] = g; d[c + 2] = b; d[c + 3] = a;
       }
     }
     return out;
   }
 
-  function saturate(data) {
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i + 3] === 0) continue;
-      const l = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
-      data[i]     = l + (data[i]     - l) * SAT;
-      data[i + 1] = l + (data[i + 1] - l) * SAT;
-      data[i + 2] = l + (data[i + 2] - l) * SAT;
+  function saturateInPlace(b) {
+    const d = b.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] < 0.004) continue;
+      const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+      d[i]     = l + (d[i]     - l) * SAT;
+      d[i + 1] = l + (d[i + 1] - l) * SAT;
+      d[i + 2] = l + (d[i + 2] - l) * SAT;
     }
-    return data;
   }
 
-  // ---- one glass surface ------------------------------------------
+  // ---- one glass surface -------------------------------------------
   function Glass(canvas, opts) {
     this.canvas = canvas;
-    this.opts = opts;                 // {sources:()=>[canvas...], shape:'trapTop'|'trapBottom'|'ellipse', accent, light:()=>0..1}
-    this.buf = document.createElement("canvas");
-    this.ctx = this.buf.getContext("2d", { willReadFrequently: true });
-    this.tmp = document.createElement("canvas");
-    this.tmpCtx = this.tmp.getContext("2d");
+    this.opts = opts;     // {sources:()=>[canvas...], shape, accent, light:()=>0..1}
+    this.cap = document.createElement("canvas");       // capture, half res
+    this.capCtx = this.cap.getContext("2d", { willReadFrequently: true });
     this.dirty = true;
   }
 
@@ -1899,111 +1908,123 @@ const Frost = (() => {
     const cv = this.canvas, o = this.opts;
     const W = Math.max(1, cv.clientWidth | 0), H = Math.max(1, cv.clientHeight | 0);
     if (!W || !H) return;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const pw = (W * dpr) | 0, ph = (H * dpr) | 0;
-    if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; this.dirty = true; }
 
-    // 1. copy the source canvases into the buffer at the same page position
-    const r = cv.getBoundingClientRect();
-    this.buf.width = Math.max(1, pw >> 1);
-    this.buf.height = Math.max(1, ph >> 1);
-    const ctx = this.ctx;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const pw = Math.round(W * dpr), ph = Math.round(H * dpr);
+    if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+
+    // L0 = half-resolution capture of everything under the glass, with PAD
+    // bleed so the filters never see a hard edge at the rim.
+    const w0 = Math.max(2, Math.round(W / 2)), h0 = Math.max(2, Math.round(H / 2));
+    if (this.cap.width !== w0 || this.cap.height !== h0) {
+      this.cap.width = w0; this.cap.height = h0;
+    }
+    const ctx = this.capCtx;
+    // buffer px per CSS px: the capture is half resolution, so 0.5 — getting
+    // this wrong shifts the whole sample window and the blur stops lining up
+    // with the crisp content underneath.
+    const scale = w0 / W;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, this.buf.width, this.buf.height);
     ctx.fillStyle = "#16181d";
-    ctx.fillRect(0, 0, this.buf.width, this.buf.height);
-    const k = 0.5 * dpr;                       // page px -> buffer px
+    ctx.fillRect(0, 0, w0, h0);
+
+    const r = cv.getBoundingClientRect();
     for (const src of o.sources()) {
       if (!src || !src.width) continue;
       const sr = src.getBoundingClientRect();
-      const x = (sr.left - r.left) * k, y = (sr.top - r.top) * k;
-      const w = sr.width * k, h = sr.height * k;
-      if (x + w < 0 || y + h < 0 || x > this.buf.width || y > this.buf.height) continue;
+      const x = (sr.left - r.left) * scale;
+      const y = (sr.top - r.top) * scale;
+      const w = sr.width * scale, h = sr.height * scale;
+      if (x + w < -PAD || y + h < -PAD || x > w0 + PAD || y > h0 + PAD) continue;
       ctx.drawImage(src, x, y, w, h);
     }
 
-    // 2. Kawase pyramid down
-    let img = ctx.getImageData(0, 0, this.buf.width, this.buf.height);
-    let level = { data: img.data, w: this.buf.width, h: this.buf.height };
-    const pyramid = [level];
-    for (let i = 0; i < LEVELS; i++) {
-      level = down(level.data, level.w, level.h);
-      pyramid.push(level);
-    }
+    // float buffer of the capture
+    const img = ctx.getImageData(0, 0, w0, h0);
+    const l0 = buf(w0, h0);
+    for (let i = 0; i < img.data.length; i++) l0.data[i] = img.data[i];
 
-    // 3. Kawase pyramid up, each step blending the coarser with the finer
-    for (let i = pyramid.length - 2; i >= 0; i--)
-      pyramid[i].data = up (pyramid[i + 1], pyramid[i]);
+    // dual Gaussian: sigma 3 CSS px, expressed in buffer pixels
+    const acc = gaussian(l0, 3.0 * scale);
+    saturateInPlace(acc);
 
-    const out = saturate (pyramid[0].data);
-
-    // 4. write the blurred level back, then clip to the glass shape
+    // composite: shapes + veil + glow, all in CSS pixels
     const tctx = cv.getContext("2d");
-    const tmp = this.tmp;
-    if (tmp.width !== this.buf.width || tmp.height !== this.buf.height) {
-      tmp.width = this.buf.width; tmp.height = this.buf.height;
-    }
-    this.tmpCtx.putImageData(new ImageData(out, this.buf.width, this.buf.height), 0, 0);
-
     tctx.setTransform(1, 0, 0, 1, 0, 0);
     tctx.clearRect(0, 0, pw, ph);
     tctx.save();
     tctx.scale(dpr, dpr);
+
     tctx.beginPath();
     if (o.shape === "ellipse") {
-      // radial mask, feathered like mask-image: radial-gradient(...)
-      tctx.closePath();
-      tctx.clip();
+      // nothing to clip: the radial fade below does the shaping
+      tctx.rect(0, 0, W, H);
     } else if (o.shape === "trapTop") {
       tctx.moveTo(W * 0.20, 0); tctx.lineTo(W * 0.80, 0);
-      tctx.lineTo(W, H); tctx.lineTo(0, H); tctx.closePath(); tctx.clip();
+      tctx.lineTo(W, H); tctx.lineTo(0, H);
     } else {
       tctx.moveTo(0, 0); tctx.lineTo(W, 0);
-      tctx.lineTo(W * 0.80, H); tctx.lineTo(W * 0.20, H); tctx.closePath(); tctx.clip();
+      tctx.lineTo(W * 0.80, H); tctx.lineTo(W * 0.20, H);
     }
+    tctx.closePath();
+    tctx.clip();
 
-    tctx.drawImage(tmp, 0, 0, W, H);
+    // draw the pyramid result, scaled back up with bilinear smoothing
+    this.paintFromAcc(acc);
+    tctx.imageSmoothingEnabled = true;
+    tctx.imageSmoothingQuality = "high";
+    tctx.drawImage(this.paint, 0, 0, w0, h0, 0, 0, W, H);
 
-    // accent glow (.controlpit::before radial gradient)
+    // .controlpit::before — accent glow tied to the meter
     const light = o.light ? o.light() : 0;
     if (light > 0.001 && o.accent) {
       const cx = W / 2, cy = (o.shape === "trapTop") ? 0 : H;
       const g = tctx.createRadialGradient(cx, cy, 0, cx, cy, W * 0.42);
       const a = light * light * 0.36;
-      g.addColorStop(0, `rgba(${o.accent[0]},${o.accent[1]},${o.accent[2]},${a})`);
-      g.addColorStop(0.38, `rgba(${o.accent[0]},${o.accent[1]},${o.accent[2]},${a * 0.36})`);
-      g.addColorStop(1, `rgba(${o.accent[0]},${o.accent[1]},${o.accent[2]},0)`);
+      const c = o.accent;
+      g.addColorStop(0,    `rgba(${c[0]},${c[1]},${c[2]},${a})`);
+      g.addColorStop(0.38, `rgba(${c[0]},${c[1]},${c[2]},${a * 0.36})`);
+      g.addColorStop(1,    `rgba(${c[0]},${c[1]},${c[2]},0)`);
       tctx.fillStyle = g;
       tctx.fillRect(0, 0, W, H);
     }
+
+    // background: rgba(255,255,255,.018)
+    tctx.fillStyle = "rgba(255,255,255,.018)";
+    tctx.fillRect(0, 0, W, H);
     tctx.restore();
 
-    // soft white veil (rgba(255,255,255,.018))
+    // mask-image: radial-gradient(ellipse at center, #000 0%, #000 45%,
+    //             transparent 78%)  — applied for the seam strip only
     if (o.shape === "ellipse") {
-      // feather the ellipse edge with a radial fade in the page background
       tctx.save();
+      tctx.setTransform(1, 0, 0, 1, 0, 0);
       tctx.globalCompositeOperation = "destination-in";
-      const m = tctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.5);
-      m.addColorStop(0, "rgba(0,0,0,1)");
+      tctx.scale(dpr, dpr);
+      const m = tctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2,
+                                          Math.max(W, H) * 0.5);
+      m.addColorStop(0.00, "rgba(0,0,0,1)");
       m.addColorStop(0.45, "rgba(0,0,0,1)");
       m.addColorStop(0.78, "rgba(0,0,0,0)");
-      m.addColorStop(1, "rgba(0,0,0,0)");
+      m.addColorStop(1.00, "rgba(0,0,0,0)");
       tctx.fillStyle = m;
       tctx.fillRect(0, 0, W, H);
       tctx.restore();
     }
-    tctx.save();
-    tctx.beginPath();
-    if (o.shape === "trapTop") {
-      tctx.moveTo(W * 0.20, 0); tctx.lineTo(W * 0.80, 0);
-      tctx.lineTo(W, H); tctx.lineTo(0, H); tctx.closePath(); tctx.clip();
-    } else if (o.shape === "trapBottom") {
-      tctx.moveTo(0, 0); tctx.lineTo(W, 0);
-      tctx.lineTo(W * 0.80, H); tctx.lineTo(W * 0.20, H); tctx.closePath(); tctx.clip();
+  };
+
+  // Float32 buffer -> a canvas we can drawImage from
+  Glass.prototype.paintFromAcc = function (acc) {
+    if (!this.paint) this.paint = document.createElement("canvas");
+    if (this.paint.width !== acc.w || this.paint.height !== acc.h) {
+      this.paint.width = acc.w; this.paint.height = acc.h;
+      this.paintCtx = this.paint.getContext("2d");
     }
-    tctx.fillStyle = "rgba(255,255,255,.018)";
-    tctx.fillRect(0, 0, W, H);
-    tctx.restore();
+    if (!this.paintImg || this.paintImg.width !== acc.w || this.paintImg.height !== acc.h)
+      this.paintImg = new ImageData(acc.w, acc.h);
+    const d = this.paintImg.data, s = acc.data;
+    for (let i = 0; i < d.length; i++) d[i] = s[i];
+    this.paintCtx.putImageData(this.paintImg, 0, 0);
   };
 
   const glasses = [];
@@ -2015,17 +2036,24 @@ const Frost = (() => {
     return g;
   }
 
+  // Called when the EQ canvases repainted.  Only dirty glasses are rebuilt,
+  // at most once per frame.
   let scheduled = false;
-  function invalidate() {
+  function markDirty() {
+    for (const g of glasses) g.dirty = true;
     if (scheduled) return;
     scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
-      for (const g of glasses) g.update();
+      for (const g of glasses) {
+        if (!g.dirty) continue;
+        g.dirty = false;
+        g.update();
+      }
     });
   }
 
-  const api = { add, invalidate };
+  const api = { add, invalidate: markDirty };
   window.Frost = api;          // top-level const is not a window property
   return api;
 })();
@@ -2176,23 +2204,28 @@ document.getElementById("bInit").addEventListener("click",e=>{NF("applyInit")();
   const pqC = ["pqGrid","pqSpec","pqCurve","pqOverflow"].map(id=>document.getElementById(id));
   const accentOf = el => el && el.id.startsWith("sc") ? [255,92,138] : [67,217,196];
 
-  document.body.classList.add("frostjs");
+  // ?nofrost=1 renders the page without the canvas frost, which lets a test
+  // capture the exact content underneath and compare the blur against a
+  // reference Gaussian.
+  const noFrost = /[?&]nofrost=1/.test(location.search);
+  if (!noFrost) document.body.classList.add("frostjs");
+  else console.log("[frost] disabled by ?nofrost=1");
 
-  Frost.add(document.getElementById("scFrost"), {
+  if (!noFrost) Frost.add(document.getElementById("scFrost"), {
     sources: () => scC,
     shape: "trapTop",
     accent: [255,92,138],
     light: () => Number(scGlass.style.getPropertyValue("--light")) || 0
   });
 
-  Frost.add(document.getElementById("pqFrost"), {
+  if (!noFrost) Frost.add(document.getElementById("pqFrost"), {
     sources: () => pqC,
     shape: "trapBottom",
     accent: [67,217,196],
     light: () => Number(pqGlass.style.getPropertyValue("--light")) || 0
   });
 
-  Frost.add(document.getElementById("hdrFrost"), {
+  if (!noFrost) Frost.add(document.getElementById("hdrFrost"), {
     sources: () => [...scC, ...pqC],
     shape: "ellipse",
     accent: null,
@@ -2312,4 +2345,28 @@ document.addEventListener("pointerdown",e=>{
 }
 
 </script>
-</body></html>
+<script>
+// ?diag=1 reports the geometry the frost depends on back to the preview
+// server (POST /diag), which appends it to /tmp/overteon-diag.log.  That is the
+// only reliable way to see the state of the browser that took the screenshot:
+// requestAnimationFrame does not run under --dump-dom.
+if (/[?&]diag=1/.test(location.search)) {
+  const report = () => {
+    const ids = ["scWrap","scGrid","scCurve","scOverflow","scFrost","pqFrost","hdrFrost","hpod"];
+    const lines = [];
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (!el) { lines.push(id + " MISSING"); continue; }
+      const r = el.getBoundingClientRect();
+      lines.push(id + " rect=" + [r.left,r.top,r.width,r.height].map(v=>Math.round(v)).join(",") +
+                 " canvas=" + (el.width||0) + "x" + (el.height||0));
+    }
+    lines.push("zoom=" + document.body.style.zoom +
+               " dpr=" + (window.devicePixelRatio||1) +
+               " frostjs=" + document.body.classList.contains("frostjs") +
+               " glasses=" + (window.Frost ? "yes" : "no"));
+    try { fetch("/diag", { method: "POST", body: lines.join("\n") }); } catch (e) {}
+  };
+  setTimeout(report, 1500);
+}
+</script></body></html>

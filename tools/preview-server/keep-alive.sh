@@ -30,11 +30,25 @@ start() {
 }
 
 stop() {
+    # the keeper runs its server in the same process group (setsid), so killing
+    # the group takes both down; no pattern matching involved.
     if [ -f "$PIDFILE" ]; then
-        kill "$(cat "$PIDFILE")" 2>/dev/null || true
+        kp=$(cat "$PIDFILE")
+        kill -TERM -- "-$kp" 2>/dev/null || kill -TERM "$kp" 2>/dev/null || true
+        for _ in $(seq 1 30); do
+            kill -0 "$kp" 2>/dev/null || break
+            sleep 0.1
+        done
+        kill -KILL -- "-$kp" 2>/dev/null || kill -KILL "$kp" 2>/dev/null || true
         rm -f "$PIDFILE"
     fi
-    pkill -f overteon-preview-server 2>/dev/null || true
+    # a server started outside the keeper (older build) is stopped via its own
+    # pidfile if it has one
+    if [ -f /tmp/overteon-preview-server.pid ]; then
+        sp=$(cat /tmp/overteon-preview-server.pid)
+        kill -TERM "$sp" 2>/dev/null || true
+        rm -f /tmp/overteon-preview-server.pid
+    fi
     echo "stopped"
 }
 
@@ -52,7 +66,9 @@ status() {
 loop() {
     while :; do
         # `|| true`: a crash must restart, not terminate the keeper
-        "$SERVER" >> "$LOG" 2>&1 || true
+        "$SERVER" >> "$LOG" 2>&1 &
+        echo $! > /tmp/overteon-preview-server.pid
+        wait $! || true
         echo "[keep-alive] server exited, restarting in 1s" >> "$LOG"
         sleep 1
     done

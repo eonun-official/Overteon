@@ -17,26 +17,10 @@ Item {
     height: OvTheme.headerH
     width: parent ? parent.width : 0
 
-    // Elliptical frost on the seam (.hdr::before):
-    //   backdrop-filter: blur(3px) saturate(.85)
-    //   rgba(255,255,255,.018) veil
-    //   mask-image: radial-gradient(ellipse at center, #000 0%, #000 45%, transparent 78%)
-    // All four are done in one dual-Kawase + composite shader pass, so the rim
-    // feathers exactly like the CSS radial mask instead of fading a rectangle.
-    OvGlass {
-        width: Math.min (550, root.width)
-        height: 68
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.verticalCenter: parent.verticalCenter
-        visible: root.sourceItem !== null
-
-        source: root.sourceItem
-        radius: 3.0
-        saturation: 0.85
-        veil: 0.018
-        shape: 3                 // feathered ellipse
-        edgeSoftness: 1.0
-    }
+    // The elliptical frost on the seam (#hdr::before) is painted by the two
+    // OvEqView halves — each one draws its own half of the 550x68 strip, so
+    // the blur comes from the same pixels as the plot and cannot fall out of
+    // sync.  Nothing is drawn here.
 
     // ---- wordmark ------------------------------------------------------
     Item {

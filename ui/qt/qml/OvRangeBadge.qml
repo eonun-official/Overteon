@@ -37,7 +37,8 @@ Item {
         color: ma.containsMouse ? OvTheme.ink : OvTheme.dim
         Behavior on color { ColorAnimation { duration: 120 } }
         font.family: OvTheme.uiFont
-        font.pixelSize: 10
+        font.pointSize: OvTheme.pt (10.5)
+        font.letterSpacing: 0.5
     }
 
     MouseArea {

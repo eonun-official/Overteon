@@ -18,7 +18,7 @@ Item {
     property bool dimmed: false
 
     width: 58
-    height: 86
+    height: 88
 
     readonly property real norm: param ? Math.max (0, Math.min (1, param.norm)) : 0
     readonly property double value: param ? param.value : 0
@@ -114,28 +114,28 @@ Item {
 
     Text {
         id: lab
-        anchors.top: ring.bottom
-        anchors.topMargin: 4
+        y: 53
         anchors.horizontalCenter: parent.horizontalCenter
         width: root.width
         text: root.label
         color: OvTheme.faint
         font.family: OvTheme.uiFont
-        font.pixelSize: 10
+        font.pointSize: OvTheme.pt (10.5)
+        font.letterSpacing: 0.6
         horizontalAlignment: Text.AlignHCenter
         elide: Text.ElideRight
     }
 
     Text {
         id: val
-        anchors.top: lab.bottom
-        anchors.topMargin: 1
+        y: 74
         anchors.horizontalCenter: parent.horizontalCenter
         width: root.width
         text: root.shownText
         color: OvTheme.ink
         font.family: OvTheme.uiFont
-        font.pixelSize: 10
+        font.pointSize: OvTheme.pt (10.5)
+        font.letterSpacing: 0.6
         horizontalAlignment: Text.AlignHCenter
     }
 }
