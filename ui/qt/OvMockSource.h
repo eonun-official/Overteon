@@ -56,8 +56,25 @@ public:
             const double n = (double) r.choices.size() - 1.0;
             return n > 0.0 ? std::clamp (v / n, 0.0, 1.0) : 0.0;
         }
+        // JUCE convertTo0to1: pow(proportion, skew)
         const double lin = (v - r.lo) / (r.hi - r.lo);
-        return std::clamp (std::pow (std::clamp (lin, 0.0, 1.0), 1.0 / r.skew), 0.0, 1.0);
+        return std::clamp (std::pow (std::clamp (lin, 0.0, 1.0), r.skew), 0.0, 1.0);
+    }
+
+    double valueForNorm (int i, double n) const override
+    {
+        const auto& r = rows[(size_t) i];
+        n = std::clamp (n, 0.0, 1.0);
+        if (! r.choices.empty())
+        {
+            const double last = (double) r.choices.size() - 1.0;
+            return std::clamp (std::round (n * last), 0.0, last);
+        }
+        if (r.isBool) return n > 0.5 ? 1.0 : 0.0;
+
+        // JUCE convertFrom0to1: start + span * pow(proportion, 1/skew)
+        const double prop = (r.skew != 1.0 && n > 0.0) ? std::exp (std::log (n) / r.skew) : n;
+        return r.lo + (r.hi - r.lo) * prop;
     }
 
     std::string text (int i) const override
@@ -138,7 +155,7 @@ private:
     static double normFromValue (double lo, double hi, double skew, double v)
     {
         const double lin = (v - lo) / (hi - lo);
-        return std::clamp (std::pow (std::clamp (lin, 0.0, 1.0), 1.0 / skew), 0.0, 1.0);
+        return std::clamp (std::pow (std::clamp (lin, 0.0, 1.0), skew), 0.0, 1.0);
     }
 
     void add (const std::string& id, const std::string& label, double lo, double hi,

@@ -101,7 +101,7 @@ target_sources(HarmonicInjector PRIVATE
 option(OVERTEON_QT_UI "Build the Qt6/QML editor instead of the WebView one" ON)
 
 if(OVERTEON_QT_UI)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick ShaderTools)
 
     # HarmonicInjector was created by juce_add_plugin before this point, so
     # AUTOMOC has to be enabled on the target itself (not via CMAKE_AUTOMOC).
@@ -122,6 +122,11 @@ if(OVERTEON_QT_UI)
     target_link_libraries(HarmonicInjector PRIVATE
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
 
+    # ---------------------------------------------------------------------
+    #  Compile the dual-Kawase / glass shaders to .qsb.
+    #  Qt 6 refuses runtime GLSL strings, so these are baked at build time
+    #  (qt_add_shaders handles the qsb invocation and dependency tracking).
+    # ---------------------------------------------------------------------
     # the editor maps foreign ancestors itself (see OvQmlEditor.cpp)
     if(UNIX AND NOT APPLE)
         find_package(X11 REQUIRED)
@@ -134,10 +139,21 @@ if(OVERTEON_QT_UI)
     # The QML + font bundle has to be compiled into every plugin binary: the
     # shared-code target is a static archive and nothing references the rcc
     # object, so a plain target_sources there would be dropped by the linker.
+    # Like the QML bundle, the compiled shaders must live inside each plugin
+    # binary: the shared-code target is a static archive and nothing would
+    # reference the generated resource object.
     foreach(_fmt ${PLUGIN_FORMATS})
         if(TARGET HarmonicInjector_${_fmt})
             target_sources(HarmonicInjector_${_fmt} PRIVATE ui/qt/ov_ui.qrc)
             set_target_properties(HarmonicInjector_${_fmt} PROPERTIES AUTORCC ON)
+
+            qt_add_shaders(HarmonicInjector_${_fmt} "ov_shaders_${_fmt}"
+                PREFIX "/shaders"
+                BASE "ui/qt/shaders"
+                FILES
+                    ui/qt/shaders/kawase_down.frag
+                    ui/qt/shaders/kawase_up.frag
+                    ui/qt/shaders/glass.frag)
         endif()
     endforeach()
 
@@ -149,6 +165,14 @@ if(OVERTEON_QT_UI)
         ui/qt/OvEqView.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/ov_ui.qrc)
+
+    qt_add_shaders(overteon-qml-preview "ov_shaders_preview"
+        PREFIX "/shaders"
+        BASE "ui/qt/shaders"
+        FILES
+            ui/qt/shaders/kawase_down.frag
+            ui/qt/shaders/kawase_up.frag
+            ui/qt/shaders/glass.frag)
 
     target_include_directories(overteon-qml-preview PRIVATE ui/qt)
     target_link_libraries(overteon-qml-preview PRIVATE

@@ -10,6 +10,8 @@
 #include <QHoverEvent>
 #include <QLinearGradient>
 #include <QtMath>
+#include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <cmath>
 
@@ -288,6 +290,21 @@ double OvEqView::totalMagAt (double atHz) const
 }
 
 // ---------------------------------------------------------------- paint
+double OvEqView::inactiveOpacity() const
+{
+    // .eqsec.inactive .eqcanvas-wrap { opacity: .22 } — the parent QML item
+    // already dims the whole section, so only the node alpha inside the fog
+    // needs it; kept here so the fog maths matches the design 1:1.
+    return 1.0;
+}
+
+QPointF OvEqView::nodePosition (int index)
+{
+    refreshNodePositions();
+    if (index < 0 || index > 4) return QPointF();
+    return QPointF (m_bands[index].x, m_bands[index].y);
+}
+
 void OvEqView::paint (QPainter* g)
 {
     gatherBands();
@@ -436,15 +453,58 @@ void OvEqView::paint (QPainter* g)
     drawTotal (false);
     g->restore();
 
-    // overflow: the curve continues into the header area, faintly — this is
-    // what the frosted trapezoid reveals as a blurred copy
-    g->save();
-    if (m_headerTop)
-        g->setClipRect (QRectF (0, 0, w, top));
-    else
-        g->setClipRect (QRectF (0, bottom, w, h - bottom));
-    drawTotal (true);
-    g->restore();
+    // Overflow fog (requestEQOverflow / drawEQOverflow in the design): the
+    // curve keeps going past the plot edge in 12 graded bands, each one
+    // blurrier and fainter than the last — blur(0.4 + k*0.55 px) and
+    // alpha (1 - k/12)^1.15.  QPainter has no blur, so a wider, fainter pen
+    // per band gives the same falloff.
+    {
+        constexpr int   kSteps = 12;
+        constexpr double kRange = 224.0;      // CSS range in design px
+        const double band = kRange / kSteps;
+        const double edge = m_headerTop ? bottom : top;
+        const double dir  = m_headerTop ? 1.0 : -1.0;   // outward
+        const double dim  = inactiveOpacity();
+
+        QPainterPath bands[kSteps];
+        bool used[kSteps] = {};
+
+        double prevX = 0.0;
+        double prevY = std::clamp (toY (totalMagAt (fromX (0.0, w)), h, m_rangeDb, top, bottom),
+                                   std::min (edge, edge + dir * kRange),
+                                   std::max (edge, edge + dir * kRange));
+        for (double x = 1.0; x <= w; x += 1.0)
+        {
+            const double yy = std::clamp (toY (totalMagAt (fromX (x, w)), h, m_rangeDb, top, bottom),
+                                          std::min (edge, edge + dir * kRange),
+                                          std::max (edge, edge + dir * kRange));
+            const double d = (prevY + yy) * 0.5 - edge;
+            const double outward = dir > 0 ? d : -d;
+            if (outward > 0.0 && outward < kRange)
+            {
+                const int k = std::min (kSteps - 1, (int) (outward / band));
+                bands[k].moveTo (prevX, prevY);
+                bands[k].lineTo (x, yy);
+                used[k] = true;
+            }
+            prevX = x;
+            prevY = yy;
+        }
+
+        g->save();
+        if (m_headerTop) g->setClipRect (QRectF (0, 0, w, top));
+        else             g->setClipRect (QRectF (0, bottom, w, h - bottom));
+        g->setBrush (Qt::NoBrush);
+        for (int k = 0; k < kSteps; ++k)
+        {
+            if (! used[k]) continue;
+            QColor c = accent;
+            c.setAlphaF (dim * std::pow (1.0 - (double) k / kSteps, 1.15));
+            g->setPen (QPen (c, 2.0 + k * 0.55, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            g->drawPath (bands[k]);
+        }
+        g->restore();
+    }
 
     // ---- nodes on top (clipped like the canvas: always visible in the plot)
     for (int i = 0; i < 5; ++i)
@@ -468,10 +528,38 @@ void OvEqView::paint (QPainter* g)
 }
 
 // ----------------------------------------------------------- interaction
+//  Port of the canvas drag semantics in web_fx/index.html:
+//    * grabbing a node keeps the grab offset, so it never snaps to the cursor
+//    * x maps to frequency through the log axis, absolutely
+//    * y maps to gain absolutely, through dbAt(), converted with the same
+//      display multiplier the curve uses — so the node sits exactly on its
+//      own band curve while dragging
+//    * cut / notch / pass bands only move horizontally
+void OvEqView::refreshNodePositions()
+{
+    gatherBands();
+    layoutGeometry (m_plot, m_rangeDb);
+
+    const double w = width(), h = height();
+    for (auto& b : m_bands)
+    {
+        const double nodeGain = isGainType (b.type) ? b.gain * displayMult()
+                                                    : bandMagAt (b, b.freq);
+        b.x = toX (b.freq, w);
+        b.y = toY (std::clamp (nodeGain, -m_rangeDb, m_rangeDb),
+                   h, m_rangeDb, m_plot.top(), m_plot.bottom());
+    }
+}
+
+double OvEqView::plotRangeDb() const
+{
+    return m_rangeDb;
+}
+
 int OvEqView::nodeAt (const QPointF& pos) const
 {
     int best = -1;
-    double bestD = 12.0;
+    double bestD = 11.0;
     for (int i = 0; i < 5; ++i)
     {
         const double dx = pos.x() - m_bands[i].x;
@@ -484,20 +572,12 @@ int OvEqView::nodeAt (const QPointF& pos) const
 
 void OvEqView::mousePressEvent (QMouseEvent* e)
 {
-    gatherBands();
-    layoutGeometry (m_plot, m_rangeDb);
-    for (int i = 0; i < 5; ++i)
-    {
-        const auto& b = m_bands[i];
-        const double nodeGain = isGainType (b.type) ? b.gain * displayMult()
-                                                    : bandMagAt (b, b.freq);
-        m_bands[i].x = toX (b.freq, width());
-        m_bands[i].y = toY (std::clamp (nodeGain, -m_rangeDb, m_rangeDb),
-                            height(), m_rangeDb, m_plot.top(), m_plot.bottom());
-    }
+    refreshNodePositions();
 
     const int hit = nodeAt (e->position());
-    if (e->button() == Qt::RightButton && hit >= 0)
+    if (hit < 0) { e->ignore(); return; }
+
+    if (e->button() == Qt::RightButton)
     {
         static const char* names[] = { "Bell", "Notch", "Low Shelf", "High Shelf",
                                        "Low Cut 12", "Low Cut 24",
@@ -507,67 +587,57 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
         return;
     }
 
-    if (hit >= 0)
-    {
-        m_dragBand = hit;
-        m_dragGain = isGainType (m_bands[hit].type);
-        m_dragStart = e->position();
-        m_dragFreqNorm = normOf (m_prefix + QString::number (hit + 1) + "Freq");
-        m_dragGainNorm = normOf (m_prefix + QString::number (hit + 1) + "Gain");
+    m_dragBand = hit;
+    m_dragMovesGain = isGainType (m_bands[hit].type);
+    m_grabOffset = QPointF (m_bands[hit].x - e->position().x(),
+                            m_bands[hit].y - e->position().y());
 
-        if (auto* pp = m_engine ? m_engine->typedParam (m_prefix + QString::number (hit + 1) + "Freq") : nullptr)
-            pp->beginGesture();
-        if (m_dragGain)
-            if (auto* pp = m_engine ? m_engine->typedParam (m_prefix + QString::number (hit + 1) + "Gain") : nullptr)
-                pp->beginGesture();
+    const QString base = m_prefix + QString::number (hit + 1);
+    if (auto* p = m_engine ? m_engine->typedParam (base + "Freq") : nullptr)
+        p->beginGesture();
+    if (m_dragMovesGain)
+        if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr)
+            p->beginGesture();
 
-        e->accept();
-        return;
-    }
-    e->ignore();
+    e->accept();
 }
 
 void OvEqView::mouseMoveEvent (QMouseEvent* e)
 {
     if (m_dragBand < 0) { e->ignore(); return; }
 
-    const auto& b = m_bands[m_dragBand];
     const QString base = m_prefix + QString::number (m_dragBand + 1);
 
-    if (! m_dragGain)
-    {
-        const double hz = fromX (e->position().x(), width());
-        setValueOf (base + "Freq", hz);
-    }
-    else
-    {
-        const double dy = e->position().y() - m_dragStart.y();
-        const double dNorm = -dy / std::max (40.0, m_plot.height()) * 2.0 * (m_rangeDb / 12.0) / displayMult();
-        double n = std::clamp (m_dragGainNorm + dNorm, 0.0, 1.0);
-        setNormOf (base + "Gain", n);
+    // absolute position of the node: pointer plus the offset captured on press
+    const QPointF node = e->position() + m_grabOffset;
 
-        // horizontal drag moves the frequency too (Pro-Q style)
-        const double dx = e->position().x() - m_dragStart.x();
-        if (std::abs (dx) > 0.5)
-        {
-            const double w = width();
-            const double fx0 = toX (b.freq, w);
-            const double hz  = fromX (std::clamp (fx0 + dx, 0.0, w), w);
-            setValueOf (base + "Freq", hz);
-            m_dragStart.setX (e->position().x());
-            m_bands[m_dragBand].freq = hz;
-        }
+    const double w = width();
+    const double freq = fromX (std::clamp (node.x(), 0.0, w), w);
+
+    if (auto* p = m_engine ? m_engine->typedParam (base + "Freq") : nullptr)
+        p->setValue (freq);
+
+    if (m_dragMovesGain)
+    {
+        const double db = fromY (std::clamp (node.y(), m_plot.top(), m_plot.bottom()),
+                                 height(), m_rangeDb, m_plot.top(), m_plot.bottom());
+        const double paramDb = std::clamp (db / displayMult(), -12.0, 12.0);
+        if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr)
+            p->setValue (paramDb);
     }
 
+    // keep the readout attached to the node while it moves
+    refreshNodePositions();
     QString tip = QStringLiteral ("#%1 %2 · %3 Hz").arg (m_dragBand + 1)
                     .arg (textOf (base + "Type"))
-                    .arg (fmtHz (valueOf (base + "Freq", 0.0)));
-    if (isGainType (b.type))
-        tip += QStringLiteral (" · %1 dB").arg (valueOf (base + "Gain", 0.0) * displayMult(), 0, 'f', 1);
-    if (! isShelf (b.type))
+                    .arg (fmtHz (freq));
+    if (m_dragMovesGain)
+        tip += QStringLiteral (" · %1 dB")
+                 .arg (valueOf (base + "Gain", 0.0) * displayMult(), 0, 'f', 1);
+    if (! isShelf (m_bands[m_dragBand].type))
         tip += QStringLiteral (" · Q %1").arg (valueOf (base + "Q", 0.0), 0, 'f', 2);
 
-    emit hoverInfo (tip, e->position());
+    emit hoverInfo (tip, QPointF (m_bands[m_dragBand].x, m_bands[m_dragBand].y));
     update();
     e->accept();
 }
@@ -577,34 +647,53 @@ void OvEqView::mouseReleaseEvent (QMouseEvent* e)
     if (m_dragBand >= 0)
     {
         const QString base = m_prefix + QString::number (m_dragBand + 1);
-        if (auto* pp = m_engine ? m_engine->typedParam (base + "Freq") : nullptr) pp->endGesture();
-        if (m_dragGain)
-            if (auto* pp = m_engine ? m_engine->typedParam (base + "Gain") : nullptr) pp->endGesture();
+        if (auto* p = m_engine ? m_engine->typedParam (base + "Freq") : nullptr) p->endGesture();
+        if (m_dragMovesGain)
+            if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr) p->endGesture();
         m_dragBand = -1;
         emit hoverEnded();
+        update();
     }
     e->accept();
 }
 
 void OvEqView::mouseDoubleClickEvent (QMouseEvent* e)
 {
-    gatherBands();
-    layoutGeometry (m_plot, m_rangeDb);
-    for (int i = 0; i < 5; ++i)
-    {
-        m_bands[i].x = toX (m_bands[i].freq, width());
-        const double nodeGain = isGainType (m_bands[i].type) ? m_bands[i].gain * displayMult()
-                                                             : bandMagAt (m_bands[i], m_bands[i].freq);
-        m_bands[i].y = toY (std::clamp (nodeGain, -m_rangeDb, m_rangeDb),
-                            height(), m_rangeDb, m_plot.top(), m_plot.bottom());
-    }
+    refreshNodePositions();
+
     const int hit = nodeAt (e->position());
     if (hit >= 0)
     {
         // double click = flatten this band back into the pool (0 dB bell/shelf)
         const QString base = m_prefix + QString::number (hit + 1);
-        if (auto* pp = m_engine ? m_engine->typedParam (base + "Gain") : nullptr)
-            pp->resetToDefault();
+        if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr)
+            p->resetToDefault();
+        update();
+        e->accept();
+        return;
+    }
+
+    // double click on empty canvas = activate the nearest pooled node here
+    if (e->position().y() < m_plot.top() || e->position().y() > m_plot.bottom())
+    { e->ignore(); return; }
+
+    int pooled = -1;
+    double bestD = 1e9;
+    for (int i = 0; i < 5; ++i)
+    {
+        if (m_bands[i].active) continue;
+        const double d = std::abs (std::log (m_bands[i].freq) - std::log (fromX (e->position().x(), width())));
+        if (d < bestD) { bestD = d; pooled = i; }
+    }
+    if (pooled >= 0)
+    {
+        const QString base = m_prefix + QString::number (pooled + 1);
+        const double db = fromY (std::clamp (e->position().y(), m_plot.top(), m_plot.bottom()),
+                                 height(), m_rangeDb, m_plot.top(), m_plot.bottom());
+        if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr)
+            p->setValue (std::clamp (std::abs (db) < 0.5 ? 4.0 : db / displayMult(), -12.0, 12.0));
+        if (auto* p = m_engine ? m_engine->typedParam (base + "Freq") : nullptr)
+            p->setValue (fromX (e->position().x(), width()));
         update();
     }
     e->accept();
@@ -612,25 +701,19 @@ void OvEqView::mouseDoubleClickEvent (QMouseEvent* e)
 
 void OvEqView::wheelEvent (QWheelEvent* e)
 {
-    gatherBands();
-    layoutGeometry (m_plot, m_rangeDb);
-    for (int i = 0; i < 5; ++i)
-    {
-        m_bands[i].x = toX (m_bands[i].freq, width());
-        const double nodeGain = isGainType (m_bands[i].type) ? m_bands[i].gain * displayMult()
-                                                             : bandMagAt (m_bands[i], m_bands[i].freq);
-        m_bands[i].y = toY (std::clamp (nodeGain, -m_rangeDb, m_rangeDb),
-                            height(), m_rangeDb, m_plot.top(), m_plot.bottom());
-    }
+    refreshNodePositions();
 
-    const int hit = nodeAt (e->position());
+    const int hit = (m_hoverBand >= 0) ? m_hoverBand : nodeAt (e->position());
     if (hit >= 0)
     {
         const QString base = m_prefix + QString::number (hit + 1);
-        const double dir = e->angleDelta().y() > 0 ? 1.0 : -1.0;
-        double q = valueOf (base + "Q", 0.707);
-        q = std::clamp (q * (dir > 0 ? 1.12 : 1.0 / 1.12), 0.1, 6.0);
-        setValueOf (base + "Q", q);
+        if (auto* p = m_engine ? m_engine->typedParam (base + "Q") : nullptr)
+        {
+            const double dir = e->angleDelta().y() > 0 ? 1.0 : -1.0;
+            const double step = (e->modifiers() & Qt::ShiftModifier) ? 0.01 : 0.04;
+            p->setNorm (std::clamp (p->norm() + dir * step, 0.0, 1.0));
+        }
+        refreshNodePositions();
         update();
         e->accept();
         return;
@@ -640,20 +723,11 @@ void OvEqView::wheelEvent (QWheelEvent* e)
 
 void OvEqView::hoverMoveEvent (QHoverEvent* e)
 {
-    gatherBands();
-    layoutGeometry (m_plot, m_rangeDb);
-    for (int i = 0; i < 5; ++i)
-    {
-        m_bands[i].x = toX (m_bands[i].freq, width());
-        const double nodeGain = isGainType (m_bands[i].type) ? m_bands[i].gain * displayMult()
-                                                             : bandMagAt (m_bands[i], m_bands[i].freq);
-        m_bands[i].y = toY (std::clamp (nodeGain, -m_rangeDb, m_rangeDb),
-                            height(), m_rangeDb, m_plot.top(), m_plot.bottom());
-    }
+    refreshNodePositions();
 
     const int hit = nodeAt (e->position());
     m_hoverBand = hit;
-    setCursor (QCursor (hit >= 0 ? Qt::SizeAllCursor : Qt::ArrowCursor));
+    setCursor (QCursor (hit >= 0 ? Qt::OpenHandCursor : Qt::CrossCursor));
 
     if (hit >= 0)
     {
@@ -662,10 +736,11 @@ void OvEqView::hoverMoveEvent (QHoverEvent* e)
                         .arg (textOf (base + "Type"))
                         .arg (fmtHz (valueOf (base + "Freq", 0.0)));
         if (isGainType (m_bands[hit].type))
-            tip += QStringLiteral (" · %1 dB").arg (valueOf (base + "Gain", 0.0) * displayMult(), 0, 'f', 1);
+            tip += QStringLiteral (" · %1 dB")
+                     .arg (valueOf (base + "Gain", 0.0) * displayMult(), 0, 'f', 1);
         if (! isShelf (m_bands[hit].type))
             tip += QStringLiteral (" · Q %1").arg (valueOf (base + "Q", 0.0), 0, 'f', 2);
-        emit hoverInfo (tip, e->position());
+        emit hoverInfo (tip, QPointF (m_bands[hit].x, m_bands[hit].y));
     }
     else
         emit hoverEnded();

@@ -126,6 +126,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         text: rowItem.modelData.text
                         color: rowMa.containsMouse ? OvTheme.ink : OvTheme.dim
+                        Behavior on color { ColorAnimation { duration: 120 } }
                         font.family: OvTheme.uiFont
                         font.pixelSize: 10
                     }

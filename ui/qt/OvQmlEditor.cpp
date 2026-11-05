@@ -228,6 +228,7 @@ struct OvQmlEditor::Impl
     std::unique_ptr<OvEngine>     engine;
     QQuickView*   view = nullptr;
     QWindow*      container = nullptr;
+    void*         containerId = nullptr;
     bool          qtOk = false;
     bool          failed = false;
 };
@@ -333,11 +334,17 @@ void OvQmlEditor::attachToHostWindow()
     containerId = prepareContainer (containerId, &offX, &offY);
    #endif
 
+    impl->containerId = (void*) containerId;
     impl->container = QWindow::fromWinId (containerId);
     if (impl->container == nullptr) return;
 
     impl->view->setParent (impl->container);
     impl->view->setGeometry (offX, offY, top->getWidth(), top->getHeight());
+
+    // The editor must never be larger than the area the host gives us: jalv
+    // hands out a widget window that is smaller than the 840x624 default, so
+    // ask the host for a size that actually fits (setSize -> LV2 ui:resize).
+    fitToHost (containerId);
     impl->view->show();
     impl->view->raise();
 
@@ -407,6 +414,38 @@ void OvQmlEditor::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWh
     forwardWheel (e, w);
 }
 
+void OvQmlEditor::fitToHost (WId containerId)
+{
+   #if JUCE_LINUX
+    static Display* dpy = XOpenDisplay (nullptr);
+    if (dpy == nullptr) return;
+
+    XWindowAttributes attrs {};
+    if (XGetWindowAttributes (dpy, (::Window) containerId, &attrs) == 0) return;
+
+    int cw = attrs.width, ch = attrs.height;
+    if (cw < 64 || ch < 64) return;
+
+    // keep the design aspect ratio inside the host's area
+    const double s = std::min ((double) cw / (double) OvThemeWidth,
+                               (double) ch / (double) OvThemeHeight);
+    int w = (int) std::lround (OvThemeWidth  * s);
+    int h = (int) std::lround (OvThemeHeight * s);
+
+    w = juce::jlimit (460, 2080, w);
+    h = juce::jlimit (341, 1544, h);
+
+    if (std::abs (w - getWidth()) <= 2 && std::abs (h - getHeight()) <= 2)
+        return;
+
+    // Report the real (scaled) size to the host.  JUCE's LV2 wrapper turns this
+    // into a ui:resize request, so jalv / any host shrinks its window to match.
+    setSize (w, h);
+   #else
+    juce::ignoreUnused (containerId);
+   #endif
+}
+
 void OvQmlEditor::detach()
 {
     if (impl && impl->view != nullptr && attached)
@@ -420,6 +459,8 @@ void OvQmlEditor::detach()
 void OvQmlEditor::timerCallback()
 {
     if (! impl) return;
+    static int tickCount = 0;
+    ++tickCount;
 
     if (! attached)
     {
@@ -457,6 +498,14 @@ void OvQmlEditor::timerCallback()
                 // Keep the plug-in window actually on screen.  Hosts like
                 // jalv.gtk3 hand us a socket child that may still be unmapped,
                 // and they map it at arbitrary times.
+                // follow host window resizes: only shrink, never fight the user
+                if (tickCount % 10 == 0 && attachedXid != nullptr)
+                {
+                   #if JUCE_LINUX
+                    fitToHost ((WId) (quintptr) impl->containerId);
+                   #endif
+                }
+
                 if (ticksSinceAttach > 1)
                 {
                     bool repaired = false;

@@ -35,14 +35,13 @@ QString OvParam::formatted (double n) const
     if (! host.empty())
         return qs (host);
 
-    const double v = m_spec.minValue + (m_spec.maxValue - m_spec.minValue) * n;
-    return QString::number (v, 'f', 2);
+    return QString::number (m_source.valueForNorm (m_index, n), 'f', 2);
 }
 
 void OvParam::cache()
 {
     m_norm  = std::clamp (m_source.getNorm (m_index), 0.0, 1.0);
-    m_value = m_spec.minValue + (m_spec.maxValue - m_spec.minValue) * m_norm;
+    m_value = m_source.valueForNorm (m_index, m_norm);
 }
 
 void OvParam::poll()
@@ -54,7 +53,7 @@ void OvParam::poll()
     if (! m_haveCached || std::abs (n - m_norm) > 1.0e-6)
     {
         m_norm  = n;
-        m_value = m_spec.minValue + (m_spec.maxValue - m_spec.minValue) * n;
+        m_value = m_source.valueForNorm (m_index, n);
         m_haveCached = true;
         changed = true;
         emit valueChanged();
@@ -75,7 +74,7 @@ void OvParam::setNorm (double n)
     if (std::abs (n - m_norm) > 1.0e-9)
     {
         m_norm  = n;
-        m_value = m_spec.minValue + (m_spec.maxValue - m_spec.minValue) * n;
+        m_value = m_source.valueForNorm (m_index, n);
         emit valueChanged();
     }
     if (t != m_display)

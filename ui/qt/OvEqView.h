@@ -40,6 +40,10 @@ public:
 
     void paint (QPainter*) override;
 
+    /// Centre of band `index` (0..4) in item coordinates, after refreshing
+    /// the geometry from the current parameter values.
+    Q_INVOKABLE QPointF nodePosition (int index);
+
     // interaction
     void mousePressEvent (QMouseEvent*) override;
     void mouseMoveEvent (QMouseEvent*) override;
@@ -97,10 +101,13 @@ private:
     QRectF m_plot;
     double m_rangeDb = 12.0;
 
+    void refreshNodePositions();
+    double plotRangeDb() const;
+    double inactiveOpacity() const;
+
     int    m_dragBand = -1;
-    bool   m_dragGain = false;
-    QPointF m_dragStart;
-    double m_dragFreqNorm = 0.0, m_dragGainNorm = 0.0;
+    bool   m_dragMovesGain = false;
+    QPointF m_grabOffset;          // node position minus press position
     int    m_hoverBand = -1;
 
     QTimer m_repaint;

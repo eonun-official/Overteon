@@ -27,3 +27,8 @@ _backup_v1.9.0/
 *.orig
 *.rej
 *.log
+
+# preview server build output
+tools/preview-server/overteon-preview-server
+tools/preview-server/.dub/
+tools/preview-server/dub.selections.json

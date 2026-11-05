@@ -24,6 +24,7 @@ Item {
         anchors.fill: parent
         radius: 3
         color: (ma.containsMouse || menu.visible) ? Qt.rgba (1, 1, 1, 0.045) : "transparent"
+        Behavior on color { ColorAnimation { duration: 120 } }
     }
 
     Text {
@@ -34,6 +35,7 @@ Item {
             return root.options.length > 0 ? root.options[i] + " ▾" : ""
         }
         color: ma.containsMouse ? OvTheme.ink : OvTheme.dim
+        Behavior on color { ColorAnimation { duration: 120 } }
         font.family: OvTheme.uiFont
         font.pixelSize: 10
     }

@@ -10,6 +10,8 @@
 // ============================================================
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <QtGui/qwindowdefs.h>       // WId, used for the X11 parenting below
+
 class InjectorProcessor;
 
 class OvQmlEditor : public juce::AudioProcessorEditor,
@@ -36,6 +38,7 @@ private:
     void timerCallback() override;
     void attachToHostWindow();
     void detach();
+    void fitToHost (WId containerId);
     void forwardMouse (const juce::MouseEvent&, int qtType);
     void forwardWheel (const juce::MouseEvent&, const juce::MouseWheelDetails&);
 
@@ -46,6 +49,10 @@ private:
     int   ticksSinceAttach = 0;
     bool  attached = false;
     void* attachedXid = nullptr;
+
+    // the QML design grid, from web_fx/index.html (#wrap is 1040x772)
+    static constexpr int OvThemeWidth  = 1040;
+    static constexpr int OvThemeHeight = 772;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OvQmlEditor)
 };

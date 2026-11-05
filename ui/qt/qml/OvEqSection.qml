@@ -15,7 +15,20 @@ Item {
     property int driveMode: 1
     property real meterLight: 0.0      // 0..1, drives the accent glow
 
+    // .controlpit::before opacity, transition: opacity .1s linear, and the
+    // CSS formula level*level*0.36
+    property real glowAmount: meterLight * meterLight * 0.36
+    // CSS: .controlpit::before { transition: opacity .1s linear }
+    Behavior on glowAmount { NumberAnimation { duration: 100; easing.type: Easing.Linear } }
+
     readonly property bool inactive: prefix === "sc" ? driveMode === 0 : driveMode === 2
+
+    // limiter mode: 0 Off, 1 Clip, 2 Modern, 3 True Peak
+    readonly property int limiterIndex: {
+        const p = engine ? engine.param ("protectMode") : null
+        return p ? Math.round (p.norm * 3) : 2
+    }
+    readonly property bool limiterOn: limiterIndex > 0
 
     clip: true
 
@@ -46,8 +59,9 @@ Item {
             tip.x = Math.max (4, Math.min (root.width - tip.width - 6, p.x + 12))
             tip.y = Math.max (4, p.y - 30)
             tip.visible = true
+            tipTimer.restart()          // 1400 ms, as showTip() does
         }
-        onHoverEnded: tip.visible = false
+        onHoverEnded: { tip.visible = false; tipTimer.stop() }
     }
 
     // ------------------------------------------------------ header bar area
@@ -60,60 +74,25 @@ Item {
 
         readonly property real pitW: Math.min (OvTheme.pitW, width)
 
-        // The real frosted glass: a Gaussian blur of the plot underneath.
-        // It covers the whole bar; the opaque side fills drawn on top cut it
-        // back to the trapezoid, exactly like .eqhdr::before/::after do.
+        // ---- frosted glass, .controlpit::after --------------------------
+        //   backdrop-filter: blur(3px) saturate(.85)   -> dual-Kawase pyramid
+        //   background: rgba(255,255,255,.018)         -> veil
+        //   clip-path: polygon(20% 0, 80% 0, 100% 100%, 0 100%)
+        //   .controlpit::before radial glow            -> glow
+        // The trapezoid, the glow and the veil are all computed inside the
+        // composite shader, so nothing has to be masked with overlays.
         OvGlass {
             anchors.fill: parent
             source: eq
             radius: 3.0
             saturation: 0.85
-        }
-
-        // accent glow inside the trapezoid (.controlpit::before), driven by
-        // the meter level of this half of the signal path
-        Canvas {
-            id: glow
-            anchors.fill: parent
-            onPaint: {
-                const ctx = getContext ("2d")
-                ctx.reset()
-                const w = width, h = height
-                const cx = w / 2
-                const cy = root.headerTop ? 0 : h
-                const g = ctx.createRadialGradient (cx, cy, 0, cx, cy, w * 0.42)
-                const a = root.meterLight * root.meterLight * 0.36
-                const c = root.accent
-                g.addColorStop (0.0, "rgba(" + Math.round (c.r*255) + "," + Math.round (c.g*255) + "," + Math.round (c.b*255) + "," + a + ")")
-                g.addColorStop (0.38, "rgba(" + Math.round (c.r*255) + "," + Math.round (c.g*255) + "," + Math.round (c.b*255) + "," + (a * 0.36) + ")")
-                g.addColorStop (1.0, "rgba(" + Math.round (c.r*255) + "," + Math.round (c.g*255) + "," + Math.round (c.b*255) + ",0)")
-                // clip to the trapezoid
-                ctx.beginPath()
-                const pitW = Math.min (OvTheme.pitW, w)
-                const x0 = (w - pitW) / 2
-                if (root.headerTop) {
-                    ctx.moveTo (x0 + pitW * 0.20, 0)
-                    ctx.lineTo (x0 + pitW * 0.80, 0)
-                    ctx.lineTo (x0 + pitW, h)
-                    ctx.lineTo (x0, h)
-                } else {
-                    ctx.moveTo (x0, 0)
-                    ctx.lineTo (x0 + pitW, 0)
-                    ctx.lineTo (x0 + pitW * 0.80, h)
-                    ctx.lineTo (x0 + pitW * 0.20, h)
-                }
-                ctx.closePath()
-                ctx.clip()
-                ctx.fillStyle = g
-                ctx.fillRect (0, 0, w, h)
-            }
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-            Connections {
-                target: root
-                function onMeterLightChanged() { glow.requestPaint() }
-            }
-            Component.onCompleted: requestPaint()
+            veil: 0.018
+            shape: root.headerTop ? 1 : 2
+            pitWidth: bar.pitW / Math.max (1, width)
+            edgeSoftness: 1.0
+            glowColor: root.accent
+            glowStrength: root.glowAmount
+            glowFromBottom: ! root.headerTop
         }
 
         // opaque side fills, clipped away from the trapezoid (eqhdr::before/after)
@@ -178,38 +157,21 @@ Item {
             opacity: root.inactive ? 0.5 : 1.0
         }
 
-        // ---- POST EQ also carries the limiter-mode token -------------------
-        Row {
+        // ---- POST EQ also carries the limiter-mode token (.limdd) ----------
+        // This is a real dropdown: OFF / CLIP / MODERN / TRUE PEAK.
+        OvDropdown {
+            id: limiterMode
+            visible: root.prefix === "pq"
             anchors.left: titleText.right
             anchors.leftMargin: 10
             anchors.verticalCenter: parent.verticalCenter
-            spacing: 7
-            visible: root.prefix === "pq"
 
-            Rectangle {
-                width: 6; height: 6; radius: 3
-                anchors.verticalCenter: parent.verticalCenter
-                color: {
-                    const m = root.engine && root.engine.param ("protectMode")
-                              ? Math.round (root.engine.param ("protectMode").norm * 3) : 2
-                    return m === 0 ? OvTheme.dotOff : OvTheme.sc
-                }
-            }
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: {
-                    const p = root.engine ? root.engine.param ("protectMode") : null
-                    return p ? p.display.toUpperCase() : "MODERN"
-                }
-                color: {
-                    const p = root.engine ? root.engine.param ("protectMode") : null
-                    const m = p ? Math.round (p.norm * 3) : 2
-                    return m === 0 ? OvTheme.faint : OvTheme.sc
-                }
-                font.family: OvTheme.uiFont
-                font.pixelSize: 10
-                font.letterSpacing: 1.4
-            }
+            param: root.engine ? root.engine.param ("protectMode") : null
+            options: [ "OFF", "CLIP", "MODERN", "TRUE PEAK" ]
+            showDot: true
+            accent: OvTheme.sc
+            textColor: root.limiterOn ? OvTheme.sc : OvTheme.faint
+            minWidth: 0
         }
 
         // ---- centre pit controls ------------------------------------------
@@ -247,10 +209,7 @@ Item {
                     openDown: true
                     labelColor: OvTheme.faint
                     accent: root.accent
-                    dimmed: {
-                        const p = root.engine ? root.engine.param ("protectMode") : null
-                        return p ? Math.round (p.norm * 3) <= 1 : false
-                    }
+                    dimmed: root.limiterIndex <= 1
                 }
             }
 
@@ -319,6 +278,13 @@ Item {
                 openDown: root.headerTop
             }
         }
+    }
+
+    // showTip() auto-hide: 1400 ms
+    Timer {
+        id: tipTimer
+        interval: 1400
+        onTriggered: tip.visible = false
     }
 
     // node tooltip

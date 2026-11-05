@@ -26,21 +26,15 @@ Item {
             color: root.on ? root.accent : OvTheme.dotOff
             Behavior on color { ColorAnimation { duration: 120 } }
 
+            // box-shadow: 0 0 7px var(--sc) on .tbtn.act::before
             Rectangle {
                 anchors.centerIn: parent
                 width: 14
                 height: 14
                 radius: 7
-                color: "transparent"
-                visible: root.on
-                border.width: 0
-                // soft halo, mirrors box-shadow: 0 0 7px accent
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: 14; height: 14; radius: 7
-                    color: root.accent
-                    opacity: 0.18
-                }
+                color: root.accent
+                opacity: root.on ? 0.22 : 0.0
+                Behavior on opacity { NumberAnimation { duration: 120 } }
             }
         }
 
@@ -49,6 +43,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             text: root.label
             color: root.on ? root.accent : (ma.containsMouse ? OvTheme.ink : OvTheme.faint)
+            Behavior on color { ColorAnimation { duration: 120 } }
             font.family: OvTheme.uiFont
             font.pixelSize: 10
             font.letterSpacing: 1.4

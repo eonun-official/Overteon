@@ -107,6 +107,25 @@ double OvJuceSource::normForValue (int index, double value) const
     return juce::jlimit (0.0, 1.0, value);
 }
 
+double OvJuceSource::valueForNorm (int index, double norm) const
+{
+    auto* p = param (index);
+    if (p == nullptr) return 0.0;
+
+    norm = juce::jlimit (0.0, 1.0, norm);
+
+    if (auto* f = dynamic_cast<juce::AudioParameterFloat*> (p))
+        return (double) f->convertFrom0to1 ((float) norm);
+
+    if (auto* c = dynamic_cast<juce::AudioParameterChoice*> (p))
+    {
+        const int n = juce::jmax (0, c->choices.size() - 1);
+        return (double) juce::jlimit (0, n, (int) std::lround (norm * (double) n));
+    }
+
+    return norm;
+}
+
 std::string OvJuceSource::text (int index) const
 {
     if (auto* p = param (index)) return st (p->getCurrentValueAsText());

@@ -11,6 +11,9 @@
 #include "OvEngine.h"
 #include "OvMockSource.h"
 #include "OvQmlTypes.h"
+#include "OvEqView.h"
+#include <QMouseEvent>
+
 
 #include <QGuiApplication>
 #include <QQuickView>
@@ -19,10 +22,12 @@
 #include <QQmlContext>
 #include <QScreen>
 #include <QTimer>
+#include <QStringList>
 #include <QFontDatabase>
 #include <QImage>
 #include <QPainter>
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <memory>
@@ -42,6 +47,8 @@ int main (int argc, char** argv)
 
     int w = 840, h = 624;
     QString shot, customQml;
+    int shotDelay = 1200;
+    QStringList presets;          // id=value pairs, applied before the first frame
 
     for (int i = 1; i < argc; ++i)
     {
@@ -59,6 +66,14 @@ int main (int argc, char** argv)
         else if (a == "--freeze")
         {
             OvMockSource::frozen = true;
+        }
+        else if (a == "--shot-delay" && i + 1 < argc)
+        {
+            shotDelay = QString::fromLatin1 (argv[++i]).toInt();
+        }
+        else if (a == "--set" && i + 1 < argc)
+        {
+            presets << QString::fromLatin1 (argv[++i]);
         }
         else if (a == "--qml" && i + 1 < argc)
         {
@@ -87,13 +102,68 @@ int main (int argc, char** argv)
     if (auto* ro = view.rootObject())
         ro->setProperty ("engine", QVariant::fromValue<QObject*> (engine.get()));
 
+    for (const auto& pv : presets)
+    {
+        const int eq = pv.indexOf ('=');
+        if (eq <= 0) continue;
+        const auto id = pv.left (eq);
+        const auto val = pv.mid (eq + 1).toDouble();
+        if (auto* prm = engine->typedParam (id))
+            prm->setValue (val);
+    }
+
     view.resize (w, h);
     view.show();
+
+    if (std::getenv ("ONYXTEON_DRAGTEST") != nullptr)
+    {
+        QTimer::singleShot (600, [&] {
+            OvEqView* eq = nullptr;
+            for (auto* v : view.rootObject()->findChildren<OvEqView*>())
+                if (v->prefix() == QStringLiteral ("pq")) eq = v;
+            if (eq == nullptr) { std::fprintf (stderr, "[drag] pq view not found\n"); return; }
+
+            const QPointF before = eq->nodePosition (1);
+            std::fprintf (stderr, "[drag] node 2 before: %.1f,%.1f  gain=%.2f\n",
+                          before.x(), before.y(), engine->typedParam ("pq2Gain")->value());
+
+            const double dx = std::getenv ("ONYXTEON_DRAGDX") ? std::atof (std::getenv ("ONYXTEON_DRAGDX")) : 0.0;
+            const double dy = std::getenv ("ONYXTEON_DRAGDY") ? std::atof (std::getenv ("ONYXTEON_DRAGDY")) : -20.0;
+            const QPointF to (before.x() + dx, before.y() + dy);
+
+            QMouseEvent press (QEvent::MouseButtonPress, before, before, to,
+                               Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent (eq, &press);
+
+            QMouseEvent move (QEvent::MouseMove, to, to, to,
+                              Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent (eq, &move);
+
+            QMouseEvent rel (QEvent::MouseButtonRelease, to, to, to,
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent (eq, &rel);
+
+            const QPointF after = eq->nodePosition (1);
+            std::fprintf (stderr, "[drag] node 2 after : %.1f,%.1f  gain=%.2f\n",
+                          after.x(), after.y(), engine->typedParam ("pq2Gain")->value());
+            std::fprintf (stderr, "[drag] pointer at   : %.1f,%.1f\n", to.x(), to.y());
+            std::fprintf (stderr, "[drag] follow error : %.1f px\n",
+                          std::hypot (after.x() - to.x(), after.y() - to.y()));
+
+            // let one frame render, then dump it so the curve can be checked
+            // against the node position
+            QTimer::singleShot (200, [&] {
+                if (const char* f = std::getenv ("ONYXTEON_DRAGSHOT"))
+                    view.grabWindow().save (QString::fromUtf8 (f));
+                app.quit();
+            });
+        });
+    }
 
     if (! shot.isEmpty())
     {
         // let a couple of frames render, then grab and quit
-        QTimer::singleShot (1200, [&] {
+        QTimer::singleShot (shotDelay, [&] {
             const QImage img = view.grabWindow();
             if (! img.save (shot))
                 std::fprintf (stderr, "could not write %s\n", shot.toStdString().c_str());

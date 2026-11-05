@@ -45,8 +45,12 @@ public:
     virtual double getNorm (int index) const = 0;
     virtual void   setNorm (int index, double norm) = 0;
 
-    /// Rank-local "value -> normalised" using the parameter's own skew.
+    /// "value -> normalised" and back, using the parameter's own skew
+    /// (JUCE: convertTo0to1 uses pow(lin, skew); convertFrom0to1 uses
+    /// pow(norm, 1/skew)).  Both directions must come from the same source or
+    /// the UI would draw one frequency and write another.
     virtual double normForValue (int index, double value) const = 0;
+    virtual double valueForNorm (int index, double norm) const = 0;
 
     /// Host-formatted display string (falls back to our own formatting).
     virtual std::string text (int index) const = 0;

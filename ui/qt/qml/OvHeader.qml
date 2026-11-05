@@ -17,53 +17,25 @@ Item {
     height: OvTheme.headerH
     width: parent ? parent.width : 0
 
-    // Elliptical frost on the seam (.hdr::before): a Gaussian blur of the EQ
-    // canvas, feathered out with a radial fade in the background colour so it
-    // melts into the grid the way the CSS mask-image does.
-    Item {
-        id: frost
+    // Elliptical frost on the seam (.hdr::before):
+    //   backdrop-filter: blur(3px) saturate(.85)
+    //   rgba(255,255,255,.018) veil
+    //   mask-image: radial-gradient(ellipse at center, #000 0%, #000 45%, transparent 78%)
+    // All four are done in one dual-Kawase + composite shader pass, so the rim
+    // feathers exactly like the CSS radial mask instead of fading a rectangle.
+    OvGlass {
         width: Math.min (550, root.width)
         height: 68
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.verticalCenter: parent.verticalCenter
         visible: root.sourceItem !== null
 
-        OvGlass {
-            anchors.fill: parent
-            source: root.sourceItem
-            radius: 3.0
-            saturation: 0.85
-        }
-
-        // light white veil (rgba(255,255,255,.018) in the design)
-        Rectangle {
-            anchors.fill: parent
-            color: Qt.rgba (1, 1, 1, 0.018)
-        }
-
-        // radial feather: keep the glass solid in the middle, fade to the
-        // page background at the rim
-        Canvas {
-            id: feather
-            anchors.fill: parent
-            onPaint: {
-                const ctx = getContext ("2d")
-                ctx.reset()
-                const w = width, h = height
-                const g = ctx.createRadialGradient (w/2, h/2, 0, w/2, h/2, Math.max (w, h) * 0.5)
-                const bg = OvTheme.bg
-                const c = "rgba(" + Math.round (bg.r*255) + "," + Math.round (bg.g*255) + "," + Math.round (bg.b*255)
-                g.addColorStop (0.00, c + ",0)")
-                g.addColorStop (0.45, c + ",0)")
-                g.addColorStop (0.78, c + ",1)")
-                g.addColorStop (1.00, c + ",1)")
-                ctx.fillStyle = g
-                ctx.fillRect (0, 0, w, h)
-            }
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-            Component.onCompleted: requestPaint()
-        }
+        source: root.sourceItem
+        radius: 3.0
+        saturation: 0.85
+        veil: 0.018
+        shape: 3                 // feathered ellipse
+        edgeSoftness: 1.0
     }
 
     // ---- wordmark ------------------------------------------------------

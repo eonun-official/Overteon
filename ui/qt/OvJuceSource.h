@@ -26,6 +26,7 @@ public:
     double getNorm (int index) const override;
     void   setNorm (int index, double norm) override;
     double normForValue (int index, double value) const override;
+    double valueForNorm (int index, double norm) const override;
 
     std::string text (int index) const override;
 

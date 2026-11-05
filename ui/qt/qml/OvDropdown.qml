@@ -18,6 +18,11 @@ Item {
     property bool dimmed: false
     property real minWidth: 58
 
+    // .limdd .ddbtn::before: a status dot that is dark when the value is 0 and
+    // accent-coloured (with a glow) otherwise
+    property bool showDot: false
+    readonly property bool dotOn: showDot && param !== null && param.norm > 0.001
+
     signal picked (int index)
 
     implicitWidth: row.implicitWidth
@@ -36,6 +41,27 @@ Item {
         id: row
         anchors.verticalCenter: parent.verticalCenter
         spacing: 6
+
+        Item {
+            visible: root.showDot
+            width: 6
+            height: 6
+            anchors.verticalCenter: parent.verticalCenter
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: 14; height: 14; radius: 7
+                color: root.accent
+                opacity: root.dotOn ? 0.25 : 0
+                Behavior on opacity { NumberAnimation { duration: 120 } }
+            }
+            Rectangle {
+                anchors.fill: parent
+                radius: 3
+                color: root.dotOn ? root.accent : OvTheme.dotOff
+                Behavior on color { ColorAnimation { duration: 120 } }
+            }
+        }
 
         Text {
             visible: root.label !== ""
@@ -63,6 +89,8 @@ Item {
                     return (it.length > 0 ? it[i] : "") + (root.openDown ? " ▾" : " ▴")
                 }
                 color: (mouse.containsMouse || menu.visible) ? root.accent : root.textColor
+                // CSS: transition: .12s
+                Behavior on color { ColorAnimation { duration: 120 } }
                 font.family: OvTheme.uiFont
                 font.pixelSize: 10
             }
@@ -114,6 +142,7 @@ Item {
                     Rectangle {
                         anchors.fill: parent
                         color: hov.containsMouse ? OvTheme.panel : "transparent"
+                        Behavior on color { ColorAnimation { duration: 120 } }
                     }
                     Text {
                         anchors.verticalCenter: parent.verticalCenter

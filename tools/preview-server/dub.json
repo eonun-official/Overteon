@@ -1,0 +1,14 @@
+{
+ "name": "overteon-preview-server",
+ "description": "Serves the Overteon WebView UI for browser/Gecko rendering on :8888",
+ "targetType": "executable",
+ "sourcePaths": [
+  "source"
+ ],
+ "dependencies": {
+  "vibe-d": "~>0.10.1"
+ },
+ "versions": [
+  "VibeDefaultMain"
+ ]
+}
