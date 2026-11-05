@@ -46,12 +46,18 @@ OvParam* OvEngine::typedParam (const QString& id) const
 
 void OvEngine::tick()
 {
+    // A parameter "changed" only matters to the UI when it moved by more than
+    // the pixel resolution of a control.  Comparing exact doubles made every
+    // float wobble (host automation, the mock's drift) count as a change, and
+    // each change repaints both EQ plots — the plots then ran at the poll rate
+    // instead of their own 30 Hz, costing ~25 % of a core.
     bool any = false;
     for (auto* p : m_paramList)
     {
         const auto before = p->norm();
         p->poll();
-        if (p->norm() != before) any = true;
+        if (std::abs (p->norm() - before) > 1.0 / 4096.0)
+            any = true;
     }
     if (any)
     {
@@ -84,17 +90,26 @@ void OvEngine::tick()
         emit metersChanged();
     }
 
+    // Only notify on a real change.  Emitting unconditionally 30x a second
+    // made both EQ plots repaint even with identical data, and each repaint
+    // re-renders the plot and runs the glow blur.
     if ((++m_tickCount % 2) == 0)
     {
         float spec[128];
         m_source->spectrum (spec, 128);
+
+        bool changed = false;
         for (int i = 0; i < 128; ++i)
         {
             const double v = (double) spec[i];
             if (std::abs (m_spectrum.at (i).toDouble() - v) > 0.0005)
+            {
                 m_spectrum[i] = v;
+                changed = true;
+            }
         }
-        emit spectrumChanged();
+        if (changed)
+            emit spectrumChanged();
     }
 }
 

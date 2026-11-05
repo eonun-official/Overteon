@@ -42,6 +42,18 @@ if(OVERTEON_PREVIEW_ONLY)
     target_include_directories(overteon-qml-preview PRIVATE ui/qt)
     target_link_libraries(overteon-qml-preview PRIVATE
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets)
+
+    # the preview checks for a compositing manager before Qt starts
+    if(UNIX AND NOT APPLE)
+        find_package(X11 REQUIRED)
+        target_link_libraries(overteon-qml-preview PRIVATE X11::X11)
+        foreach(_ext X11::Xext Xext)
+            if(TARGET ${_ext})
+                target_link_libraries(overteon-qml-preview PRIVATE ${_ext})
+                break()
+            endif()
+        endforeach()
+    endif()
     set_target_properties(overteon-qml-preview PROPERTIES AUTOMOC ON AUTORCC ON)
     if(CMAKE_CROSSCOMPILING AND DEFINED ENV{OVERTEON_HOST_RCC})
         set_target_properties(overteon-qml-preview PROPERTIES
@@ -204,6 +216,18 @@ if(OVERTEON_QT_UI)
     target_include_directories(overteon-qml-preview PRIVATE ui/qt)
     target_link_libraries(overteon-qml-preview PRIVATE
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets)
+
+    # the preview checks for a compositing manager before Qt starts
+    if(UNIX AND NOT APPLE)
+        find_package(X11 REQUIRED)
+        target_link_libraries(overteon-qml-preview PRIVATE X11::X11)
+        foreach(_ext X11::Xext Xext)
+            if(TARGET ${_ext})
+                target_link_libraries(overteon-qml-preview PRIVATE ${_ext})
+                break()
+            endif()
+        endforeach()
+    endif()
     set_target_properties(overteon-qml-preview PROPERTIES
         AUTOMOC ON AUTORCC ON)
     if(NOT WIN32)

@@ -146,8 +146,17 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickPaintedItem (parent)
     // separable Gaussian over the bar strip.  On a software GL stack (wine,
     // Xephyr) that costs more than a frame period, so the event loop starves
     // and the window appears to freeze.
-    m_repaint.setInterval (OvTiming::kFrameMs);
+    m_repaint.setInterval (OvTiming::kPlotMs);
     connect (&m_repaint, &QTimer::timeout, this, [this] {
+        // A repaint costs a full plot render plus a 1040x386 texture upload,
+        // so it only happens when the spectrum moved or the parameters
+        // changed — not on a fixed cadence.
+        const bool spectrumMoved = (m_spectrumStamp != m_lastSpectrumStamp);
+        if (spectrumMoved)
+        {
+            m_lastSpectrumStamp = m_spectrumStamp;
+            m_dirty = true;
+        }
         if (std::exchange (m_dirty, false))
             update();
     });
@@ -163,8 +172,18 @@ void OvEqView::setEngine (OvEngine* e)
     {
         // the plot depends on the parameters, the spectrum and the glow
         connect (m_engine, &OvEngine::paramRevisionChanged, this, [this] { m_dirty = true; });
-        connect (m_engine, &OvEngine::spectrumChanged,      this, [this] { m_dirty = true; });
-        connect (m_engine, &OvEngine::metersChanged,        this, [this] { m_dirty = true; });
+        connect (m_engine, &OvEngine::spectrumChanged, this, [this] { ++m_spectrumStamp; });
+        // Deliberately NOT connected to metersChanged: the meter only drives
+        // the accent glow, and repainting the whole plot (full re-render plus
+        // the blur) at the meter rate cost more than the glow is worth.  The
+        // glow follows on the next spectrum/parameter repaint.
+        connect (m_engine, &OvEngine::metersChanged, this, [this] {
+            if (std::abs (m_engine->harm() - m_pendingGlow) > 0.06)
+            {
+                m_pendingGlow = m_engine->harm();
+                m_dirty = true;
+            }
+        });
     }
     emit engineChanged();
     m_dirty = true;
@@ -894,6 +913,12 @@ int OvEqView::nodeAt (const QPointF& pos) const
 
 void OvEqView::mousePressEvent (QMouseEvent* e)
 {
+    // A new press always ends whatever the previous gesture left behind.  A
+    // release can go to another item (the host window, an overlay) and then
+    // m_dragBand kept its value — every later mouse move dragged that node,
+    // which is why a drag started in empty space moved node 2.
+    endDrag();
+
     refreshNodePositions();
 
     const int hit = nodeAt (e->position());
@@ -926,6 +951,11 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
 
 void OvEqView::mouseMoveEvent (QMouseEvent* e)
 {
+    // Only drag while the button is really down.  Without this check a single
+    // lost release turned the plot into a node that follows the cursor.
+    if (m_dragBand >= 0 && ! (e->buttons() & Qt::LeftButton))
+        endDrag();
+
     if (m_dragBand < 0) { e->ignore(); return; }
 
     const QString base = m_prefix + QString::number (m_dragBand + 1);
@@ -966,17 +996,24 @@ void OvEqView::mouseMoveEvent (QMouseEvent* e)
 
 void OvEqView::mouseReleaseEvent (QMouseEvent* e)
 {
-    if (m_dragBand >= 0)
-    {
-        const QString base = m_prefix + QString::number (m_dragBand + 1);
-        if (auto* p = m_engine ? m_engine->typedParam (base + "Freq") : nullptr) p->endGesture();
-        if (m_dragMovesGain)
-            if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr) p->endGesture();
-        m_dragBand = -1;
-        emit hoverEnded();
-        m_dirty = true;
-    }
+    endDrag();
     e->accept();
+}
+
+/// Close the current gesture (if any) and forget it.
+void OvEqView::endDrag()
+{
+    if (m_dragBand < 0) return;
+
+    const QString base = m_prefix + QString::number (m_dragBand + 1);
+    if (auto* p = m_engine ? m_engine->typedParam (base + "Freq") : nullptr) p->endGesture();
+    if (m_dragMovesGain)
+        if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr) p->endGesture();
+
+    m_dragBand = -1;
+    m_dragMovesGain = false;
+    emit hoverEnded();
+    m_dirty = true;
 }
 
 void OvEqView::mouseDoubleClickEvent (QMouseEvent* e)
@@ -1066,6 +1103,12 @@ void OvEqView::hoverMoveEvent (QHoverEvent* e)
     }
     else
         emit hoverEnded();
+}
+
+void OvEqView::mouseUngrabEvent()
+{
+    // the host took the mouse away mid-gesture
+    endDrag();
 }
 
 void OvEqView::hoverLeaveEvent (QHoverEvent*)

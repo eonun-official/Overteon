@@ -70,6 +70,7 @@ public:
     void mousePressEvent (QMouseEvent*) override;
     void mouseMoveEvent (QMouseEvent*) override;
     void mouseReleaseEvent (QMouseEvent*) override;
+    void mouseUngrabEvent() override;
     void mouseDoubleClickEvent (QMouseEvent*) override;
     void wheelEvent (QWheelEvent*) override;
     void hoverMoveEvent (QHoverEvent*) override;
@@ -113,6 +114,8 @@ private:
     double displayMult() const;
 
     void refreshNodePositions();
+    /// Finish and forget the current node drag (idempotent).
+    void endDrag();
     double plotRangeDb() const;
     double inactiveOpacity() const;
     int nodeAt (const QPointF& pos) const;
@@ -144,4 +147,6 @@ private:
     int    m_contentW = 0, m_contentH = 0;
     QTimer m_repaint;
     bool   m_dirty = true;      // repaint requested since the last frame
+    double m_pendingGlow = -1000.0;
+    quint64 m_spectrumStamp = 0, m_lastSpectrumStamp = 0;
 };

@@ -16,11 +16,24 @@ namespace OvTiming
 {
     constexpr int kFrameHz    = 120;
     constexpr int kFrameMs    = 1000 / kFrameHz;
-    constexpr int kMeterHz    = kFrameHz;
+    // the pod is 550x73 with 4 strokes + a ring; 60 Hz is its data rate
+    constexpr int kMeterHz    = 60;
     // parameters are polled less often than the screen refreshes: 60 Hz is
     // plenty for host automation and costs nothing
     constexpr int kPollHz     = 60;
     constexpr int kPollMs     = 1000 / kPollHz;
+
+    // The EQ plot redraws its spectrum and glow, and the engine only produces
+    // spectrum at kPollHz/2.  Repainting faster re-uploads a 1040x386 texture
+    // for identical pixels: measured 85 % cpu uncapped vs 20 % at this rate,
+    // with no visual difference (the spectrum is the only moving part).
+    constexpr int kPlotHz     = 30;
+    constexpr int kPlotMs     = 1000 / kPlotHz;
+
+    // The spectrum is the only part of a plot that moves; the engine produces
+    // it at kPollHz/2 = 30 Hz.  Everything else is cached.  Rendering the plot
+    // faster than this re-uploads a 1040x386 texture for identical pixels.
+    constexpr int kSpectrumHz = 30;
 }
 
 #include "OvEqView.h"

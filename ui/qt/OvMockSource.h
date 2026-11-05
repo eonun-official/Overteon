@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <ctime>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -142,10 +142,16 @@ private:
         bool isBool = false;
     };
 
+    // Wall-clock seconds, NOT std::clock(): that returns process CPU time,
+    // so the animation speed depended on how much CPU the process happened to
+    // use.  On a real GPU (1.5 % cpu) "time" advanced ~60x slower than reality
+    // and the UI looked frozen; on a software rasteriser (120 % cpu) it ran
+    // faster than real time and reported 125 fps.  Same build, same code.
     static double now()
     {
-        static const double t0 = (double) clock() / (double) CLOCKS_PER_SEC;
-        return (double) clock() / (double) CLOCKS_PER_SEC - t0;
+        using clock_type = std::chrono::steady_clock;
+        static const auto t0 = clock_type::now();
+        return std::chrono::duration<double> (clock_type::now() - t0).count();
     }
 
     static double skewFromCentre (double lo, double hi, double centre)

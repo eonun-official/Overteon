@@ -41,6 +41,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <QLibrary>
+
+#ifdef Q_OS_LINUX
+ #include <X11/Xlib.h>
+ #include <X11/extensions/sync.h>
+#endif
 #include <memory>
 #include <string>
 
@@ -64,6 +69,56 @@ namespace
 
 namespace
 {
+   #ifdef Q_OS_LINUX
+    /// Does this display provide a vblank / UST counter?
+    ///
+    /// This is what Qt's vsync'd render loop waits on.  A server with no such
+    /// counter (measured on a bare X session here: only IDLETIME and
+    /// SERVERTIME are advertised) makes every glXSwapBuffers with swap
+    /// interval 1 block until the driver's ~900 ms timeout:
+    ///
+    ///     interval 1 : 904.89 ms per swap   (1.1 fps)
+    ///     interval 0 :   0.02 ms per swap   (53523 fps)
+    ///
+    /// That reads as a completely frozen UI.  When there is no counter, Qt
+    /// must not wait for vsync; its render loop then paces itself instead.
+    bool hasVblankCounter()
+    {
+       #ifdef Q_OS_LINUX
+        if (auto* dpy = XOpenDisplay (nullptr))
+        {
+            int ev = 0, er = 0;
+            bool found = false;
+            if (XSyncQueryExtension (dpy, &ev, &er))
+            {
+                int n = 0;
+                if (auto* counters = XSyncListSystemCounters (dpy, &n))
+                {
+                    for (int i = 0; i < n; ++i)
+                    {
+                        const char* name = counters[i].name;
+                        if (name == nullptr) continue;
+                        const std::string s (name);
+                        if (s.find ("vblank") != std::string::npos
+                            || s.find ("VBLANK") != std::string::npos
+                            || s.find ("UST")    != std::string::npos
+                            || s.find ("MSC")    != std::string::npos)
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                    XSyncFreeSystemCounterList (counters);
+                }
+            }
+            XCloseDisplay (dpy);
+            return found;
+        }
+       #endif
+        return true;      // cannot tell: leave Qt alone
+    }
+   #endif
+
     /// True when running under wine.
     ///
     /// Wine exposes `wine_get_version` from ntdll; nothing else does.  This is
@@ -92,6 +147,20 @@ int main (int argc, char** argv)
              && qEnvironmentVariableIsEmpty ("QT_QUICK_BACKEND"))
         qputenv ("QSG_RHI_BACKEND", "opengl");
 
+    // No compositor on this X display => no vsync frame callback => Qt Quick's
+    // render loop waits forever and the window advances one frame per second.
+    // Measured on a bare X session (no _NET_WM_CM_S0): 1.0 fps; the same build
+    // with QSG_NO_VSYNC=1 runs at ~104 fps.  Set it here so the preview works
+    // out of the box, and let a caller override.
+   #ifdef Q_OS_LINUX
+    if (qEnvironmentVariableIsEmpty ("QSG_NO_VSYNC") && ! hasVblankCounter())
+    {
+        std::fprintf (stderr, "[preview] this display has no vblank counter; "
+                              "disabling vsync (otherwise the UI runs at 1 fps)\n");
+        qputenv ("QSG_NO_VSYNC", "1");
+    }
+   #endif
+
     // Defaults only: a caller must be able to override these, e.g.
     //   QT_QUICK_BACKEND=software  (wine without working GL)
     //   QT_OPENGL=angle            (Windows)
@@ -99,6 +168,7 @@ int main (int argc, char** argv)
     // with no fallback.
     if (qEnvironmentVariableIsEmpty ("QSG_RENDER_LOOP"))
         qputenv ("QSG_RENDER_LOOP", "basic");
+
 
     int w = 840, h = 624;
     QString shot, customQml;
@@ -202,7 +272,7 @@ int main (int argc, char** argv)
         if (auto* ro = widget->rootObject())
             ro->setProperty ("engine", QVariant::fromValue<QObject*> (engine.get()));
 
-        for (const auto& pv : presets)
+    for (const auto& pv : presets)
         {
             const int eq = pv.indexOf ('=');
             if (eq <= 0) continue;
@@ -257,14 +327,102 @@ int main (int argc, char** argv)
             prm->setValue (val);
     }
 
+    // Regression harness for the stuck-drag bug: press in empty space, then
+    // move with no button held.  No node may move.
+    if (std::getenv ("ONYXTEON_DRAGTEST2") != nullptr)
+    {
+        QTimer::singleShot (900, [&] {
+            OvEqView* eqView = nullptr;
+            for (auto* v : view.rootObject()->findChildren<OvEqView*>())
+                if (v->prefix() == QStringLiteral ("sc")) eqView = v;
+            if (eqView == nullptr) { std::fprintf (stderr, "[drag2] no view\n"); app->quit(); return; }
+
+            const QStringList ids { "sc1Freq","sc2Freq","sc3Freq","sc4Freq","sc5Freq" };
+            QVector<double> before;
+            for (const auto& id : ids) before << engine->typedParam (id)->value();
+
+            // a normal click on a node: press + release
+            const QPointF n2 = eqView->nodePosition (1);
+            QMouseEvent p1 (QEvent::MouseButtonPress, n2, n2, n2,
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent (eqView, &p1);
+            QMouseEvent r1 (QEvent::MouseButtonRelease, n2, n2, n2,
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent (eqView, &r1);
+
+            // press in empty space, then move with nothing held
+            const QPointF empty (60.0, 300.0);
+            QMouseEvent p2 (QEvent::MouseButtonPress, empty, empty, empty,
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent (eqView, &p2);
+            const QPointF far (400.0, 260.0);
+            QMouseEvent m2 (QEvent::MouseMove, far, far, far,
+                            Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent (eqView, &m2);
+
+            int moved = 0;
+            for (int i = 0; i < ids.size(); ++i)
+                if (std::abs (engine->typedParam (ids[i])->value() - before[i]) > 1e-6) ++moved;
+
+            // and the positive case: a real drag with the button held must
+            // move exactly that node
+            const double f2before = engine->typedParam ("sc2Freq")->value();
+            QMouseEvent p3 (QEvent::MouseButtonPress, n2, n2, n2,
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent (eqView, &p3);
+            const QPointF n2moved (n2.x() - 40.0, n2.y());
+            QMouseEvent m3 (QEvent::MouseMove, n2moved, n2moved, n2moved,
+                            Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent (eqView, &m3);
+            QMouseEvent r3 (QEvent::MouseButtonRelease, n2moved, n2moved, n2moved,
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent (eqView, &r3);
+
+            const double f2after = engine->typedParam ("sc2Freq")->value();
+            const bool dragWorks = std::abs (f2after - f2before) > 1.0;
+
+            std::fprintf (stderr, "[drag2] no-button move: %d nodes moved -> %s\n",
+                          moved, moved == 0 ? "PASS" : "FAIL");
+            std::fprintf (stderr, "[drag2] real drag: sc2Freq %.1f -> %.1f Hz -> %s\n",
+                          f2before, f2after, dragWorks ? "PASS" : "FAIL");
+            app->quit();
+        });
+    }
+
     view.resize (w, h);
 
     {
         view.show();
 
+        // Prove the event loop is alive independently of the render loop: a
+        // plain QTimer that fires even if nothing is ever painted.
+        if (std::getenv ("ONYXTEON_FPS") != nullptr)
+        {
+            auto* beat = new QTimer (&view);
+            beat->setInterval (1000);
+            QObject::connect (beat, &QTimer::timeout, [&view] {
+                static int n = 0;
+                std::fprintf (stderr, "[fps] tick %d  exposed=%d  visible=%d  size=%dx%d\n",
+                              ++n, (int) view.isExposed(), (int) view.isVisible(),
+                              view.width(), view.height());
+            });
+            beat->start();
+        }
+
         // The only honest frame-rate number: frames the window presented.
         if (std::getenv ("ONYXTEON_FPS") != nullptr)
         {
+            // Is the window exposed at all?  A QQuickWindow that never gets an
+            // expose does not run its render loop.
+            QObject::connect (&view, &QQuickWindow::sceneGraphInitialized, [&view] {
+                std::fprintf (stderr, "[fps] scene graph initialised, api=%d\n",
+                              (int) view.rendererInterface()->graphicsApi());
+            });
+            QObject::connect (&view, &QQuickWindow::sceneGraphError,
+                              [] (QQuickWindow::SceneGraphError e, const QString& m) {
+                std::fprintf (stderr, "[fps] SCENE GRAPH ERROR %d: %s\n",
+                              (int) e, m.toStdString().c_str());
+            });
             QObject::connect (&view, &QQuickWindow::frameSwapped, [&view] {
                 static int n = 0;
                 static auto t0 = std::chrono::steady_clock::now();
