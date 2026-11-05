@@ -47,6 +47,21 @@ WINEPREFIX=~/.wine-onyx DISPLAY=:3 wine dist-win/overteon-qml-preview.exe
 Verified: the window opens, renders the full UI (design background
 #16181d, deck, bars) and is capturable with `import -window`.
 
+## The UI freezes under wine — use --compat
+
+Qt Quick's own window does not repaint under wine: the scene animates
+(`grabWindow()` at different times differs by tens of thousands of pixels) but
+the X window keeps showing its first frame.  A plain QWidget repaints fine, so
+`--compat` renders the QML scene into a hidden QQuickView, grabs it each frame
+and blits the result into a QWidget:
+
+```
+WINEPREFIX=~/.wine-onyx DISPLAY=:3 QT_QUICK_BACKEND=software \
+    wine dist-win/overteon-qml-preview.exe --compat --size 1040x772
+```
+
+Verified in wine 9.21: 42000-50000 px change per frame, full 1040x772 UI.
+
 ## Notes
 
 * `OVERTEON_PREVIEW_ONLY=ON` skips JUCE entirely.

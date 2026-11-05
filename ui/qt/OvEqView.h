@@ -143,4 +143,5 @@ private:
     QImage m_blurred;        // its blurred copy (bar strip only)
     int    m_contentW = 0, m_contentH = 0;
     QTimer m_repaint;
+    bool   m_dirty = true;      // repaint requested since the last frame
 };

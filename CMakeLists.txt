@@ -28,7 +28,7 @@ option(OVERTEON_PREVIEW_ONLY "Build only overteon-qml-preview (no JUCE plugin)" 
 if(OVERTEON_PREVIEW_ONLY)
     set(CMAKE_AUTOMOC ON)
     set(CMAKE_AUTORCC ON)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets)
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
     add_executable(overteon-qml-preview
@@ -41,7 +41,7 @@ if(OVERTEON_PREVIEW_ONLY)
         ui/qt/ov_ui.qrc)
     target_include_directories(overteon-qml-preview PRIVATE ui/qt)
     target_link_libraries(overteon-qml-preview PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets)
     set_target_properties(overteon-qml-preview PROPERTIES AUTOMOC ON AUTORCC ON)
     if(CMAKE_CROSSCOMPILING AND DEFINED ENV{OVERTEON_HOST_RCC})
         set_target_properties(overteon-qml-preview PROPERTIES
@@ -145,7 +145,7 @@ target_sources(HarmonicInjector PRIVATE
 option(OVERTEON_QT_UI "Build the Qt6/QML editor instead of the WebView one" ON)
 
 if(OVERTEON_QT_UI)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets)
 
     # HarmonicInjector was created by juce_add_plugin before this point, so
     # AUTOMOC has to be enabled on the target itself (not via CMAKE_AUTOMOC).
@@ -203,7 +203,7 @@ if(OVERTEON_QT_UI)
 
     target_include_directories(overteon-qml-preview PRIVATE ui/qt)
     target_link_libraries(overteon-qml-preview PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets)
     set_target_properties(overteon-qml-preview PROPERTIES
         AUTOMOC ON AUTORCC ON)
     if(NOT WIN32)

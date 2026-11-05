@@ -25,6 +25,7 @@ namespace
 #include <cstdio>
 #include <chrono>
 #include <cstdlib>
+#include <utility>
 #include <algorithm>
 #include <cmath>
 
@@ -138,8 +139,18 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickPaintedItem (parent)
     setAntialiasing (true);
     setOpaquePainting (true);
 
+    // Repaint only when something the plot draws has changed.
+    //
+    // This used to call update() unconditionally at the frame rate, and each
+    // repaint renders the whole plot into an offscreen image and runs a
+    // separable Gaussian over the bar strip.  On a software GL stack (wine,
+    // Xephyr) that costs more than a frame period, so the event loop starves
+    // and the window appears to freeze.
     m_repaint.setInterval (OvTiming::kFrameMs);
-    connect (&m_repaint, &QTimer::timeout, this, [this] { update(); });
+    connect (&m_repaint, &QTimer::timeout, this, [this] {
+        if (std::exchange (m_dirty, false))
+            update();
+    });
     m_repaint.start();
 }
 
@@ -147,8 +158,16 @@ void OvEqView::setEngine (OvEngine* e)
 {
     if (e == m_engine) return;
     m_engine = e;
+
+    if (m_engine != nullptr)
+    {
+        // the plot depends on the parameters, the spectrum and the glow
+        connect (m_engine, &OvEngine::paramRevisionChanged, this, [this] { m_dirty = true; });
+        connect (m_engine, &OvEngine::spectrumChanged,      this, [this] { m_dirty = true; });
+        connect (m_engine, &OvEngine::metersChanged,        this, [this] { m_dirty = true; });
+    }
     emit engineChanged();
-    update();
+    m_dirty = true;
 }
 
 void OvEqView::setPrefix (const QString& p)
@@ -156,7 +175,7 @@ void OvEqView::setPrefix (const QString& p)
     if (p == m_prefix) return;
     m_prefix = p;
     emit prefixChanged();
-    update();
+    m_dirty = true;
 }
 
 void OvEqView::setAccent (const QString& c)
@@ -164,7 +183,7 @@ void OvEqView::setAccent (const QString& c)
     if (c == m_accent) return;
     m_accent = c;
     emit accentChanged();
-    update();
+    m_dirty = true;
 }
 
 void OvEqView::setGlow (double v)
@@ -172,7 +191,7 @@ void OvEqView::setGlow (double v)
     if (qFuzzyCompare (v, m_glow)) return;
     m_glow = v;
     emit glowChanged();
-    update();
+    m_dirty = true;
 }
 
 void OvEqView::setHeaderTop (bool t)
@@ -180,7 +199,7 @@ void OvEqView::setHeaderTop (bool t)
     if (t == m_headerTop) return;
     m_headerTop = t;
     emit headerTopChanged();
-    update();
+    m_dirty = true;
 }
 
 // ---------------------------------------------------------------- params
@@ -941,7 +960,7 @@ void OvEqView::mouseMoveEvent (QMouseEvent* e)
         tip += QStringLiteral (" · Q %1").arg (valueOf (base + "Q", 0.0), 0, 'f', 2);
 
     emit hoverInfo (tip, QPointF (m_bands[m_dragBand].x, m_bands[m_dragBand].y));
-    update();
+    m_dirty = true;
     e->accept();
 }
 
@@ -955,7 +974,7 @@ void OvEqView::mouseReleaseEvent (QMouseEvent* e)
             if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr) p->endGesture();
         m_dragBand = -1;
         emit hoverEnded();
-        update();
+        m_dirty = true;
     }
     e->accept();
 }
@@ -971,7 +990,7 @@ void OvEqView::mouseDoubleClickEvent (QMouseEvent* e)
         const QString base = m_prefix + QString::number (hit + 1);
         if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr)
             p->resetToDefault();
-        update();
+        m_dirty = true;
         e->accept();
         return;
     }
@@ -997,7 +1016,7 @@ void OvEqView::mouseDoubleClickEvent (QMouseEvent* e)
             p->setValue (std::clamp (std::abs (db) < 0.5 ? 4.0 : db / displayMult(), -12.0, 12.0));
         if (auto* p = m_engine ? m_engine->typedParam (base + "Freq") : nullptr)
             p->setValue (fromX (e->position().x(), width()));
-        update();
+        m_dirty = true;
     }
     e->accept();
 }
@@ -1017,7 +1036,7 @@ void OvEqView::wheelEvent (QWheelEvent* e)
             p->setNorm (std::clamp (p->norm() + dir * step, 0.0, 1.0));
         }
         refreshNodePositions();
-        update();
+        m_dirty = true;
         e->accept();
         return;
     }

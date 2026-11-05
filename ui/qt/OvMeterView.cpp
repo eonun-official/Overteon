@@ -113,8 +113,13 @@ OvMeterView::OvMeterView (QQuickItem* parent) : QQuickPaintedItem (parent)
         double dt = std::chrono::duration<double> (now - m_last).count();
         m_last = now;
         dt = std::min (dt, 0.1);          // design clamps dt at .1 s too
+        // Only repaint if a rendered value actually moved: at 120 Hz the
+        // unconditional update() re-stroked four trimmed paths and the ring
+        // for no visible change (and starved the event loop under wine).
+        const quint64 before = stateKey();
         advance (dt);
-        update();
+        if (stateKey() != before)
+            update();
     });
     m_last = std::chrono::steady_clock::now();
     m_timer.start();
@@ -126,6 +131,18 @@ void OvMeterView::setEngine (OvEngine* e)
     m_engine = e;
     emit engineChanged();
     update();
+}
+
+quint64 OvMeterView::stateKey() const
+{
+    // quantised: the pod is ~200 px wide, so 1/8192 of the range is well below
+    // one pixel
+    const auto q = [] (double v) { return quint64 (std::clamp (v, 0.0, 1.0) * 8191.0); };
+    return q (m_outL.level) | (q (m_outR.level) << 13)
+         | (q (m_inL.level)  << 26) | (q (m_inR.level) << 39)
+         | (q (m_outL.peak)  << 52) | (q (m_outR.peak) << 65)
+         | (q (m_inL.peak)  << 78) | (q (m_inR.peak) << 91)
+         | (q (m_harmFrac) << 104);
 }
 
 void OvMeterView::advance (double dt)

@@ -1,20 +1,25 @@
 // ============================================================
 //  overteon-qml-preview — standalone QML viewer for the editor UI.
 //
-//  Runs the exact same QML front end as the plugin, but against
+//  Runs the exact same QML front end as the plug-in, but against
 //  OvMockSource (same parameter layout, animated meters), so the UI can
 //  be developed, screenshotted and compared with web_fx/index.html
-//  without starting a DAW or a plugin host.
+//  without starting a DAW or a plug-in host.
 //
 //    ./overteon-qml-preview [--size WxH] [--shot file.png]
+//                           [--compat] [--set id=value]
+//
+//  --compat renders the QML scene into a plain QWidget instead of letting
+//  Qt Quick present its own window.  Qt Quick windows do not repaint under
+//  wine (a plain QWidget does), so this is what makes the preview usable
+//  there; it is also useful on any platform with a broken swap path.
 // ============================================================
 #include "OvEngine.h"
 #include "OvMockSource.h"
 #include "OvQmlTypes.h"
 #include "OvEqView.h"
-#include <QMouseEvent>
 
-
+#include <QApplication>
 #include <QGuiApplication>
 #include <QQuickView>
 #include <QQuickWindow>
@@ -22,45 +27,83 @@
 #include <QQmlContext>
 #include <QScreen>
 #include <QTimer>
-#include <QStringList>
 #include <QFontDatabase>
 #include <QFont>
 #include <QImage>
 #include <QPainter>
+#include <QWidget>
+#include <QStringList>
+#include <QUrl>
+#include <QVariant>
+
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <chrono>
-#include <cmath>
-#include <cstring>
-#include <string>
 #include <memory>
+#include <string>
+
+namespace
+{
+    // ---- compatibility mode ------------------------------------------------
+    //
+    //  Qt Quick's own window never presents under wine (verified: the scene
+    //  animates — grabWindow() at different times differs — but the X window
+    //  keeps showing its first frame, while a plain QWidget repaints fine).
+    //  So: keep the QQuickView off-screen, grab it every frame and blit the
+    //  result into a QWidget.  Same QML, same rendering, a window that works.
+    class CompatWindow : public QWidget
+    {
+    public:
+        CompatWindow (QQuickView* viewIn, int w, int h)
+            : view (viewIn)
+        {
+            setWindowTitle (QStringLiteral ("OnyxTEON (compat)"));
+            setFixedSize (w, h);
+            setAttribute (Qt::WA_OpaquePaintEvent, true);
+
+            frame.setInterval (1000 / 60);
+            QObject::connect (&frame, &QTimer::timeout, this, [this] {
+                const QImage img = view->grabWindow();
+                if (! img.isNull())
+                {
+                    backBuffer = img;
+                    update();
+                }
+            });
+            frame.start();
+        }
+
+    protected:
+        void paintEvent (QPaintEvent*) override
+        {
+            QPainter p (this);
+            if (backBuffer.isNull())
+                p.fillRect (rect(), QColor (0x16, 0x18, 0x1d));
+            else
+                p.drawImage (rect(), backBuffer);
+        }
+
+    private:
+        QQuickView* view = nullptr;
+        QImage      backBuffer;
+        QTimer      frame;
+    };
+}
 
 int main (int argc, char** argv)
 {
-    qputenv ("QSG_RENDER_LOOP", "basic");
-    qputenv ("QT_QUICK_BACKEND", "opengl");
-
-    QGuiApplication app (argc, argv);
-
-    // Match the browser's text rendering: grayscale antialiasing.  Qt's
-    // default subpixel (LCD) antialiasing fringes glyph edges with colour,
-    // which the web page never shows.
-    {
-        QFont f = app.font();
-        f.setStyleStrategy (QFont::NoSubpixelAntialias);
-        app.setFont (f);
-    }
-
-    ovRegisterQmlTypes();
-
-    for (const char* f : { ":/res/Inter-Regular.ttf", ":/res/Inter-Medium.ttf",
-                           ":/res/Inter-SemiBold.ttf", ":/res/Inter-Bold.ttf",
-                           ":/res/edix.otf" })
-        QFontDatabase::addApplicationFont (QString::fromLatin1 (f));
+    // Defaults only: a caller must be able to override these, e.g.
+    //   QT_QUICK_BACKEND=software  (wine without working GL)
+    //   QT_OPENGL=angle            (Windows)
+    // Forcing OpenGL unconditionally is what made the window hang under wine
+    // with no fallback.
+    if (qEnvironmentVariableIsEmpty ("QSG_RENDER_LOOP"))
+        qputenv ("QSG_RENDER_LOOP", "basic");
 
     int w = 840, h = 624;
     QString shot, customQml;
     int shotDelay = 1200;
+    bool compat = qEnvironmentVariableIsSet ("ONYXTEON_COMPAT");
     QStringList presets;          // id=value pairs, applied before the first frame
 
     for (int i = 1; i < argc; ++i)
@@ -76,13 +119,17 @@ int main (int argc, char** argv)
         {
             shot = QString::fromLatin1 (argv[++i]);
         }
-        else if (a == "--freeze")
-        {
-            OvMockSource::frozen = true;
-        }
         else if (a == "--shot-delay" && i + 1 < argc)
         {
             shotDelay = QString::fromLatin1 (argv[++i]).toInt();
+        }
+        else if (a == "--compat")
+        {
+            compat = true;
+        }
+        else if (a == "--freeze")
+        {
+            OvMockSource::frozen = true;
         }
         else if (a == "--set" && i + 1 < argc)
         {
@@ -94,12 +141,41 @@ int main (int argc, char** argv)
         }
     }
 
+    std::unique_ptr<QApplication> app;
+
+    if (compat)
+    {
+        // QWidget needs QApplication, not QGuiApplication
+        app = std::make_unique<QApplication> (argc, argv);
+    }
+    else
+    {
+        app = std::make_unique<QApplication> (argc, argv);
+    }
+
+    // Match the browser's text rendering: grayscale antialiasing.  Qt's
+    // default subpixel (LCD) antialiasing fringes glyph edges with colour,
+    // which the web page never shows.
+    {
+        QFont f = app->font();
+        f.setStyleStrategy (QFont::NoSubpixelAntialias);
+        app->setFont (f);
+    }
+
+    ovRegisterQmlTypes();
+
+    for (const char* f : { ":/res/Inter-Regular.ttf", ":/res/Inter-Medium.ttf",
+                           ":/res/Inter-SemiBold.ttf", ":/res/Inter-Bold.ttf",
+                           ":/res/edix.otf" })
+        QFontDatabase::addApplicationFont (QString::fromLatin1 (f));
+
     auto engine = std::make_unique<OvEngine> (std::make_unique<OvMockSource>());
 
     QQuickView view;
     view.setColor (QColor (0x16, 0x18, 0x1d));
     view.setResizeMode (QQuickView::SizeRootObjectToView);
     view.rootContext()->setContextProperty ("engine", engine.get());
+
     if (customQml.isEmpty())
         view.setSource (QUrl (QStringLiteral ("qrc:/qml/main.qml")));
     else
@@ -126,68 +202,35 @@ int main (int argc, char** argv)
     }
 
     view.resize (w, h);
-    view.show();
 
-    // The only honest frame-rate number: frames the window actually presented.
-    if (std::getenv ("ONYXTEON_FPS") != nullptr)
+    std::unique_ptr<CompatWindow> compatWindow;
+
+    if (compat)
     {
-        QObject::connect (&view, &QQuickWindow::frameSwapped, [&view] {
-            static int n = 0;
-            static auto t0 = std::chrono::steady_clock::now();
-            ++n;
-            const auto now = std::chrono::steady_clock::now();
-            const double dt = std::chrono::duration<double> (now - t0).count();
-            if (dt >= 2.0)
-            {
-                std::fprintf (stderr, "[fps] window %.1f fps\n", n / dt);
-                n = 0; t0 = now;
-            }
-        });
+        // the Quick view stays off-screen; the widget shows its frames
+        compatWindow = std::make_unique<CompatWindow> (&view, w, h);
+        compatWindow->show();
     }
-
-    if (std::getenv ("ONYXTEON_DRAGTEST") != nullptr)
+    else
     {
-        QTimer::singleShot (600, [&] {
-            OvEqView* eq = nullptr;
-            for (auto* v : view.rootObject()->findChildren<OvEqView*>())
-                if (v->prefix() == QStringLiteral ("pq")) eq = v;
-            if (eq == nullptr) { std::fprintf (stderr, "[drag] pq view not found\n"); return; }
+        view.show();
 
-            const QPointF before = eq->nodePosition (1);
-            std::fprintf (stderr, "[drag] node 2 before: %.1f,%.1f  gain=%.2f\n",
-                          before.x(), before.y(), engine->typedParam ("pq2Gain")->value());
-
-            const double dx = std::getenv ("ONYXTEON_DRAGDX") ? std::atof (std::getenv ("ONYXTEON_DRAGDX")) : 0.0;
-            const double dy = std::getenv ("ONYXTEON_DRAGDY") ? std::atof (std::getenv ("ONYXTEON_DRAGDY")) : -20.0;
-            const QPointF to (before.x() + dx, before.y() + dy);
-
-            QMouseEvent press (QEvent::MouseButtonPress, before, before, to,
-                               Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-            QCoreApplication::sendEvent (eq, &press);
-
-            QMouseEvent move (QEvent::MouseMove, to, to, to,
-                              Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
-            QCoreApplication::sendEvent (eq, &move);
-
-            QMouseEvent rel (QEvent::MouseButtonRelease, to, to, to,
-                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-            QCoreApplication::sendEvent (eq, &rel);
-
-            const QPointF after = eq->nodePosition (1);
-            std::fprintf (stderr, "[drag] node 2 after : %.1f,%.1f  gain=%.2f\n",
-                          after.x(), after.y(), engine->typedParam ("pq2Gain")->value());
-            std::fprintf (stderr, "[drag] pointer at   : %.1f,%.1f\n", to.x(), to.y());
-            std::fprintf (stderr, "[drag] follow error : %.1f px\n",
-                          std::hypot (after.x() - to.x(), after.y() - to.y()));
-
-            // let one frame render, then dump it so the curve can be checked
-            // against the node position
-            QTimer::singleShot (200, [&] {
-                if (const char* f = std::getenv ("ONYXTEON_DRAGSHOT"))
-                    view.grabWindow().save (QString::fromUtf8 (f));
-                app.quit();
+        // The only honest frame-rate number: frames the window presented.
+        if (std::getenv ("ONYXTEON_FPS") != nullptr)
+        {
+            QObject::connect (&view, &QQuickWindow::frameSwapped, [&view] {
+                static int n = 0;
+                static auto t0 = std::chrono::steady_clock::now();
+                ++n;
+                const auto now = std::chrono::steady_clock::now();
+                const double dt = std::chrono::duration<double> (now - t0).count();
+                if (dt >= 2.0)
+                {
+                    std::fprintf (stderr, "[fps] window %.1f fps\n", n / dt);
+                    n = 0; t0 = now;
+                }
             });
-        });
+        }
     }
 
     if (! shot.isEmpty())
@@ -200,9 +243,9 @@ int main (int argc, char** argv)
             else
                 std::printf ("wrote %s (%dx%d)\n", shot.toStdString().c_str(),
                              img.width(), img.height());
-            app.quit();
+            app->quit();
         });
     }
 
-    return app.exec();
+    return app->exec();
 }

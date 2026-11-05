@@ -42,6 +42,10 @@ private:
     /// feGaussianBlur halo drawn underneath the sharp layer.
     void drawPod (QPainter* g, bool glowOnly);
 
+    /// Everything the pod draws, quantised, so a repaint can be skipped when
+    /// nothing moved.
+    quint64 stateKey() const;
+
     /// Separable Gaussian blur of a premultiplied ARGB image.
     static QImage blurImage (const QImage& src, double sigma);
 
