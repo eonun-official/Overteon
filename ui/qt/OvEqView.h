@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  Overteon Qt/QML UI — EQ plot.
+//  OnyxTEON Qt/QML UI — EQ plot.
 //
 //  A direct port of the canvas EQ engine in web_fx/index.html:
 //  same log frequency axis (5 Hz..24 kHz), same RBJ coefficient maths,

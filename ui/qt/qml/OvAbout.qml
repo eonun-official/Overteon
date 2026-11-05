@@ -46,7 +46,7 @@ Item {
             Row {
                 anchors.horizontalCenter: parent.horizontalCenter
                 Text {
-                    text: "OVER"
+                    text: "ONYX"
                     color: OvTheme.ink
                     font.family: OvTheme.displayFont
                     font.pixelSize: 17

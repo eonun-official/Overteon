@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  Overteon Qt/QML UI — mock data source.
+//  OnyxTEON Qt/QML UI — mock data source.
 //
 //  Mirrors the parameter layout of src/FxProcessor.cpp exactly (same ids,
 //  ranges, defaults) and animates meters + spectrum, so the QML front end

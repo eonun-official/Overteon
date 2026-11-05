@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
-project(Overteon VERSION 0.9.14)
+# OnyxTEON — the Qt6/QML fork of Overteon.  Separate product identity so both
+# can be installed and loaded side by side in the same host:
+#   * own LV2 URI / bundle id / plug-in code
+#   * own bundle + product name (OnyxTEON.lv2, OnyxTEON.vst3)
+#   * identical parameter IDs, so .hinj presets stay interchangeable.
+project(OnyxTEON VERSION 0.9.14)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -68,11 +73,11 @@ juce_add_plugin(HarmonicInjector
     COMPANY_NAME "Eonun"
     COMPANY_WEBSITE "https://eonun.com"
     # Stable LV2 URIs/ids must never change after release, or hosts lose settings.
-    LV2URI "https://eonun.com/plugins/Overteon"
+    LV2URI "https://eonun.com/plugins/OnyxTEON"
     PLUGIN_MANUFACTURER_CODE Eonu
-    BUNDLE_ID com.eonun.overteon
+    BUNDLE_ID com.eonun.onyxteon
     HARDENED_RUNTIME_ENABLED TRUE
-    PLUGIN_CODE Ovtn
+    PLUGIN_CODE Onyx
     FORMATS ${PLUGIN_FORMATS}
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
@@ -81,7 +86,7 @@ juce_add_plugin(HarmonicInjector
     NEEDS_WEB_BROWSER TRUE
     NEEDS_WEBVIEW2 TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE
-    PRODUCT_NAME "Overteon")
+    PRODUCT_NAME "OnyxTEON")
 
 target_sources(HarmonicInjector PRIVATE
     src/FxProcessor.cpp
@@ -116,6 +121,15 @@ if(OVERTEON_QT_UI)
 
     target_link_libraries(HarmonicInjector PRIVATE
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+
+    # the editor maps foreign ancestors itself (see OvQmlEditor.cpp)
+    if(UNIX AND NOT APPLE)
+        find_package(X11 REQUIRED)
+        target_link_libraries(HarmonicInjector PRIVATE X11::X11)
+        if(TARGET X11::Xext)
+            target_link_libraries(HarmonicInjector PRIVATE X11::Xext)
+        endif()
+    endif()
 
     # The QML + font bundle has to be compiled into every plugin binary: the
     # shared-code target is a static archive and nothing references the rcc

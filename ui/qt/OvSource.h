@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  Overteon Qt/QML UI — data source interface.
+//  OnyxTEON Qt/QML UI — data source interface.
 //
 //  The QML front end never talks to JUCE directly: it sees an OvEngine,
 //  which is fed by an OvSource.  Two implementations exist:

@@ -199,7 +199,7 @@ juce::File OvJuceSource::presetRoot() const
     if (! dir.isDirectory())
     {
         dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                  .getChildFile ("Eonun").getChildFile ("Overteon Presets");
+                  .getChildFile ("Eonun").getChildFile ("OnyxTEON Presets");
         dir.createDirectory();
         dir.getChildFile ("Factory").createDirectory();
         dir.getChildFile ("User").createDirectory();

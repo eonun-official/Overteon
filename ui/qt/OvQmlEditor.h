@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  Overteon Qt/QML UI — JUCE editor that hosts the QML front end.
+//  OnyxTEON Qt/QML UI — JUCE editor that hosts the QML front end.
 //
 //  The plugin keeps JUCE for DSP / parameters / host integration; only the
 //  editor is Qt.  A single QGuiApplication is created lazily for the whole
@@ -23,15 +23,27 @@ public:
     void resized() override;
     void parentHierarchyChanged() override;
 
+    // Qt does not dispatch X input for a foreign-parented window reliably, so
+    // the Qt window is made input-transparent (empty X input shape) and JUCE
+    // forwards the events into the QML scene instead.
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp   (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+
 private:
     void timerCallback() override;
     void attachToHostWindow();
     void detach();
+    void forwardMouse (const juce::MouseEvent&, int qtType);
+    void forwardWheel (const juce::MouseEvent&, const juce::MouseWheelDetails&);
 
     class Impl;
     std::unique_ptr<Impl> impl;
     InjectorProcessor& proc;
     int   attachAttempts = 0;
+    int   ticksSinceAttach = 0;
     bool  attached = false;
     void* attachedXid = nullptr;
 

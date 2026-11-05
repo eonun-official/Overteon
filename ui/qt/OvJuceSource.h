@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  Overteon Qt/QML UI — live JUCE source (plugin + standalone host).
+//  OnyxTEON Qt/QML UI — live JUCE source (plugin + standalone host).
 // ============================================================
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
