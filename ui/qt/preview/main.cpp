@@ -32,6 +32,7 @@
 #include <QImage>
 #include <QPainter>
 #include <QWidget>
+#include <QQuickWidget>
 #include <QStringList>
 #include <QUrl>
 #include <QVariant>
@@ -39,6 +40,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <QLibrary>
 #include <memory>
 #include <string>
 
@@ -46,52 +48,50 @@ namespace
 {
     // ---- compatibility mode ------------------------------------------------
     //
-    //  Qt Quick's own window never presents under wine (verified: the scene
-    //  animates — grabWindow() at different times differs — but the X window
-    //  keeps showing its first frame, while a plain QWidget repaints fine).
-    //  So: keep the QQuickView off-screen, grab it every frame and blit the
-    //  result into a QWidget.  Same QML, same rendering, a window that works.
-    class CompatWindow : public QWidget
+    //  Qt Quick's own window does not present under wine: the scene renders
+    //  (grabWindow() at different times differs by tens of thousands of
+    //  pixels) but the X window keeps showing its first frame.  A plain
+    //  QWidget repaints fine.
+    //
+    //  Grabbing the hidden QQuickView into a QWidget is NOT a fix: a window
+    //  that was never presented has no surface to grab, so grabWindow()
+    //  returns an empty image and the widget shows nothing.
+    //
+    //  QQuickWidget is the supported answer: it renders the scene through
+    //  QQuickRenderControl into an FBO and blits that through QWidget's own
+    //  paint path, so no window present is involved anywhere.
+}
+
+namespace
+{
+    /// True when running under wine.
+    ///
+    /// Wine exposes `wine_get_version` from ntdll; nothing else does.  This is
+    /// needed because Qt Quick does not work there out of the box, and the two
+    /// fixes have to be applied before QApplication is constructed.
+    bool runningUnderWine()
     {
-    public:
-        CompatWindow (QQuickView* viewIn, int w, int h)
-            : view (viewIn)
-        {
-            setWindowTitle (QStringLiteral ("OnyxTEON (compat)"));
-            setFixedSize (w, h);
-            setAttribute (Qt::WA_OpaquePaintEvent, true);
-
-            frame.setInterval (1000 / 60);
-            QObject::connect (&frame, &QTimer::timeout, this, [this] {
-                const QImage img = view->grabWindow();
-                if (! img.isNull())
-                {
-                    backBuffer = img;
-                    update();
-                }
-            });
-            frame.start();
-        }
-
-    protected:
-        void paintEvent (QPaintEvent*) override
-        {
-            QPainter p (this);
-            if (backBuffer.isNull())
-                p.fillRect (rect(), QColor (0x16, 0x18, 0x1d));
-            else
-                p.drawImage (rect(), backBuffer);
-        }
-
-    private:
-        QQuickView* view = nullptr;
-        QImage      backBuffer;
-        QTimer      frame;
-    };
+       #ifdef Q_OS_WIN
+        QLibrary ntdll (QStringLiteral ("ntdll"));
+        return ntdll.resolve ("wine_get_version") != nullptr;
+       #else
+        return false;
+       #endif
+    }
 }
 
 int main (int argc, char** argv)
 {
+    // Under wine, Qt 6 picks the D3D11 RHI by default and wine's DXGI cannot
+    // create an output for the window ("dxgi_device_init Failed to get
+    // output"), so everything renders black.  The OpenGL RHI works.  This must
+    // be set before QApplication exists, hence the pre-scan.
+    const bool wine = runningUnderWine()
+                   || qEnvironmentVariableIsSet ("WINEPREFIX");
+    if (wine && qEnvironmentVariableIsEmpty ("QSG_RHI_BACKEND")
+             && qEnvironmentVariableIsEmpty ("QT_QUICK_BACKEND"))
+        qputenv ("QSG_RHI_BACKEND", "opengl");
+
     // Defaults only: a caller must be able to override these, e.g.
     //   QT_QUICK_BACKEND=software  (wine without working GL)
     //   QT_OPENGL=angle            (Windows)
@@ -103,7 +103,7 @@ int main (int argc, char** argv)
     int w = 840, h = 624;
     QString shot, customQml;
     int shotDelay = 1200;
-    bool compat = qEnvironmentVariableIsSet ("ONYXTEON_COMPAT");
+    bool compat = wine || qEnvironmentVariableIsSet ("ONYXTEON_COMPAT");
     QStringList presets;          // id=value pairs, applied before the first frame
 
     for (int i = 1; i < argc; ++i)
@@ -126,6 +126,10 @@ int main (int argc, char** argv)
         else if (a == "--compat")
         {
             compat = true;
+        }
+        else if (a == "--no-compat")
+        {
+            compat = false;
         }
         else if (a == "--freeze")
         {
@@ -171,15 +175,67 @@ int main (int argc, char** argv)
 
     auto engine = std::make_unique<OvEngine> (std::make_unique<OvMockSource>());
 
+    const QUrl sourceUrl = customQml.isEmpty()
+        ? QUrl (QStringLiteral ("qrc:/qml/main.qml"))
+        : QUrl::fromLocalFile (customQml);
+
+    // ---- compat: QQuickWidget renders through QQuickRenderControl ---------
+    if (compat)
+    {
+        auto widget = std::make_unique<QQuickWidget>();
+        widget->setResizeMode (QQuickWidget::SizeRootObjectToView);
+        widget->setClearColor (QColor (0x16, 0x18, 0x1d));
+        widget->rootContext()->setContextProperty ("engine", engine.get());
+
+        // QQuickWidget renders into an FBO, which needs a GL/RHI context; the
+        // software backend has none.  Under wine the OpenGL RHI is already
+        // forced above.
+        widget->setSource (sourceUrl);
+
+        if (widget->status() == QQuickWidget::Error)
+        {
+            for (const auto& e : widget->errors())
+                std::fprintf (stderr, "%s\n", e.toString().toStdString().c_str());
+            return 1;
+        }
+
+        if (auto* ro = widget->rootObject())
+            ro->setProperty ("engine", QVariant::fromValue<QObject*> (engine.get()));
+
+        for (const auto& pv : presets)
+        {
+            const int eq = pv.indexOf ('=');
+            if (eq <= 0) continue;
+            if (auto* prm = engine->typedParam (pv.left (eq)))
+                prm->setValue (pv.mid (eq + 1).toDouble());
+        }
+
+        widget->resize (w, h);
+        widget->show();
+
+        if (! shot.isEmpty())
+        {
+            QTimer::singleShot (shotDelay, [&] {
+                const QImage img = widget->grab().toImage();
+                if (! img.save (shot))
+                    std::fprintf (stderr, "could not write %s\n", shot.toStdString().c_str());
+                else
+                    std::printf ("wrote %s (%dx%d)\n", shot.toStdString().c_str(),
+                                 img.width(), img.height());
+                app->quit();
+            });
+        }
+
+        return app->exec();
+    }
+
+    // ---- default: a real Qt Quick window ----------------------------------
     QQuickView view;
     view.setColor (QColor (0x16, 0x18, 0x1d));
     view.setResizeMode (QQuickView::SizeRootObjectToView);
     view.rootContext()->setContextProperty ("engine", engine.get());
 
-    if (customQml.isEmpty())
-        view.setSource (QUrl (QStringLiteral ("qrc:/qml/main.qml")));
-    else
-        view.setSource (QUrl::fromLocalFile (customQml));
+    view.setSource (sourceUrl);
 
     if (view.status() == QQuickView::Error)
     {
@@ -203,15 +259,6 @@ int main (int argc, char** argv)
 
     view.resize (w, h);
 
-    std::unique_ptr<CompatWindow> compatWindow;
-
-    if (compat)
-    {
-        // the Quick view stays off-screen; the widget shows its frames
-        compatWindow = std::make_unique<CompatWindow> (&view, w, h);
-        compatWindow->show();
-    }
-    else
     {
         view.show();
 

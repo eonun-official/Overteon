@@ -63,7 +63,8 @@ done
 echo "done: $OUT ($(du -sh "$OUT" | cut -f1), $(ls "$OUT"/*.dll | wc -l) DLLs)"
 echo
 echo "run it:"
-echo "  WINEPREFIX=\$HOME/.wine-onyx DISPLAY=:3 wine $OUT/$EXE --compat --size 1040x772"
+echo "  WINEPREFIX=\$HOME/.wine-onyx DISPLAY=:3 wine $OUT/$EXE --size 1040x772"
 echo
-echo "(--compat is needed under wine: Qt Quick's own window never repaints"
-echo " there, while a plain QWidget does.  Without it the UI looks frozen.)"
+echo "(no wine-specific flags needed: the app detects wine, selects the"
+echo " OpenGL RHI and renders through QQuickWidget.  --no-compat forces the"
+echo " normal Qt Quick window, e.g. on real Windows.)"

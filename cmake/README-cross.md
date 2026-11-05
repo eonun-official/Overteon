@@ -47,20 +47,35 @@ WINEPREFIX=~/.wine-onyx DISPLAY=:3 wine dist-win/overteon-qml-preview.exe
 Verified: the window opens, renders the full UI (design background
 #16181d, deck, bars) and is capturable with `import -window`.
 
-## The UI freezes under wine — use --compat
+## Wine support is automatic now
 
-Qt Quick's own window does not repaint under wine: the scene animates
-(`grabWindow()` at different times differs by tens of thousands of pixels) but
-the X window keeps showing its first frame.  A plain QWidget repaints fine, so
-`--compat` renders the QML scene into a hidden QQuickView, grabs it each frame
-and blits the result into a QWidget:
+Two separate wine problems, both handled by the application itself — no
+environment variables needed:
 
-```
-WINEPREFIX=~/.wine-onyx DISPLAY=:3 QT_QUICK_BACKEND=software \
-    wine dist-win/overteon-qml-preview.exe --compat --size 1040x772
-```
+1. **Qt 6 picks the D3D11 RHI on Windows, and wine's DXGI cannot create an
+   output for the window**:
+   ```
+   err:dxgi:dxgi_device_init Failed to get output from window ...
+   ```
+   The result is a uniformly black window.  The app now detects wine
+   (`ntdll!wine_get_version`) before constructing QApplication and selects
+   `QSG_RHI_BACKEND=opengl`.
 
-Verified in wine 9.21: 42000-50000 px change per frame, full 1040x772 UI.
+2. **Qt Quick's own window does not present.** A plain QWidget repaints
+   fine, and the scene graph runs (grabWindow() at different times differs),
+   so only the present is broken.  Under wine the app now renders through
+   `QQuickWidget`, which goes via `QQuickRenderControl` into an FBO and
+   blits through QWidget's paint path — no window present involved.
+
+   (Grabbing a hidden QQuickView into a QWidget does *not* work: a window
+   that was never presented has no surface, so grabWindow() returns an empty
+   image and the widget stays blank.)
+
+Verified in wine 9.21, `wine explorer /desktop=onyxteon,1100x830 ...` on a
+nested display: 40000-50000 px change per frame, full UI, deck border at the
+expected scaled row.
+
+Override with `--compat` / `--no-compat`.
 
 ## Notes
 
