@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Shapes
 import OnyxTEON 1.0
 
 // One EQ half: the plot, the glazed header bar with its frosted trapezoid,
