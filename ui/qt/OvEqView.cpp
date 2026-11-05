@@ -792,22 +792,34 @@ void OvEqView::paintFrost (QPainter* g, const QImage& content,
         g->fillRect (strip, QColor (255, 255, 255, int (std::lround (0.018 * 255.0))));
 
 
-        // .controlpit::before — radial-gradient(ellipse 70% 160% at 50% 0%)
+        // .controlpit::before — the accent glow band.
+        //
+        //   background: radial-gradient(ellipse 70% 160% at 50% 0%,
+        //               accent .36 0%, accent .13 38%, accent 0 78%)
+        //   opacity: var(--light) = level²      (transition: opacity .1s linear)
+        //
+        // Two things this must get right, both were wrong before:
+        //   * the gradient's alphas are STATIC (.36/.13/0) — the meter only
+        //     drives the layer OPACITY.  Squaring the level again here made the
+        //     glow level⁴, i.e. invisible at any sane meter reading.
+        //   * the gradient stops at 78 %, not 100 %, so the band has a flat
+        //     core and fades out well before the bar edge.
         if (m_glow > 0.001)
         {
-            const double a = m_glow * m_glow * 0.36;
             const QPointF anchor (pitX + pitW * 0.5, m_headerTop ? barY : barY + barH);
 
             g->save();
+            g->setOpacity (std::clamp (m_glow, 0.0, 1.0));   // --light
             g->translate (anchor);
-            g->scale (pitW * 0.70, barH * 1.60);   // the ellipse radii
+            g->scale (pitW * 0.70, barH * 1.60);             // ellipse 70% 160%
             QRadialGradient grad (0, 0, 1);
-            QColor c0 = accent; c0.setAlphaF (a);
-            QColor c1 = accent; c1.setAlphaF (a * 0.36);
-            QColor c2 = accent; c2.setAlphaF (0.0);
-            grad.setColorAt (0.0, c0);
+            QColor c0 = accent; c0.setAlphaF (0.36);
+            QColor c1 = accent; c1.setAlphaF (0.13);
+            QColor c2 = accent; c2.setAlphaF (0.00);
+            grad.setColorAt (0.00, c0);
             grad.setColorAt (0.38, c1);
-            grad.setColorAt (1.0, c2);
+            grad.setColorAt (0.78, c2);
+            grad.setColorAt (1.00, c2);
             g->setBrush (grad);
             g->setPen (Qt::NoPen);
             g->drawRect (QRectF (-1, -1, 2, 2));

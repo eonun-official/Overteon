@@ -58,7 +58,7 @@ Item {
                     prefix: "sc"
                     accent: OvTheme.sc
                     headerTop: true
-                    glow: root.outLight * root.outLight * 0.36
+                    glow: root.outLight * root.outLight   // --light = level^2
                 }
 
                 OvEqView {
@@ -70,7 +70,7 @@ Item {
                     prefix: "pq"
                     accent: OvTheme.pq
                     headerTop: false
-                    glow: root.inLight * root.inLight * 0.36
+                    glow: root.inLight * root.inLight
                 }
             }
 
