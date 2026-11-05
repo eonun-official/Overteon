@@ -20,6 +20,40 @@ endif()
 # Let editors/tools (clangd, cppcheck, ...) see the Ninja build.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# The Qt front end depends on Qt only — no JUCE.  This option builds just the
+# host-free viewer, which is what makes a MinGW cross-build possible: JUCE
+# refuses MinGW outright (juce_TargetPlatform.h), Qt does not.
+option(OVERTEON_PREVIEW_ONLY "Build only overteon-qml-preview (no JUCE plugin)" OFF)
+
+if(OVERTEON_PREVIEW_ONLY)
+    set(CMAKE_AUTOMOC ON)
+    set(CMAKE_AUTORCC ON)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    add_executable(overteon-qml-preview
+        ui/qt/preview/main.cpp
+        ui/qt/OvEngine.cpp
+        ui/qt/OvParam.cpp
+        ui/qt/OvEqView.cpp
+        ui/qt/OvMeterView.cpp
+        ui/qt/OvSeamFrost.cpp
+        ui/qt/ov_ui.qrc)
+    target_include_directories(overteon-qml-preview PRIVATE ui/qt)
+    target_link_libraries(overteon-qml-preview PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+    set_target_properties(overteon-qml-preview PROPERTIES AUTOMOC ON AUTORCC ON)
+    if(CMAKE_CROSSCOMPILING AND DEFINED ENV{OVERTEON_HOST_RCC})
+        set_target_properties(overteon-qml-preview PROPERTIES
+            AUTORCC_EXECUTABLE "$ENV{OVERTEON_HOST_RCC}")
+    endif()
+    if(WIN32)
+        # a GUI subsystem binary so wine does not open a console window
+        set_target_properties(overteon-qml-preview PROPERTIES WIN32_EXECUTABLE TRUE)
+    endif()
+    return()
+endif()
+
 include(FetchContent)
 
 # Use the JUCE tree that is already downloaded into ./JUCE (JUCE 8.0.13, i.e.
@@ -69,6 +103,16 @@ juce_add_binary_data(FxWebAssets
         web_fx/eonun_logo.png
         web_fx/edix.otf)
 
+# The WebView editor needs the platform web engine; the Qt editor does not, and
+# requiring it would also force the WebView2 NuGet package on a cross-build.
+if(OVERTEON_QT_UI)
+    set(OVERTEON_NEEDS_WEB_BROWSER FALSE)
+    set(OVERTEON_NEEDS_WEBVIEW2 FALSE)
+else()
+    set(OVERTEON_NEEDS_WEB_BROWSER TRUE)
+    set(OVERTEON_NEEDS_WEBVIEW2 TRUE)
+endif()
+
 juce_add_plugin(HarmonicInjector
     COMPANY_NAME "Eonun"
     COMPANY_WEBSITE "https://eonun.com"
@@ -83,8 +127,8 @@ juce_add_plugin(HarmonicInjector
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-    NEEDS_WEB_BROWSER TRUE
-    NEEDS_WEBVIEW2 TRUE
+    NEEDS_WEB_BROWSER ${OVERTEON_NEEDS_WEB_BROWSER}
+    NEEDS_WEBVIEW2 ${OVERTEON_NEEDS_WEBVIEW2}
     COPY_PLUGIN_AFTER_BUILD FALSE
     PRODUCT_NAME "OnyxTEON")
 
