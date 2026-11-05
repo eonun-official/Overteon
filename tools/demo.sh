@@ -10,6 +10,7 @@
 #    ./demo.sh jalv start|stop|status [lv2-path]
 #    ./demo.sh preview start|stop|status
 #    ./demo.sh jack start|stop|status
+#    ./demo.sh wine start|stop|status [extra args]
 #    ./demo.sh all start|stop|status
 #
 #  RUN_DIR defaults to /tmp/onyxteon-demo
@@ -112,6 +113,23 @@ do_jack() {
     esac
 }
 
+# the Windows build under wine: one process group, recorded by PID
+do_wine() {
+    EXE="$ROOT/dist-win/overteon-qml-preview.exe"
+    case "$1" in
+        start)
+            [ -f "$EXE" ] || { echo "no $EXE - run tools/deploy-win.sh" >&2; return 1; }
+            start_bg wine env \
+                WINEPREFIX="$HOME/.wine-onyx" \
+                DISPLAY="${WINE_DISPLAY:-:3}" \
+                WINEDEBUG=-all \
+                ${WINE_FPS:+ONYXTEON_FPS=1} \
+                wine "$EXE" --size "${WINE_SIZE:-1040x772}" "${@:2}" ;;
+        stop)   stop_name wine ;;
+        status) status_name wine ;;
+    esac
+}
+
 do_all() {
     for n in jack preview jalv; do
         case "$1" in
@@ -123,6 +141,7 @@ do_all() {
 }
 
 case "${1:-}" in
+    wine)    do_wine "${2:-status}" "${@:3}" ;;
     jalv)    do_jalv "${2:-status}" "${3:-}" ;;
     preview) do_preview "${2:-status}" ;;
     jack)    do_jack "${2:-status}" ;;
