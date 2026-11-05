@@ -87,6 +87,65 @@ target_sources(HarmonicInjector PRIVATE
     src/FxProcessor.cpp
     src/FxWebEditor.cpp)
 
+# ---------------------------------------------------------------------------
+#  Qt6 / QML editor
+#
+#  The DSP, parameters and host integration stay JUCE; only the editor is Qt.
+#  OVERTEON_QT_UI=OFF falls back to the WebView editor.
+# ---------------------------------------------------------------------------
+option(OVERTEON_QT_UI "Build the Qt6/QML editor instead of the WebView one" ON)
+
+if(OVERTEON_QT_UI)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick)
+
+    # HarmonicInjector was created by juce_add_plugin before this point, so
+    # AUTOMOC has to be enabled on the target itself (not via CMAKE_AUTOMOC).
+    set_target_properties(HarmonicInjector PROPERTIES AUTOMOC ON AUTORCC ON)
+
+    target_sources(HarmonicInjector PRIVATE
+        ui/qt/OvEngine.cpp
+        ui/qt/OvParam.cpp
+        ui/qt/OvJuceSource.cpp
+        ui/qt/OvEqView.cpp
+        ui/qt/OvMeterView.cpp
+        ui/qt/OvQmlEditor.cpp)
+
+    target_include_directories(HarmonicInjector PRIVATE ui/qt src)
+
+    target_compile_definitions(HarmonicInjector PUBLIC OVERTEON_QT_UI=1)
+
+    target_link_libraries(HarmonicInjector PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+
+    # The QML + font bundle has to be compiled into every plugin binary: the
+    # shared-code target is a static archive and nothing references the rcc
+    # object, so a plain target_sources there would be dropped by the linker.
+    foreach(_fmt ${PLUGIN_FORMATS})
+        if(TARGET HarmonicInjector_${_fmt})
+            target_sources(HarmonicInjector_${_fmt} PRIVATE ui/qt/ov_ui.qrc)
+            set_target_properties(HarmonicInjector_${_fmt} PROPERTIES AUTORCC ON)
+        endif()
+    endforeach()
+
+    # standalone preview window, drives the same QML with mock data
+    add_executable(overteon-qml-preview
+        ui/qt/preview/main.cpp
+        ui/qt/OvEngine.cpp
+        ui/qt/OvParam.cpp
+        ui/qt/OvEqView.cpp
+        ui/qt/OvMeterView.cpp
+        ui/qt/ov_ui.qrc)
+
+    target_include_directories(overteon-qml-preview PRIVATE ui/qt)
+    target_link_libraries(overteon-qml-preview PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+    set_target_properties(overteon-qml-preview PROPERTIES
+        AUTOMOC ON AUTORCC ON)
+    if(NOT WIN32)
+        target_compile_definitions(overteon-qml-preview PRIVATE BUILD_UNIXLIKE=1)
+    endif()
+endif()
+
 # Platform switch used by the sources: Windows vs. everything unix-like
 # (Linux, macOS, BSD). Mirrors JUCE_WINDOWS and costs nothing.
 if(NOT WIN32)

@@ -1,0 +1,2 @@
+singleton OvTheme 1.0 OvTheme.qml
+singleton OvMenu 1.0 OvMenu.qml

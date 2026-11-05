@@ -1,5 +1,10 @@
 #include "FxProcessor.h"
-#include "FxWebEditor.h"
+
+#if OVERTEON_QT_UI
+ #include "OvQmlEditor.h"
+#else
+ #include "FxWebEditor.h"
+#endif
 
 using FP = juce::AudioParameterFloat;
 using CP = juce::AudioParameterChoice;
@@ -806,7 +811,11 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
 juce::AudioProcessorEditor* InjectorProcessor::createEditor()
 {
+   #if OVERTEON_QT_UI
+    return new OvQmlEditor (*this);
+   #else
     return new InjectorWebEditor (*this);
+   #endif
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

@@ -1,0 +1,28 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/qml">
+        <file alias="main.qml">qml/main.qml</file>
+        <file alias="qmldir">qml/qmldir</file>
+        <file alias="OvTheme.qml">qml/OvTheme.qml</file>
+        <file alias="OvMenu.qml">qml/OvMenu.qml</file>
+        <file alias="OvGlass.qml">qml/OvGlass.qml</file>
+        <file alias="OvKnob.qml">qml/OvKnob.qml</file>
+        <file alias="OvDropdown.qml">qml/OvDropdown.qml</file>
+        <file alias="OvToggle.qml">qml/OvToggle.qml</file>
+        <file alias="OvRangeBadge.qml">qml/OvRangeBadge.qml</file>
+        <file alias="OvPresetButton.qml">qml/OvPresetButton.qml</file>
+        <file alias="OvBandMenu.qml">qml/OvBandMenu.qml</file>
+        <file alias="OvEqSection.qml">qml/OvEqSection.qml</file>
+        <file alias="OvHeader.qml">qml/OvHeader.qml</file>
+        <file alias="OvDeck.qml">qml/OvDeck.qml</file>
+        <file alias="OvAbout.qml">qml/OvAbout.qml</file>
+    </qresource>
+    <qresource prefix="/res">
+        <file alias="Inter-Regular.ttf">res/Inter-Regular.ttf</file>
+        <file alias="Inter-Medium.ttf">res/Inter-Medium.ttf</file>
+        <file alias="Inter-SemiBold.ttf">res/Inter-SemiBold.ttf</file>
+        <file alias="Inter-Bold.ttf">res/Inter-Bold.ttf</file>
+        <file alias="edix.otf">res/edix.otf</file>
+        <file alias="eonun_logo.png">res/eonun_logo.png</file>
+    </qresource>
+</RCC>
