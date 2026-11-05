@@ -1,0 +1,29 @@
+# ---- build output -------------------------------------------------------
+build/
+build-*/
+CMakeFiles/
+_deps/
+dist/
+*.o
+*.a
+*.so
+compile_commands.json
+CMakeCache.txt
+.hninja_deps
+.ninja_log
+.ninja_deps
+
+# ---- third-party / vendor blobs (too large for git; see README) ---------
+JUCE/
+juce.zip
+webview2/
+webview2.nupkg
+build.zip
+
+# ---- local backups / scratch -------------------------------------------
+_backup_v1.9.0/
+.screenshots/
+*.bak
+*.orig
+*.rej
+*.log

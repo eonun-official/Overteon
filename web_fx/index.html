@@ -1,0 +1,2025 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:"EDIX";src:url("edix.otf") format("opentype");font-display:block}
+:root{
+  --bg:#16181d; --bg2:#1c1f26; --panel:#1f232b; --line:#2c313b;
+  --ink:#e7ebf2; --dim:#8b93a3; --faint:#5b6473;
+  --sc:#ff5c8a;   /* sidechain accent */
+  --pq:#43d9c4;   /* post-eq accent   */
+  --amber:#f0a23b; --grid:#252a33; --gridM:#2e3440;
+}
+*{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none}
+html,body{width:100%;height:100%;background:var(--bg);overflow:hidden}
+body{font-family:"Inter","Segoe UI",system-ui,sans-serif;color:var(--ink);font-size:11px}
+canvas{display:block}
+#wrap{width:1040px;height:772px;display:flex;flex-direction:column;transform-origin:0 0}
+
+/* ---- header ---- */
+#hdr{display:flex;align-items:center;gap:12px;padding:5px 16px;height:56px;flex:none;background:transparent;position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);z-index:10;pointer-events:none}
+#hleft,#hright{flex:1;display:flex;align-items:center;gap:12px;min-width:0;position:relative;z-index:6}
+#hright{justify-content:flex-end;gap:20px}
+#logo{font-family:"EDIX",Inter,sans-serif;font-size:18px;font-weight:400;letter-spacing:2px;white-space:nowrap;margin-left:16px;pointer-events:auto}
+#logo b{color:var(--sc)}
+.hbtn{background:transparent;border:0;color:var(--dim);font-size:10px;letter-spacing:1.5px;padding:4px 0;cursor:pointer;transition:.12s;pointer-events:auto}
+.hbtn:hover{color:var(--ink)}
+/* header preset menu: Factory / User submenus open to the left */
+.pmenu{position:absolute;top:26px;right:0;min-width:136px;background:#0d0f13;border:1px solid var(--line);border-radius:5px;z-index:80;display:none;box-shadow:0 6px 20px rgba(0,0,0,.6);padding:3px 0;pointer-events:auto}
+.pmenu.open{display:block}
+.pmenu .pitem{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--dim);font-size:9.5px;letter-spacing:1px;padding:7px 12px;cursor:pointer;white-space:nowrap}
+.pmenu .pitem:hover{background:var(--panel);color:var(--ink)}
+.pgroup{position:relative}
+.pgroup>.pitem::after{content:"▸";float:right;margin-left:14px;color:var(--faint)}
+.pgroup>.psub{display:none;position:absolute;right:calc(100% + 2px);top:-4px;min-width:140px;max-height:260px;overflow-y:auto;background:#0d0f13;border:1px solid var(--line);border-radius:5px;box-shadow:0 6px 20px rgba(0,0,0,.6);padding:3px 0}
+.pgroup:hover>.psub{display:block}
+.pempty{font-size:9px;color:var(--faint);padding:6px 12px;letter-spacing:1px}
+.psep{height:1px;background:var(--line);margin:3px 0}
+.controlpit.top .pitcontrols{display:grid;grid-template-columns:auto auto 1fr auto auto;align-items:center;gap:6px;padding:0 110px}
+.controlpit.top .pitpresets{position:relative;justify-content:center;min-width:0;padding:0 10px}
+.controlpit.top .pitsep{width:1px;height:12px;background:var(--line);flex:none}
+.controlpit.top .ddbtn{min-width:42px}
+.controlpit.top .ddbtn:hover{color:var(--sc);background:rgba(255,255,255,.045)}
+.controlpit.bottom .ddbtn:hover{color:var(--pq)}
+.pitbtn{color:var(--faint);min-width:0;max-width:168px;padding:3px 4px;display:inline-block;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pitbtn:hover{color:var(--sc);background:transparent}
+.pitmenu{top:calc(100% + 7px);left:50%;right:auto;transform:translateX(-50%)}
+/* 综合表等比放大，允许轻微越过 56px 标题栏 */
+#hpod{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:550px;height:73.33px;z-index:5;pointer-events:none;overflow:visible}
+/* 中央仅轻度霜化：无暗底、无边框，椭圆羽化外保留连续网格 */
+#hdr::before{content:"";position:absolute;left:50%;top:50%;width:550px;height:68px;transform:translate(-50%,-50%);background:rgba(255,255,255,.018);-webkit-backdrop-filter:blur(3px) saturate(.85);backdrop-filter:blur(3px) saturate(.85);mask-image:radial-gradient(ellipse at center,#000 0%,#000 45%,transparent 78%);z-index:0;pointer-events:none}
+.sp{flex:1}
+
+/* ---- bottom control deck ---- */
+#deck{background:var(--bg2);border-top:1px solid var(--line);padding:10px 16px 11px;display:flex;flex-direction:column;gap:9px}
+.drow{display:flex;align-items:center;gap:14px}
+.dditem{display:flex;align-items:center;gap:7px}
+.ddlab{font-size:10px;letter-spacing:1.4px;color:var(--faint)}
+.dknobs{justify-content:space-between;padding:0 6px}
+.dsep{width:1px;height:44px;background:var(--line)}
+.knob{display:flex;flex-direction:column;align-items:center;gap:4px;width:58px}
+.knd{position:absolute;inset:0;z-index:2}
+
+.klab{font-size:10.5px;letter-spacing:.6px;color:var(--faint);white-space:nowrap}
+.kval{font-size:10.5px;color:var(--ink);font-variant-numeric:tabular-nums}
+
+/* ---- EQ editor sections ---- */
+#eqzone{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
+.eqOverflow{position:absolute;inset:0;width:100%;height:100%;z-index:6;pointer-events:none}
+.eqsec{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
+.eqsec:first-child{border-bottom:0}
+.eqsec.inactive .eqcanvas-wrap{opacity:.22;pointer-events:none}
+.eqsec.inactive .eqhdr .rangebadge,.eqsec.inactive .eqhdr .lbtn{opacity:.22;pointer-events:none}
+.eqsec.inactive .eqttl{opacity:.5}
+.eqsec.inactive .eqsub::before{content:"INACTIVE · ";color:var(--faint)}
+.eqhdr{position:absolute;left:0;right:0;height:32px;display:flex;align-items:center;gap:10px;padding:0 16px;background:transparent;z-index:8}
+#secSC .eqhdr{top:0}
+#secPQ .eqhdr{bottom:0}
+/* 左右独立遮罩自然留出梯形，避免 WebView2 多子路径挖孔的三角伪影。 */
+.eqhdr::before,.eqhdr::after{content:"";position:absolute;inset:0;background:var(--bg2);z-index:0;pointer-events:none}
+#secSC .eqhdr::before{clip-path:polygon(0 0,calc(50% - 192px) 0,calc(50% - 320px) 100%,0 100%)}
+#secSC .eqhdr::after{clip-path:polygon(calc(50% + 192px) 0,100% 0,100% 100%,calc(50% + 320px) 100%)}
+#secPQ .eqhdr::before{clip-path:polygon(0 0,calc(50% - 320px) 0,calc(50% - 192px) 100%,0 100%)}
+#secPQ .eqhdr::after{clip-path:polygon(calc(50% + 320px) 0,100% 0,100% 100%,calc(50% + 192px) 100%)}
+.eqttl,.rangebadge,.eqhdr>.tbtn{position:relative;z-index:5}
+.eqttl{font-size:11.5px;letter-spacing:2px;font-weight:700}
+.eqttl.sc{color:var(--sc)}
+.eqttl.pq{color:var(--pq)}
+.eqsub{font-size:9px;letter-spacing:1px;color:var(--faint)}
+/* 梯形是真实画布上的毛玻璃蒙版，不是深色贴片；控件与菜单不被裁切。 */
+.controlpit{position:absolute;left:50%;width:640px;height:32px;transform:translateX(-50%);z-index:4;pointer-events:none}
+.controlpit.top{top:0}
+.controlpit.bottom{bottom:0}
+.controlpit::before,.controlpit::after{content:"";position:absolute;pointer-events:none}
+.controlpit::before{display:block;inset:0;opacity:var(--light,0);transition:opacity .1s linear}
+.controlpit.top::before{background:radial-gradient(ellipse 70% 160% at 50% 0%,rgba(255,92,138,.36) 0%,rgba(255,92,138,.13) 38%,rgba(255,92,138,0) 78%)}
+.controlpit.bottom::before{background:radial-gradient(ellipse 70% 160% at 50% 100%,rgba(67,217,196,.36) 0%,rgba(67,217,196,.13) 38%,rgba(67,217,196,0) 78%)}
+.controlpit::after{inset:0;background:rgba(255,255,255,.018);-webkit-backdrop-filter:blur(3px) saturate(.85);backdrop-filter:blur(3px) saturate(.85)}
+.controlpit.top::before,.controlpit.top::after{clip-path:polygon(20% 0,80% 0,100% 100%,0 100%)}
+.controlpit.bottom::before,.controlpit.bottom::after{clip-path:polygon(0 0,100% 0,80% 100%,20% 100%)}
+.pitcontrols{position:relative;z-index:1;height:100%;display:flex;align-items:center;justify-content:center;gap:18px;pointer-events:auto}
+.controlpit .dditem{gap:6px}
+.controlpit .ddlab{font-size:9px;letter-spacing:1.2px}
+.controlpit .ddbtn{min-width:54px;padding:3px 4px}
+.pitsep{width:1px;height:12px;background:var(--line);flex:none}
+.eqcanvas-wrap{flex:1;position:relative;min-height:0;background:var(--bg)}
+.eqcanvas-wrap canvas{position:absolute;inset:0;width:100%;height:100%}
+#scGrid,#pqGrid{z-index:1}
+#scSpec,#pqSpec{z-index:2;pointer-events:none}
+#scCurve,#pqCurve{z-index:3}
+.lbtn{background:transparent;border:0;color:var(--faint);font-size:10.5px;letter-spacing:1.4px;padding:3px 6px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.12s}
+.lbtn::before{content:"";width:6px;height:6px;border-radius:50%;background:#39404b;transition:.12s;flex:none}
+.lbtn:hover{color:var(--ink)}
+.lbtn.act{background:transparent;color:var(--sc)}
+.lbtn.act::before{background:var(--sc);box-shadow:0 0 7px var(--sc)}
+
+/* node hover tooltip */
+.nodetip{position:absolute;background:#0d0f13;border:1px solid var(--line);border-radius:4px;
+  padding:5px 8px;font-size:10px;color:var(--ink);pointer-events:none;z-index:30;white-space:nowrap;display:none;
+  font-variant-numeric:tabular-nums;box-shadow:0 4px 14px rgba(0,0,0,.5)}
+
+/* context menu for node type */
+.ctxmenu{position:absolute;background:#0d0f13;border:1px solid var(--line);border-radius:5px;
+  z-index:40;display:none;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.6);min-width:96px}
+.ctxmenu button{display:block;width:100%;text-align:left;background:transparent;border:0;
+  color:var(--dim);font-size:9px;letter-spacing:.5px;padding:7px 12px;cursor:pointer}
+.ctxmenu button:hover{background:var(--panel);color:var(--ink)}
+
+/* meters: the old in-EQ vertical strip is gone; the header SVG (#hmeter)
+   now carries IN/OUT bars + the harmonic ring. */
+
+/* range badge + dropdown */
+.rangebadge{background:transparent;border:0;color:var(--dim);font-size:10.5px;letter-spacing:.5px;padding:3px 7px;cursor:pointer;border-radius:3px;font-variant-numeric:tabular-nums;transition:.12s}
+.rangebadge:hover{color:var(--ink);background:rgba(255,255,255,.045)}
+.rangemenu{position:absolute;top:8px;right:8px;background:#0d0f13;border:1px solid var(--line);border-radius:5px;z-index:60;display:none;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.6);min-width:86px}
+#pqRangeMenu{top:auto;bottom:8px}
+.rangemenu button{display:block;width:100%;text-align:right;background:transparent;border:0;color:var(--dim);font-size:10px;letter-spacing:.5px;padding:7px 12px;cursor:pointer;font-variant-numeric:tabular-nums}
+.rangemenu button:hover{background:var(--panel);color:var(--ink)}
+
+/* borderless dropdown token (mode / saturation / stereo / oversampling) */
+.ddwrap{position:relative}
+.ddwrap.disabled,.dditem.disabled,.knob.disabled{opacity:.28;pointer-events:none}
+/* limiter mode dropdown in the Post EQ bar: text-only trigger like AUTO GAIN */
+.limdd{position:relative;z-index:5}
+.limdd .ddbtn{color:var(--faint);font-size:10.5px;letter-spacing:1.4px;padding:3px 4px;min-width:0;display:inline-flex;align-items:center;gap:7px}
+.limdd .ddbtn::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--sc);box-shadow:0 0 7px var(--sc);flex:none}
+.limdd .ddbtn:hover{color:var(--ink);background:transparent}
+.limdd .ddmenu{min-width:112px}
+.limdd.off .ddbtn{color:var(--faint)}
+.limdd.off .ddbtn::before{background:#39404b;box-shadow:none}
+.limdd.on .ddbtn{color:var(--sc)}
+.ddbtn{background:transparent;border:0;color:var(--ink);font-size:10px;letter-spacing:1.4px;padding:3px 5px;cursor:pointer;border-radius:3px;min-width:58px;text-align:left;transition:.12s;font-variant-numeric:tabular-nums}
+.ddbtn:hover{color:var(--pq);background:rgba(255,255,255,.045)}
+.ddmenu{position:absolute;bottom:calc(100% + 5px);left:0;background:#0d0f13;border:1px solid var(--line);border-radius:5px;z-index:70;display:none;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.6);min-width:74px}
+.dddown .ddmenu{top:calc(100% + 5px);bottom:auto}
+.ddmenu button{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--dim);font-size:9.5px;letter-spacing:1px;padding:7px 13px;cursor:pointer}
+.ddmenu button:hover{background:var(--panel);color:var(--ink)}
+.ddiv{width:1px;height:15px;background:var(--line);flex:none}
+
+/* borderless text toggle (auto gain / solo harm) */
+.tbtn{background:transparent;border:0;color:var(--faint);font-size:10.5px;letter-spacing:1.4px;padding:3px 4px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.12s}
+.tbtn::before{content:"";width:6px;height:6px;border-radius:50%;background:#39404b;transition:.12s;flex:none}
+.tbtn:hover{color:var(--ink)}
+.tbtn.act{color:var(--sc)}
+.tbtn.act::before{background:var(--sc);box-shadow:0 0 7px var(--sc)}
+
+/* node numeric editor (double-click a node) — three bare values, units only */
+.nodeedit{position:absolute;background:rgba(22,25,31,.96);border:1px solid rgba(58,66,80,.65);border-radius:4px;z-index:50;display:none;padding:6px 8px 7px;box-shadow:0 8px 22px rgba(0,0,0,.5);width:80px}
+.nodeedit::before{content:"";position:absolute;left:calc(var(--ax,50%) - 4px);bottom:-4.5px;width:8px;height:8px;background:rgba(22,25,31,.96);border-right:1px solid rgba(58,66,80,.65);border-bottom:1px solid rgba(58,66,80,.65);transform:rotate(45deg)}
+.nodeedit.up::before{bottom:auto;top:-4.5px;border-right:0;border-bottom:0;border-left:1px solid rgba(58,66,80,.65);border-top:1px solid rgba(58,66,80,.65)}
+.nodeedit .nehead{display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.nodeedit .netitle{font-size:8px;letter-spacing:1.2px;font-weight:700;opacity:.85}
+.nodeedit .nex{margin-left:auto;background:transparent;border:0;color:transparent;cursor:pointer;font-size:9px;padding:0 1px;line-height:1;transition:.12s}
+.nodeedit:hover .nex{color:var(--faint)}
+.nodeedit .nex:hover{color:var(--ink)}
+.nodeedit .nerow{display:flex;flex-direction:column;gap:2px}
+.nodeedit label{display:flex;align-items:baseline;justify-content:center;gap:3px;padding:0;min-width:0}
+.nodeedit label span{display:none}
+.nodeedit label::after{font-size:8px;letter-spacing:.2px;color:var(--faint);flex:0 0 13px;text-align:left}
+.nodeedit label:nth-child(1)::after{content:"Hz"}
+.nodeedit label:nth-child(2)::after{content:"dB"}
+.nodeedit label:nth-child(3)::after{content:""}
+.nodeedit input{background:transparent;border:0;border-radius:0;color:var(--ink);font-size:11.5px;padding:0;flex:0 0 46px;width:46px;min-width:0;text-align:right;font-variant-numeric:tabular-nums;outline:none;cursor:ns-resize;-webkit-user-select:text;user-select:text}
+.nodeedit input:focus{color:#fff;cursor:text}
+.nodeedit input:disabled{opacity:.3;cursor:default}
+
+/* left-edge meter strip on the post EQ — fully transparent, curve shows through */
+/* old in-EQ meter strip removed; see #hmeter in the header */
+
+/* Pro-Q4 style knobs: bare accent arc + needle, everything else melts into the background */
+.kring{width:46px;height:46px;position:relative;cursor:ns-resize;background:transparent}
+.kring svg{width:100%;height:100%;overflow:visible;display:block}
+.karc{fill:none;stroke-width:2.6;stroke-linecap:round}
+.kndl{stroke-width:1.9;stroke-linecap:round}
+.kdot{stroke:none}
+.kring:hover .karc{filter:drop-shadow(0 0 3px rgba(255,255,255,.28))}
+
+/* about modal */
+#about{position:fixed;inset:0;background:rgba(8,9,12,.72);z-index:200;display:none;align-items:center;justify-content:center}
+.abbox{width:450px;background:#14161c;border:1px solid var(--line);border-radius:10px;padding:26px 30px 22px;box-shadow:0 20px 60px rgba(0,0,0,.7);text-align:center}
+.abbox img{width:150px;margin-bottom:10px}
+.abtitle{font-family:"EDIX",Inter,sans-serif;font-size:17px;font-weight:400;letter-spacing:2px}
+.abtitle b{color:var(--sc)}
+.abver{font-size:9.5px;letter-spacing:1.5px;color:var(--faint);margin:4px 0 14px}
+.abbox p{font-size:10.5px;line-height:1.7;color:var(--dim);text-align:left;margin-bottom:10px}
+.abbox p b{color:var(--ink);font-weight:600}
+.abcr{font-size:10px;color:var(--ink);text-align:center;margin:12px 0 8px}
+.abcr b{color:var(--pq)}
+.abhome{text-align:center;margin:0 0 14px}
+.abhome span{font-size:9.5px;letter-spacing:1px;color:var(--ink);cursor:pointer;border-bottom:1px solid rgba(231,235,242,.28);padding-bottom:1px;transition:color .12s,border-color .12s}
+.abhome span:hover{color:var(--pq);border-bottom-color:var(--pq)}
+#logo{cursor:pointer}
+</style></head><body>
+<div id="wrap">
+  <div id="eqzone">
+    <div class="eqsec" id="secSC">
+      <div class="eqhdr">
+        <span class="eqttl sc">SIDECHAIN EQ</span>
+        <div class="controlpit top">
+          <div class="pitcontrols">
+            <div class="dditem"><span class="ddlab">SAT OS</span><div id="sgOs"></div></div>
+            <div class="pitsep"></div>
+            <div class="dditem pitpresets">
+              <button class="ddbtn pitbtn" id="bPresets">default</button>
+              <div class="pmenu pitmenu" id="presetMenu">
+                <div class="pgroup">
+                  <button class="pitem">FACTORY</button>
+                  <div class="psub" id="pmFactory"></div>
+                </div>
+                <div class="pgroup">
+                  <button class="pitem">USER</button>
+                  <div class="psub" id="pmUser"></div>
+                </div>
+                <div class="psep"></div>
+                <button class="pitem" id="pmImport">LOAD…</button>
+                <button class="pitem" id="pmExport">SAVE AS…</button>
+              </div>
+            </div>
+            <div class="pitsep"></div>
+            <div class="dditem"><span class="ddlab">LIM OS</span><div id="sgLimOs"></div></div>
+          </div>
+        </div>
+        <span class="sp"></span>
+        <button class="tbtn" id="bSolo">SOLO HARM</button>
+        <button class="rangebadge" id="scRangeBadge">±12 dB</button>
+      </div>
+      <div class="eqcanvas-wrap" id="scWrap">
+        <canvas id="scGrid"></canvas>
+        <canvas id="scSpec"></canvas>
+        <canvas id="scCurve"></canvas>
+        <div class="nodetip" id="scTip"></div>
+        <div class="ctxmenu" id="scMenu"></div>
+        <div class="rangemenu" id="scRangeMenu"></div>
+        <div class="nodeedit" id="scEdit">
+          <div class="nehead"><span class="netitle"></span><button class="nex">✕</button></div>
+          <div class="nerow">
+            <label><span>FREQ (Hz)</span><input data-f="f"></label>
+            <label><span>GAIN (dB)</span><input data-f="g"></label>
+            <label><span>Q</span><input data-f="q"></label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <canvas class="eqOverflow" id="scOverflow"></canvas>
+    <canvas class="eqOverflow" id="pqOverflow"></canvas>
+
+    <div id="hdr">
+      <div id="hleft">
+        <div id="logo">OVER<b>TEON</b></div>
+      </div>
+      <svg id="hpod" viewBox="0 0 480 64">
+        <defs>
+          <filter id="neon" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="1.7" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <filter id="harmGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="2.5" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <!-- 弯钩与圆环保持 4px 径向间隙，不相接。 -->
+        <g fill="none" stroke="#2c313b" stroke-width="1.8" opacity=".55">
+          <path d="M213.78 13.65 C210.50 18.32 210.79 20.57 204.50 20.57 H31"/>
+          <path d="M266.22 13.65 C269.50 18.32 269.21 20.57 275.50 20.57 H449"/>
+          <path d="M213.78 50.35 C210.50 45.68 210.79 43.43 204.50 43.43 H31"/>
+          <path d="M266.22 50.35 C269.50 45.68 269.21 43.43 275.50 43.43 H449"/>
+        </g>
+        <circle cx="240" cy="32" r="28" fill="none" stroke="#3b4350" stroke-width="3" opacity=".07"/>
+        <!-- 低亮度同色 Peak Hold 尾条，位于瞬时条后方。 -->
+        <g fill="none" stroke-width="2.6" opacity=".72">
+          <path id="pOL" d="M213.78 13.65 C210.50 18.32 210.79 20.57 204.50 20.57 H31"
+                pathLength="100" stroke="#6f2946" stroke-dasharray="100" stroke-dashoffset="100"/>
+          <path id="pOR" d="M266.22 13.65 C269.50 18.32 269.21 20.57 275.50 20.57 H449"
+                pathLength="100" stroke="#6f2946" stroke-dasharray="100" stroke-dashoffset="100"/>
+          <path id="pIL" d="M213.78 50.35 C210.50 45.68 210.79 43.43 204.50 43.43 H31"
+                pathLength="100" stroke="#155d58" stroke-dasharray="100" stroke-dashoffset="100"/>
+          <path id="pIR" d="M266.22 50.35 C269.50 45.68 269.21 43.43 275.50 43.43 H449"
+                pathLength="100" stroke="#155d58" stroke-dasharray="100" stroke-dashoffset="100"/>
+        </g>
+        <g fill="none" stroke-width="1.8" filter="url(#neon)">
+          <path id="bOL" d="M213.78 13.65 C210.50 18.32 210.79 20.57 204.50 20.57 H31"
+                pathLength="100" stroke="#fa3c7f" stroke-dasharray="100" stroke-dashoffset="100"/>
+          <path id="bOR" d="M266.22 13.65 C269.50 18.32 269.21 20.57 275.50 20.57 H449"
+                pathLength="100" stroke="#fa3c7f" stroke-dasharray="100" stroke-dashoffset="100"/>
+          <path id="bIL" d="M213.78 50.35 C210.50 45.68 210.79 43.43 204.50 43.43 H31"
+                pathLength="100" stroke="#23ecd7" stroke-dasharray="100" stroke-dashoffset="100"/>
+          <path id="bIR" d="M266.22 50.35 C269.50 45.68 269.21 43.43 275.50 43.43 H449"
+                pathLength="100" stroke="#23ecd7" stroke-dasharray="100" stroke-dashoffset="100"/>
+        </g>
+        <g filter="url(#neon)">
+          <circle id="cOL" r="1.7" fill="#fa3c7f" opacity="0"/>
+          <circle id="cOR" r="1.7" fill="#fa3c7f" opacity="0"/>
+          <circle id="cIL" r="1.7" fill="#23ecd7" opacity="0"/>
+          <circle id="cIR" r="1.7" fill="#23ecd7" opacity="0"/>
+        </g>
+        <circle id="hArc" cx="240" cy="32" r="28" fill="none" stroke="#23ecd7" stroke-width="4"
+                stroke-linecap="round" transform="rotate(-90 240 32)" filter="url(#harmGlow)"
+                pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/>
+        <text id="hPct" x="240" y="35" text-anchor="middle" fill="#f2f4f8" font-size="15" font-weight="600"
+              style="filter:drop-shadow(0 0 3px rgba(255,255,255,.28))">0%</text>
+        <text x="240" y="51" text-anchor="middle" fill="#7a8290" font-size="7" letter-spacing="2">HARM</text>
+        <g font-size="10" font-weight="700">
+          <text x="2" y="24" fill="#fa3c7f">L</text><text x="2" y="46" fill="#23ecd7">L</text>
+          <text x="478" y="24" text-anchor="end" fill="#fa3c7f">R</text>
+          <text x="478" y="46" text-anchor="end" fill="#23ecd7">R</text>
+        </g>
+        <g font-size="7" fill="#7a8290" letter-spacing=".5">
+          <text x="13" y="24">OUT</text><text x="13" y="46">IN</text>
+          <text x="468" y="24" text-anchor="end">OUT</text><text x="468" y="46" text-anchor="end">IN</text>
+        </g>
+      </svg>
+      <div id="hright">
+        <button class="hbtn" id="bInit">INIT</button>
+      </div>
+    </div>
+
+    <div class="eqsec" id="secPQ">
+      <div class="eqcanvas-wrap" id="pqWrap">
+        <canvas id="pqGrid"></canvas>
+        <canvas id="pqSpec"></canvas>
+        <canvas id="pqCurve"></canvas>
+        <div class="nodetip" id="pqTip"></div>
+        <div class="ctxmenu" id="pqMenu"></div>
+        <div class="rangemenu" id="pqRangeMenu"></div>
+        <div class="nodeedit" id="pqEdit">
+          <div class="nehead"><span class="netitle"></span><button class="nex">✕</button></div>
+          <div class="nerow">
+            <label><span>FREQ (Hz)</span><input data-f="f"></label>
+            <label><span>GAIN (dB)</span><input data-f="g"></label>
+            <label><span>Q</span><input data-f="q"></label>
+          </div>
+        </div>
+        <!-- meters live in the header (#hmeter): EQ panels grey out per mode,
+             so plugin I/O + harmonic monitoring must not sit inside them. -->
+      </div>
+      <div class="eqhdr">
+        <span class="eqttl pq">POST EQ</span>
+        <div class="limdd" id="sgLimMode"></div>
+        <div class="controlpit bottom">
+          <div class="pitcontrols">
+            <div class="dditem"><span class="ddlab">STEREO</span><div id="sgMS"></div></div>
+            <div class="pitsep"></div>
+            <div class="dditem"><span class="ddlab">MODE</span><div id="sgMode"></div></div>
+            <div class="pitsep"></div>
+            <div class="dditem"><span class="ddlab">SATURATION</span><div id="sgType"></div></div>
+          </div>
+        </div>
+        <span class="sp"></span>
+        <button class="tbtn" id="bAutoGain">AUTO GAIN</button>
+        <button class="rangebadge" id="pqRangeBadge">±12 dB</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="deck">
+    <div class="drow dknobs">
+      <div class="knob" id="kIn"></div>
+      <div class="knob" id="kDrive"></div>
+      <div class="knob" id="kEvenOdd"></div>
+      <div class="knob" id="kMix"></div>
+      <div class="dsep"></div>
+      <div class="knob" id="kHGain"></div>
+      <div class="knob" id="kDeEmph"></div>
+      <div class="dsep"></div>
+      <div class="knob" id="kAir"></div>
+      <div class="knob" id="kOut"></div>
+    </div>
+  </div>
+</div>
+<div id="about">
+  <div class="abbox">
+    <img alt="Eonun">
+    <div class="abtitle">OVER<b>TEON</b></div>
+    <div class="abver">v0.9.14 · EONUN</div>
+    <p>The moment saturation occurs, the topology engine wakes. It extracts <b>only the harmonics the saturator has just created</b> — sample-accurate, inside the oversampled domain — while your dry signal passes completely untouched.</p>
+    <p>This additive-only design solves phase interference and pre-ringing at the same time: the original signal is never subtracted from or re-phased, so there is no phase conflict to fix. You keep the support and translucency of the source and gain pure harmonic density — with effectively zero cost to your dynamics.</p>
+    <p>The sidechain EQ decides what the saturator hears; a mathematically exact inverse (de-emphasis) cancels the linear component, so what remains is distortion harmonics only — nothing added but the harmonics themselves, nothing taken away at all.</p>
+    <div class="abcr">Produced by <b>Eur9ka</b> &amp; <b>Eonun</b> &nbsp;·&nbsp; Designed by <b>Eonun</b></div>
+    <div class="abhome"><span id="abSite">eonun-official.github.io</span></div>
+    <button class="hbtn" id="abClose">CLOSE</button>
+  </div>
+</div>
+<script>
+/* ==== JUCE frontend library (vendored, inlined) ==== */
+/*
+  ==============================================================================
+
+   This file is part of the JUCE framework.
+   Copyright (c) Raw Material Software Limited
+
+   JUCE is an open source framework subject to commercial or open source
+   licensing.
+
+   By downloading, installing, or using the JUCE framework, or combining the
+   JUCE framework with any other source code, object code, content or any other
+   copyrightable work, you agree to the terms of the JUCE End User Licence
+   Agreement, and all incorporated terms including the JUCE Privacy Policy and
+   the JUCE Website Terms of Service, as applicable, which will bind you. If you
+   do not agree to the terms of these agreements, we will not license the JUCE
+   framework to you, and you must discontinue the installation or download
+   process and cease use of the JUCE framework.
+
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE Privacy Policy: https://juce.com/juce-privacy-policy
+   JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
+
+   Or:
+
+   You may also use this code under the terms of the AGPLv3:
+   https://www.gnu.org/licenses/agpl-3.0.en.html
+
+   THE JUCE FRAMEWORK IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL
+   WARRANTIES, WHETHER EXPRESSED OR IMPLIED, INCLUDING WARRANTY OF
+   MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, ARE DISCLAIMED.
+
+  ==============================================================================
+*/
+
+if (
+  typeof window.__JUCE__ !== "undefined" &&
+  typeof window.__JUCE__.getAndroidUserScripts !== "undefined" &&
+  typeof window.inAndroidUserScriptEval === "undefined"
+) {
+  window.inAndroidUserScriptEval = true;
+  eval(window.__JUCE__.getAndroidUserScripts());
+  delete window.inAndroidUserScriptEval;
+}
+
+{
+  if (typeof window.__JUCE__ === "undefined") {
+    console.warn(
+      "The 'window.__JUCE__' object is undefined." +
+        " Native integration features will not work." +
+        " Defining a placeholder 'window.__JUCE__' object."
+    );
+
+    window.__JUCE__ = {
+      postMessage: function () {},
+    };
+  }
+
+  if (typeof window.__JUCE__.initialisationData === "undefined") {
+    window.__JUCE__.initialisationData = {
+      __juce__platform: [],
+      __juce__functions: [],
+      __juce__registeredGlobalEventIds: [],
+      __juce__sliders: [],
+      __juce__toggles: [],
+      __juce__comboBoxes: [],
+    };
+  }
+
+  class ListenerList {
+    constructor() {
+      this.listeners = new Map();
+      this.listenerId = 0;
+    }
+
+    addListener(fn) {
+      const newListenerId = this.listenerId++;
+      this.listeners.set(newListenerId, fn);
+      return newListenerId;
+    }
+
+    removeListener(id) {
+      if (this.listeners.has(id)) {
+        this.listeners.delete(id);
+      }
+    }
+
+    callListeners(payload) {
+      for (const [, value] of this.listeners) {
+        value(payload);
+      }
+    }
+  }
+
+  class EventListenerList {
+    constructor() {
+      this.eventListeners = new Map();
+    }
+
+    addEventListener(eventId, fn) {
+      if (!this.eventListeners.has(eventId))
+        this.eventListeners.set(eventId, new ListenerList());
+
+      const id = this.eventListeners.get(eventId).addListener(fn);
+
+      return [eventId, id];
+    }
+
+    removeEventListener([eventId, id]) {
+      if (this.eventListeners.has(eventId)) {
+        this.eventListeners.get(eventId).removeListener(id);
+      }
+    }
+
+    emitEvent(eventId, object) {
+      if (this.eventListeners.has(eventId))
+        this.eventListeners.get(eventId).callListeners(object);
+    }
+  }
+
+  class Backend {
+    constructor() {
+      this.listeners = new EventListenerList();
+    }
+
+    addEventListener(eventId, fn) {
+      return this.listeners.addEventListener(eventId, fn);
+    }
+
+    removeEventListener([eventId, id]) {
+      this.listeners.removeEventListener([eventId, id]);
+    }
+
+    emitEvent(eventId, object) {
+      window.__JUCE__.postMessage(
+        JSON.stringify({ eventId: eventId, payload: object })
+      );
+    }
+
+    emitByBackend(eventId, object) {
+      this.listeners.emitEvent(eventId, JSON.parse(object));
+    }
+  }
+
+  if (typeof window.__JUCE__.backend === "undefined")
+    window.__JUCE__.backend = new Backend();
+}
+
+/*
+  ==============================================================================
+
+   This file is part of the JUCE framework.
+   Copyright (c) Raw Material Software Limited
+
+   JUCE is an open source framework subject to commercial or open source
+   licensing.
+
+   By downloading, installing, or using the JUCE framework, or combining the
+   JUCE framework with any other source code, object code, content or any other
+   copyrightable work, you agree to the terms of the JUCE End User Licence
+   Agreement, and all incorporated terms including the JUCE Privacy Policy and
+   the JUCE Website Terms of Service, as applicable, which will bind you. If you
+   do not agree to the terms of these agreements, we will not license the JUCE
+   framework to you, and you must discontinue the installation or download
+   process and cease use of the JUCE framework.
+
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE Privacy Policy: https://juce.com/juce-privacy-policy
+   JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
+
+   Or:
+
+   You may also use this code under the terms of the AGPLv3:
+   https://www.gnu.org/licenses/agpl-3.0.en.html
+
+   THE JUCE FRAMEWORK IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL
+   WARRANTIES, WHETHER EXPRESSED OR IMPLIED, INCLUDING WARRANTY OF
+   MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, ARE DISCLAIMED.
+
+  ==============================================================================
+*/
+
+
+class PromiseHandler {
+  constructor() {
+    this.lastPromiseId = 0;
+    this.promises = new Map();
+
+    window.__JUCE__.backend.addEventListener(
+      "__juce__complete",
+      ({ promiseId, result }) => {
+        if (this.promises.has(promiseId)) {
+          this.promises.get(promiseId).resolve(result);
+          this.promises.delete(promiseId);
+        }
+      }
+    );
+  }
+
+  createPromise() {
+    const promiseId = this.lastPromiseId++;
+    const result = new Promise((resolve, reject) => {
+      this.promises.set(promiseId, { resolve: resolve, reject: reject });
+    });
+    return [promiseId, result];
+  }
+}
+
+const promiseHandler = new PromiseHandler();
+
+/**
+ * Returns a function object that calls a function registered on the JUCE backend and forwards all
+ * parameters to it.
+ *
+ * The provided name should be the same as the name argument passed to
+ * WebBrowserComponent::Options.withNativeFunction() on the backend.
+ *
+ * @param {String} name
+ */
+function getNativeFunction(name) {
+  if (!window.__JUCE__.initialisationData.__juce__functions.includes(name))
+    console.warn(
+      `Creating native function binding for '${name}', which is unknown to the backend`
+    );
+
+  const f = function () {
+    const [promiseId, result] = promiseHandler.createPromise();
+
+    window.__JUCE__.backend.emitEvent("__juce__invoke", {
+      name: name,
+      params: Array.prototype.slice.call(arguments),
+      resultId: promiseId,
+    });
+
+    return result;
+  };
+
+  return f;
+}
+
+//==============================================================================
+
+class ListenerList {
+  constructor() {
+    this.listeners = new Map();
+    this.listenerId = 0;
+  }
+
+  addListener(fn) {
+    const newListenerId = this.listenerId++;
+    this.listeners.set(newListenerId, fn);
+    return newListenerId;
+  }
+
+  removeListener(id) {
+    if (this.listeners.has(id)) {
+      this.listeners.delete(id);
+    }
+  }
+
+  callListeners(payload) {
+    for (const [, value] of this.listeners) {
+      value(payload);
+    }
+  }
+}
+
+const BasicControl_valueChangedEventId = "valueChanged";
+const BasicControl_propertiesChangedId = "propertiesChanged";
+const SliderControl_sliderDragStartedEventId = "sliderDragStarted";
+const SliderControl_sliderDragEndedEventId = "sliderDragEnded";
+
+/**
+ * SliderState encapsulates data and callbacks that are synchronised with a WebSliderRelay object
+ * on the backend.
+ *
+ * Use getSliderState() to create a SliderState object. This object will be synchronised with the
+ * WebSliderRelay backend object that was created using the same unique name.
+ *
+ * @param {String} name
+ */
+class SliderState {
+  constructor(name) {
+    if (!window.__JUCE__.initialisationData.__juce__sliders.includes(name))
+      console.warn(
+        "Creating SliderState for '" +
+          name +
+          "', which is unknown to the backend"
+      );
+
+    this.name = name;
+    this.identifier = "__juce__slider" + this.name;
+    this.scaledValue = 0;
+    this.properties = {
+      start: 0,
+      end: 1,
+      skew: 1,
+      name: "",
+      label: "",
+      numSteps: 100,
+      interval: 0,
+      parameterIndex: -1,
+    };
+    this.valueChangedEvent = new ListenerList();
+    this.propertiesChangedEvent = new ListenerList();
+
+    window.__JUCE__.backend.addEventListener(this.identifier, (event) =>
+      this.handleEvent(event)
+    );
+
+    window.__JUCE__.backend.emitEvent(this.identifier, {
+      eventType: "requestInitialUpdate",
+    });
+  }
+
+  /**
+   * Sets the normalised value of the corresponding backend parameter. This value is always in the
+   * [0, 1] range (inclusive).
+   *
+   * The meaning of this range is the same as in the case of
+   * AudioProcessorParameter::getValue() (C++).
+   *
+   * @param {String} name
+   */
+  setNormalisedValue(newValue) {
+    this.scaledValue = this.snapToLegalValue(
+      this.normalisedToScaledValue(newValue)
+    );
+
+    window.__JUCE__.backend.emitEvent(this.identifier, {
+      eventType: BasicControl_valueChangedEventId,
+      value: this.scaledValue,
+    });
+  }
+
+  /**
+   * This function should be called first thing when the user starts interacting with the slider.
+   */
+  sliderDragStarted() {
+    window.__JUCE__.backend.emitEvent(this.identifier, {
+      eventType: SliderControl_sliderDragStartedEventId,
+    });
+  }
+
+  /**
+   * This function should be called when the user finished the interaction with the slider.
+   */
+  sliderDragEnded() {
+    window.__JUCE__.backend.emitEvent(this.identifier, {
+      eventType: SliderControl_sliderDragEndedEventId,
+    });
+  }
+
+  /** Internal. */
+  handleEvent(event) {
+    if (event.eventType == BasicControl_valueChangedEventId) {
+      this.scaledValue = event.value;
+      this.valueChangedEvent.callListeners();
+    }
+    if (event.eventType == BasicControl_propertiesChangedId) {
+      // eslint-disable-next-line no-unused-vars
+      let { eventType: _, ...rest } = event;
+      this.properties = rest;
+      this.propertiesChangedEvent.callListeners();
+    }
+  }
+
+  /**
+   * Returns the scaled value of the parameter. This corresponds to the return value of
+   * NormalisableRange::convertFrom0to1() (C++). This value will differ from a linear
+   * [0, 1] range if a non-default NormalisableRange was set for the parameter.
+   */
+  getScaledValue() {
+    return this.scaledValue;
+  }
+
+  /**
+   * Returns the normalised value of the corresponding backend parameter. This value is always in the
+   * [0, 1] range (inclusive).
+   *
+   * The meaning of this range is the same as in the case of
+   * AudioProcessorParameter::getValue() (C++).
+   *
+   * @param {String} name
+   */
+  getNormalisedValue() {
+    return Math.pow(
+      (this.scaledValue - this.properties.start) /
+        (this.properties.end - this.properties.start),
+      this.properties.skew
+    );
+  }
+
+  /** Internal. */
+  normalisedToScaledValue(normalisedValue) {
+    return (
+      Math.pow(normalisedValue, 1 / this.properties.skew) *
+        (this.properties.end - this.properties.start) +
+      this.properties.start
+    );
+  }
+
+  /** Internal. */
+  snapToLegalValue(value) {
+    const interval = this.properties.interval;
+
+    if (interval == 0) return value;
+
+    const start = this.properties.start;
+    const clamp = (val, min = 0, max = 1) => Math.max(min, Math.min(max, val));
+
+    return clamp(
+      start + interval * Math.floor((value - start) / interval + 0.5),
+      this.properties.start,
+      this.properties.end
+    );
+  }
+}
+
+const sliderStates = new Map();
+
+for (const sliderName of window.__JUCE__.initialisationData.__juce__sliders)
+  sliderStates.set(sliderName, new SliderState(sliderName));
+
+/**
+ * Returns a SliderState object that is connected to the backend WebSliderRelay object that was
+ * created with the same name argument.
+ *
+ * To register a WebSliderRelay object create one with the right name and add it to the
+ * WebBrowserComponent::Options struct using withOptionsFrom.
+ *
+ * @param {String} name
+ */
+function getSliderState(name) {
+  if (!sliderStates.has(name)) sliderStates.set(name, new SliderState(name));
+
+  return sliderStates.get(name);
+}
+
+/**
+ * ToggleState encapsulates data and callbacks that are synchronised with a WebToggleRelay object
+ * on the backend.
+ *
+ * Use getToggleState() to create a ToggleState object. This object will be synchronised with the
+ * WebToggleRelay backend object that was created using the same unique name.
+ *
+ * @param {String} name
+ */
+class ToggleState {
+  constructor(name) {
+    if (!window.__JUCE__.initialisationData.__juce__toggles.includes(name))
+      console.warn(
+        "Creating ToggleState for '" +
+          name +
+          "', which is unknown to the backend"
+      );
+
+    this.name = name;
+    this.identifier = "__juce__toggle" + this.name;
+    this.value = false;
+    this.properties = {
+      name: "",
+      parameterIndex: -1,
+    };
+    this.valueChangedEvent = new ListenerList();
+    this.propertiesChangedEvent = new ListenerList();
+
+    window.__JUCE__.backend.addEventListener(this.identifier, (event) =>
+      this.handleEvent(event)
+    );
+
+    window.__JUCE__.backend.emitEvent(this.identifier, {
+      eventType: "requestInitialUpdate",
+    });
+  }
+
+  /** Returns the value corresponding to the associated WebToggleRelay's (C++) state. */
+  getValue() {
+    return this.value;
+  }
+
+  /** Informs the backend to change the associated WebToggleRelay's (C++) state. */
+  setValue(newValue) {
+    this.value = newValue;
+
+    window.__JUCE__.backend.emitEvent(this.identifier, {
+      eventType: BasicControl_valueChangedEventId,
+      value: this.value,
+    });
+  }
+
+  /** Internal. */
+  handleEvent(event) {
+    if (event.eventType == BasicControl_valueChangedEventId) {
+      this.value = event.value;
+      this.valueChangedEvent.callListeners();
+    }
+    if (event.eventType == BasicControl_propertiesChangedId) {
+      // eslint-disable-next-line no-unused-vars
+      let { eventType: _, ...rest } = event;
+      this.properties = rest;
+      this.propertiesChangedEvent.callListeners();
+    }
+  }
+}
+
+const toggleStates = new Map();
+
+for (const name of window.__JUCE__.initialisationData.__juce__toggles)
+  toggleStates.set(name, new ToggleState(name));
+
+/**
+ * Returns a ToggleState object that is connected to the backend WebToggleButtonRelay object that was
+ * created with the same name argument.
+ *
+ * To register a WebToggleButtonRelay object create one with the right name and add it to the
+ * WebBrowserComponent::Options struct using withOptionsFrom.
+ *
+ * @param {String} name
+ */
+function getToggleState(name) {
+  if (!toggleStates.has(name)) toggleStates.set(name, new ToggleState(name));
+
+  return toggleStates.get(name);
+}
+
+/**
+ * ComboBoxState encapsulates data and callbacks that are synchronised with a WebComboBoxRelay object
+ * on the backend.
+ *
+ * Use getComboBoxState() to create a ComboBoxState object. This object will be synchronised with the
+ * WebComboBoxRelay backend object that was created using the same unique name.
+ *
+ * @param {String} name
+ */
+class ComboBoxState {
+  constructor(name) {
+    if (!window.__JUCE__.initialisationData.__juce__comboBoxes.includes(name))
+      console.warn(
+        "Creating ComboBoxState for '" +
+          name +
+          "', which is unknown to the backend"
+      );
+
+    this.name = name;
+    this.identifier = "__juce__comboBox" + this.name;
+    this.value = 0.0;
+    this.properties = {
+      name: "",
+      parameterIndex: -1,
+      choices: [],
+    };
+    this.valueChangedEvent = new ListenerList();
+    this.propertiesChangedEvent = new ListenerList();
+
+    window.__JUCE__.backend.addEventListener(this.identifier, (event) =>
+      this.handleEvent(event)
+    );
+
+    window.__JUCE__.backend.emitEvent(this.identifier, {
+      eventType: "requestInitialUpdate",
+    });
+  }
+
+  /**
+   * Returns the value corresponding to the associated WebComboBoxRelay's (C++) state.
+   *
+   * This is an index identifying which element of the properties.choices array is currently
+   * selected.
+   */
+  getChoiceIndex() {
+    return Math.round(this.value * (this.properties.choices.length - 1));
+  }
+
+  /**
+   * Informs the backend to change the associated WebComboBoxRelay's (C++) state.
+   *
+   * This should be called with the index identifying the selected element from the
+   * properties.choices array.
+   */
+  setChoiceIndex(index) {
+    const numItems = this.properties.choices.length;
+    this.value = numItems > 1 ? index / (numItems - 1) : 0.0;
+
+    window.__JUCE__.backend.emitEvent(this.identifier, {
+      eventType: BasicControl_valueChangedEventId,
+      value: this.value,
+    });
+  }
+
+  /** Internal. */
+  handleEvent(event) {
+    if (event.eventType == BasicControl_valueChangedEventId) {
+      this.value = event.value;
+      this.valueChangedEvent.callListeners();
+    }
+    if (event.eventType == BasicControl_propertiesChangedId) {
+      // eslint-disable-next-line no-unused-vars
+      let { eventType: _, ...rest } = event;
+      this.properties = rest;
+      this.propertiesChangedEvent.callListeners();
+    }
+  }
+}
+
+const comboBoxStates = new Map();
+
+for (const name of window.__JUCE__.initialisationData.__juce__comboBoxes)
+  comboBoxStates.set(name, new ComboBoxState(name));
+
+/**
+ * Returns a ComboBoxState object that is connected to the backend WebComboBoxRelay object that was
+ * created with the same name argument.
+ *
+ * To register a WebComboBoxRelay object create one with the right name and add it to the
+ * WebBrowserComponent::Options struct using withOptionsFrom.
+ *
+ * @param {String} name
+ */
+function getComboBoxState(name) {
+  if (!comboBoxStates.has(name))
+    comboBoxStates.set(name, new ComboBoxState(name));
+
+  return comboBoxStates.get(name);
+}
+
+/**
+ * Appends a platform-specific prefix to the path to ensure that a request sent to this address will
+ * be received by the backend's ResourceProvider.
+ * @param {String} path
+ */
+function getBackendResourceAddress(path) {
+  const platform =
+    window.__JUCE__.initialisationData.__juce__platform.length > 0
+      ? window.__JUCE__.initialisationData.__juce__platform[0]
+      : "";
+
+  if (platform == "windows" || platform == "android")
+    return "https://juce.backend/" + path;
+
+  if (platform == "macos" || platform == "ios" || platform == "linux")
+    return "juce://juce.backend/" + path;
+
+  console.warn(
+    "getBackendResourceAddress() called, but no JUCE native backend is detected."
+  );
+  return path;
+}
+
+/**
+ * This helper class is intended to aid the implementation of
+ * AudioProcessorEditor::getControlParameterIndex() for editors using a WebView interface.
+ *
+ * Create an instance of this class and call its handleMouseMove() method in each mousemove event.
+ *
+ * This class can be used to continuously report the controlParameterIndexAnnotation attribute's
+ * value related to the DOM element that is currently under the mouse pointer.
+ *
+ * This value is defined at all times as follows
+ * * the annotation attribute's value for the DOM element directly under the mouse, if it has it,
+ * * the annotation attribute's value for the first parent element, that has it,
+ * * -1 otherwise.
+ *
+ * Whenever there is a change in this value, an event is emitted to the frontend with the new value.
+ * You can use a ControlParameterIndexReceiver object on the backend to listen to these events.
+ *
+ * @param {String} controlParameterIndexAnnotation
+ */
+class ControlParameterIndexUpdater {
+  constructor(controlParameterIndexAnnotation) {
+    this.controlParameterIndexAnnotation = controlParameterIndexAnnotation;
+    this.lastElement = null;
+    this.lastControlParameterIndex = null;
+  }
+
+  handleMouseMove(event) {
+    const currentElement = document.elementFromPoint(
+      event.clientX,
+      event.clientY
+    );
+
+    if (currentElement === this.lastElement) return;
+    this.lastElement = currentElement;
+
+    let controlParameterIndex = -1;
+
+    if (currentElement !== null)
+      controlParameterIndex = this.#getControlParameterIndex(currentElement);
+
+    if (controlParameterIndex === this.lastControlParameterIndex) return;
+    this.lastControlParameterIndex = controlParameterIndex;
+
+    window.__JUCE__.backend.emitEvent(
+      "__juce__controlParameterIndexChanged",
+      controlParameterIndex
+    );
+  }
+
+  //==============================================================================
+  #getControlParameterIndex(element) {
+    const isValidNonRootElement = (e) => {
+      return e !== null && e !== document.documentElement;
+    };
+
+    while (isValidNonRootElement(element)) {
+      if (element.hasAttribute(this.controlParameterIndexAnnotation)) {
+        return element.getAttribute(this.controlParameterIndexAnnotation);
+      }
+
+      element = element.parentElement;
+    }
+
+    return -1;
+  }
+}
+
+
+const Juce = { getSliderState, getNativeFunction, getToggleState, getComboBoxState };
+// ====================================================================
+//  Harmonic Injector — visual dual-EQ engine (Pro-Q4 / Volcano style)
+// ====================================================================
+const states = {};
+const S = id => (states[id] ??= Juce.getSliderState(id));
+const nz = st => { const n = st.getNormalisedValue(); return Number.isFinite(n) ? Math.max(0,Math.min(1,n)) : 0; };
+const sv = st => st.getScaledValue();
+// write a target SCALED value (e.g. a frequency in Hz, a gain in dB) using the
+// parameter's OWN start/end/skew, exactly matching the C++ NormalisableRange.
+// This is the single source of truth for value<->normalised conversion and
+// avoids any mismatch between the canvas log-axis and the parameter's skew.
+function setScaled(st, value){
+  const p = st.properties;
+  const v = Math.max(p.start, Math.min(p.end, value));
+  const lin = (v - p.start) / (p.end - p.start);
+  const norm = Math.pow(lin, p.skew);          // inverse of normalisedToScaled
+  st.setNormalisedValue(Math.max(0, Math.min(1, norm)));
+}
+const NF = n => Juce.getNativeFunction(n);
+const el = (t,c,p)=>{const e=document.createElement(t);if(c)e.className=c;if(p)p.appendChild(e);return e;};
+
+const fHz  = v => v>=1000 ? (v/1000).toFixed(v>=10000?1:2)+"k" : Math.round(v)+"";
+const fHzL = v => v>=1000 ? (v/1000).toFixed(2)+" kHz" : Math.round(v)+" Hz";
+const fDb  = v => (v>=0?"+":"")+v.toFixed(1)+" dB";
+const fDb0 = v => (v>=0?"+":"")+v.toFixed(1);
+const f2   = v => v.toFixed(2);
+const fPct = v => Math.round(v*100)+"%";
+
+// ---- frequency axis: 5 Hz .. 24 kHz log ----
+const FMIN=5, FMAX=24000;
+const lf=Math.log(FMIN), lfr=Math.log(FMAX)-lf;
+const fx = (f,W)=> (Math.log(Math.max(1e-3,f))-lf)/lfr*W;
+const xf = (x,W)=> Math.exp(lf + x/W*lfr);
+// R = the panel's CURRENT display range (+/- dB), from its range selector.
+const dy = (db,H,R,pt=0,pb=H)=> (pt+pb)*0.5 - db/R*(pb-pt)*0.5;
+
+// ---- knob factory (Pro-Q4 style: thin track, accent arc, needle) ----
+// defV = default SCALED value; double-clicking the knob restores it.
+function knob(host,id,label,fmt,accent,defV){
+  accent=accent||"var(--sc)";
+  host.innerHTML=`<div class="kring"><svg viewBox="0 0 40 40"><path class="karc"/><line class="kndl" x1="20" y1="18" x2="20" y2="5"/><circle class="kdot" cx="20" cy="20" r="2"/></svg></div><div class="klab">${label}</div><div class="kval"></div>`;
+  const st=S(id), ring=host.querySelector(".kring"),
+        arc=host.querySelector(".karc"), ndl=host.querySelector(".kndl"),
+        dot=host.querySelector(".kdot"),
+        kv=host.querySelector(".kval");
+  arc.style.stroke=accent; ndl.style.stroke=accent; dot.style.fill=accent;
+  const P=a=>{const r=(a-90)*Math.PI/180;return [20+15.5*Math.cos(r),20+15.5*Math.sin(r)];};
+  function render(){
+    const n=nz(st), a=-135+n*270;
+    if(n>0.004){
+      const [x0,y0]=P(-135),[x1,y1]=P(a);
+      arc.setAttribute("d",`M ${x0.toFixed(2)} ${y0.toFixed(2)} A 15.5 15.5 0 ${n*270>180?1:0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`);
+    } else arc.setAttribute("d","");
+    ndl.setAttribute("transform",`rotate(${a} 20 20)`);
+    const v=sv(st); kv.textContent=Number.isFinite(v)?fmt(v):"\u2014";
+  }
+  st.valueChangedEvent.addListener(render); st.propertiesChangedEvent.addListener(render);
+  let py=0,drag=false,acc=0;
+  ring.addEventListener("pointerdown",e=>{drag=true;py=e.clientY;acc=nz(st);ring.setPointerCapture(e.pointerId);st.sliderDragStarted();e.preventDefault();});
+  ring.addEventListener("pointermove",e=>{if(!drag)return;const fine=e.shiftKey?4:1;acc=Math.max(0,Math.min(1,acc+(py-e.clientY)/(170*fine*(window.__fitZ||1))));py=e.clientY;st.setNormalisedValue(acc);});
+  const up=()=>{if(drag){drag=false;st.sliderDragEnded();}};
+  ring.addEventListener("pointerup",up); ring.addEventListener("pointercancel",up);
+  if(defV!==undefined) ring.addEventListener("dblclick",()=>{st.sliderDragStarted();setScaled(st,defV);st.sliderDragEnded();});
+  render();
+}
+function recolorKnob(){}  // color now handled inside knob()
+
+// ---- segmented control ----
+function seg(host,id,opts,pqClass){
+  if(pqClass) host.classList.add("pq");
+  const st=S(id);
+  const btns=opts.map((t,i)=>{
+    const b=el("button",null,host); b.textContent=t;
+    b.addEventListener("pointerdown",()=>{st.sliderDragStarted();st.setNormalisedValue(opts.length>1?i/(opts.length-1):0);st.sliderDragEnded();});
+    b.addEventListener("pointerup",()=>b.blur());
+    return b;
+  });
+  function render(){const idx=Math.round(nz(st)*(opts.length-1));btns.forEach((b,i)=>b.classList.toggle("on",i===idx));}
+  st.valueChangedEvent.addListener(render); st.propertiesChangedEvent.addListener(render);
+  render(); return render;
+}
+
+// ---- dropdown control (choice param, click to open) ----
+function dropdown(host,id,opts,dir="up"){
+  const st=S(id); host.classList.add("ddwrap",dir==="down"?"dddown":"ddup");
+  const btn=el("button","ddbtn",host), menu=el("div","ddmenu",host);
+  opts.forEach((t,i)=>{
+    const b=el("button",null,menu); b.textContent=t;
+    b.addEventListener("pointerdown",ev=>{ev.stopPropagation();st.sliderDragStarted();st.setNormalisedValue(opts.length>1?i/(opts.length-1):0);st.sliderDragEnded();menu.style.display="none";});
+  });
+  btn.addEventListener("pointerdown",ev=>{
+    ev.stopPropagation(); ev.preventDefault();
+    const on=menu.style.display==="block";
+    document.querySelectorAll(".ddmenu,.rangemenu").forEach(m=>m.style.display="none");
+    menu.style.display=on?"none":"block";
+  });
+  function render(){const idx=Math.round(nz(st)*(opts.length-1));btn.textContent=opts[idx]+(dir==="down"?" ▾":" ▴");}
+  st.valueChangedEvent.addListener(render); st.propertiesChangedEvent.addListener(render);
+  render();
+}
+
+// ---- toggle (bool param) button ----
+function boolBtn(btn,id,onClass){
+  const st=S(id);
+  function render(){btn.classList.toggle(onClass||"act",nz(st)>0.5);}
+  btn.addEventListener("pointerdown",()=>{st.sliderDragStarted();st.setNormalisedValue(nz(st)>0.5?0:1);st.sliderDragEnded();});
+  btn.addEventListener("pointerup",()=>btn.blur());
+  st.valueChangedEvent.addListener(render); st.propertiesChangedEvent.addListener(render);
+  render();
+}
+
+// ====================================================================
+//  RBJ magnitude response (matches the C++ DSP exactly)
+// ====================================================================
+function biquadCoefs(type,fs,f,q,dB){
+  const w=2*Math.PI*Math.min(Math.max(f,5),fs*0.45)/fs;
+  const cw=Math.cos(w), sw=Math.sin(w), al=sw/(2*Math.max(0.1,q));
+  let b0,b1,b2,a0,a1,a2;
+  if(type==="peak"){const A=Math.pow(10,dB/40);a0=1+al/A;b0=(1+al*A)/a0;b1=(-2*cw)/a0;b2=(1-al*A)/a0;a1=(-2*cw)/a0;a2=(1-al/A)/a0;}
+  else if(type==="notch"){const al2=sw/(2*Math.max(0.05,q));a0=1+al2;b0=1/a0;b1=-2*cw/a0;b2=1/a0;a1=-2*cw/a0;a2=(1-al2)/a0;}
+  else if(type==="lowshelf"){const A=Math.pow(10,dB/40),sq=2*Math.sqrt(A)*al;a0=(A+1)+(A-1)*cw+sq;b0=A*((A+1)-(A-1)*cw+sq)/a0;b1=2*A*((A-1)-(A+1)*cw)/a0;b2=A*((A+1)-(A-1)*cw-sq)/a0;a1=-2*((A-1)+(A+1)*cw)/a0;a2=((A+1)+(A-1)*cw-sq)/a0;}
+  else if(type==="highshelf"){const A=Math.pow(10,dB/40),sq=2*Math.sqrt(A)*al;a0=(A+1)-(A-1)*cw+sq;b0=A*((A+1)+(A-1)*cw+sq)/a0;b1=-2*A*((A-1)+(A+1)*cw)/a0;b2=A*((A+1)+(A-1)*cw-sq)/a0;a1=2*((A-1)-(A+1)*cw)/a0;a2=((A+1)-(A-1)*cw-sq)/a0;}
+  else if(type==="hp"){a0=1+al;b0=(1+cw)*0.5/a0;b1=-(1+cw)/a0;b2=(1+cw)*0.5/a0;a1=-2*cw/a0;a2=(1-al)/a0;}
+  else if(type==="lp"){a0=1+al;b0=(1-cw)*0.5/a0;b1=(1-cw)/a0;b2=(1-cw)*0.5/a0;a1=-2*cw/a0;a2=(1-al)/a0;}
+  return {b0,b1,b2,a1,a2};
+}
+function biquadMagDb(c,w){
+  const cw=Math.cos(w), c2=Math.cos(2*w);
+  const num=c.b0*c.b0+c.b1*c.b1+c.b2*c.b2+2*(c.b0*c.b1+c.b1*c.b2)*cw+2*c.b0*c.b2*c2;
+  const den=1+c.a1*c.a1+c.a2*c.a2+2*(c.a1+c.a1*c.a2)*cw+2*c.a2*c2;
+  return 10*Math.log10(Math.max(num,1e-16)/Math.max(den,1e-16));
+}
+
+// ====================================================================
+//  EQPanel: a single visual EQ (5 fixed bands, draggable nodes)
+//  Maps onto the existing fixed-band params sc1..sc5 / pq1..pq5.
+//  "Add node" = enable a disabled band (gain!=0 / mode change); since the
+//  DSP has exactly 5 slots, the editor exposes all 5 as nodes and lets the
+//  user drag freq/gain and pick the mode. Bands at 0 dB bell read as flat.
+// ====================================================================
+let scPanel,pqPanel;
+class EQPanel {
+  // Node pool model: 5 general nodes, each fully retypable (8 filter types)
+  // and freely positioned across the whole band. A node is "active" when it
+  // produces an audible effect; a 0 dB Bell/Shelf is inactive (in the pool).
+  // Type codes mirror the C++ enum exactly:
+  //   0 Bell 1 Notch 2 LowShelf 3 HighShelf
+  //   4 LowCut12 5 LowCut24 6 HighCut12 7 HighCut24
+  constructor(prefix, accent){
+    this.pre=prefix; this.accent=accent; this.isSC=(prefix==="sc");
+    this.acc=this.isSC?"#ff5c8a":"#43d9c4";   // canvas cannot parse var(), keep a literal
+    this.grid=document.getElementById(prefix+"Grid");
+    this.spec=document.getElementById(prefix+"Spec");
+    this.curve=document.getElementById(prefix+"Curve");
+    this.overflow=document.getElementById(prefix+"Overflow");
+    this.wrap=document.getElementById(prefix+"Wrap");
+    this.tip=document.getElementById(prefix+"Tip");
+    this.menu=document.getElementById(prefix+"Menu");
+    // display-range selector state (choice param scRange/pqRange)
+    this.ranges=this.isSC?[12,24,48,90]:[3,6,12,30];
+    this.mults =this.isSC?[1,2,4,7.5]:[0.25,0.5,1,2.5];
+    this.fR=S(prefix+"Range");
+    this.badge=document.getElementById(prefix+"RangeBadge");
+    this.rmenu=document.getElementById(prefix+"RangeMenu");
+    this.edit=document.getElementById(prefix+"Edit");
+    this.editBd=null; this._wLock=null; this._wUntil=0;
+    this.spectrum=new Float32Array(128);
+    this.bands=[];
+    for(let b=1;b<=5;b++){
+      this.bands.push({
+        idx:b,
+        fF:S(prefix+b+"Freq"), fG:S(prefix+b+"Gain"),
+        fQ:S(prefix+b+"Q"),    fT:S(prefix+b+"Type")
+      });
+    }
+    this.bindCanvasEvents();
+    this.buildRangeMenu(); this.bindEditor();
+    const rr=()=>{this.drawGrid();this.drawCurve();};
+    this.fR.valueChangedEvent.addListener(rr); this.fR.propertiesChangedEvent.addListener(rr);
+    this.bands.forEach(bd=>{
+      const r=()=>this.drawCurve();
+      bd.fF.valueChangedEvent.addListener(r); bd.fG.valueChangedEvent.addListener(r);
+      bd.fQ.valueChangedEvent.addListener(r); bd.fT.valueChangedEvent.addListener(r);
+      bd.fF.propertiesChangedEvent.addListener(r);
+    });
+    this.size(); this.drawCurve();
+  }
+
+  size(){
+    const r=this.wrap.getBoundingClientRect();
+    const W=Math.max(64,r.width|0), H=Math.max(48,r.height|0);
+    const dpr=Math.min(2,window.devicePixelRatio||1);
+    [this.grid,this.spec,this.curve].forEach(c=>{
+      const pw=(W*dpr)|0, ph=(H*dpr)|0;
+      if(c.__pw!==pw||c.__ph!==ph){c.width=pw;c.height=ph;c.__pw=pw;c.__ph=ph;c.getContext("2d").setTransform(dpr,0,0,dpr,0,0);}
+    });
+    this.W=W; this.H=H; this._fogDirty=true;
+  }
+
+  // 8-way type from the choice param (8 choices -> index 0..7)
+  typeOf(bd){ return Math.round(nz(bd.fT)*7); }
+  isShelfType(t){ return t===2||t===3; }
+  isBellType(t){ return t===0; }
+  isCutType(t){ return t>=4; }
+  isNotchType(t){ return t===1; }
+
+  bandMagAt(bd,f){
+    const fs=48000, t=this.typeOf(bd);
+    const fq=sv(bd.fF), q=sv(bd.fQ), g=sv(bd.fG)*this.mult(), w=2*Math.PI*f/fs;
+    if(t===0){ if(Math.abs(g)<0.01) return 0; return biquadMagDb(biquadCoefs("peak",fs,fq,q,g),w); }
+    if(t===2){ if(Math.abs(g)<0.01) return 0; return biquadMagDb(biquadCoefs("lowshelf",fs,fq,q,g),w); }
+    if(t===3){ if(Math.abs(g)<0.01) return 0; return biquadMagDb(biquadCoefs("highshelf",fs,fq,q,g),w); }
+    if(t===1) return biquadMagDb(biquadCoefs("notch",fs,fq,q,0),w);
+    if(t===4) return biquadMagDb(biquadCoefs("hp",fs,fq,q,0),w);
+    if(t===5) return biquadMagDb(biquadCoefs("hp",fs,fq,q,0),w)+biquadMagDb(biquadCoefs("hp",fs,fq,0.707,0),w);
+    if(t===6) return biquadMagDb(biquadCoefs("lp",fs,fq,q,0),w);
+    if(t===7) return biquadMagDb(biquadCoefs("lp",fs,fq,q,0),w)+biquadMagDb(biquadCoefs("lp",fs,fq,0.707,0),w);
+    return 0;
+  }
+  totalMagAt(f){let s=0;for(const bd of this.bands)s+=this.bandMagAt(bd,f);return s;}
+
+  isActive(bd){
+    const t=this.typeOf(bd);
+    if(t===0||t===2||t===3) return Math.abs(sv(bd.fG))>0.01;  // bell/shelf: gain
+    return true;  // notch / cut always shape
+  }
+
+  // node display Y: shelves/bells use gain; notch/cut use the curve value at f0
+  nodeGain(bd){
+    const t=this.typeOf(bd);
+    if(t===0||t===2||t===3) return sv(bd.fG)*this.mult();
+    return this.bandMagAt(bd, sv(bd.fF));
+  }
+
+  typeName(t){
+    return ["BELL","NOTCH","LOW SHELF","HIGH SHELF","LOW CUT 12","LOW CUT 24","HIGH CUT 12","HIGH CUT 24"][t]||"?";
+  }
+  typeHasGain(t){ return t===0||t===2||t===3; }
+  typeHasQ(t){ return t!==2&&t!==3 ? true : false; } // shelves ignore Q here; bell/notch/cut use it
+
+  drawGrid(){
+    const c=this.grid.getContext("2d"), W=this.W, H=this.H, [pt,pb]=this.plot();
+    const R=this.dbr(), step=R<=3?1:R<=6?2:R<=12?4:R<=24?8:R<=30?10:R<=48?16:30;
+    c.clearRect(0,0,W,H);
+    c.fillStyle="#16181d"; c.fillRect(0,0,W,H);
+    const majors=[10,100,1000,10000];
+    const minors=[20,30,40,50,60,70,80,90,200,300,400,500,600,700,800,900,2000,3000,4000,5000,6000,7000,8000,9000,20000];
+    c.lineWidth=1;
+    // 纵向频率线贯穿整个中缝，保持上下是一张连续背景。
+    minors.forEach(f=>{const x=fx(f,W);c.strokeStyle="#1e222a";c.beginPath();c.moveTo(x,0);c.lineTo(x,H);c.stroke();});
+    majors.forEach(f=>{const x=fx(f,W);c.strokeStyle="#2a2f39";c.beginPath();c.moveTo(x,0);c.lineTo(x,H);c.stroke();});
+    for(let db=-R;db<=R;db+=step){const y=dy(db,H,R,pt,pb);c.strokeStyle=db===0?"#333a45":"#21262f";c.beginPath();c.moveTo(0,y);c.lineTo(W,y);c.stroke();}
+    c.font="9px Inter,sans-serif"; c.fillStyle="#4a525f";
+    const freqLabels=[[20,"20"],[50,"50"],[100,"100"],[200,"200"],[500,"500"],[1000,"1k"],[2000,"2k"],[5000,"5k"],[10000,"10k"],[20000,"20k"]];
+    freqLabels.forEach(([f,t])=>c.fillText(t,fx(f,W)+2,pb-4));
+    // 同一画布的频率刻度延伸到标题栏，仅在梯形镂空内可见。
+    freqLabels.forEach(([f,t])=>c.fillText(t,fx(f,W)+2,this.isSC?22:H-8));
+    // dB 刻度留在有效区，中央留白内不放标尺。
+    c.fillStyle=this.isSC?"rgba(255,92,138,.85)":"rgba(67,217,196,.85)";
+    for(let db=-R;db<=R;db+=step){if(db===0)continue;const y=dy(db,H,R,pt,pb);c.fillText((db>0?"+":"")+db,6,Math.max(pt+9,Math.min(pb-2,y-2)));}
+  }
+
+  drawSpec(){
+    const c=this.spec.getContext("2d"), W=this.W, H=this.H, [pt,pb]=this.plot(), PH=pb-pt;
+    c.clearRect(0,0,W,H);
+    const arr=this.spectrum;
+    c.beginPath(); c.moveTo(0,pb);
+    for(let i=0;i<arr.length;i++){const f=20*Math.pow(1000,i/(arr.length-1));c.lineTo(fx(f,W),pb-arr[i]*PH*0.92);}
+    c.lineTo(W,pb); c.closePath();
+    const g=c.createLinearGradient(0,pt,0,pb);
+    g.addColorStop(0,this.isSC?"rgba(255,92,138,.18)":"rgba(67,217,196,.18)");
+    g.addColorStop(1,"rgba(67,217,196,0)");
+    c.fillStyle=g; c.fill();
+  }
+
+  drawCurve(){
+    if(!this.W){ this.size(); if(!this.W) return; }
+    const c=this.curve.getContext("2d"), W=this.W, H=this.H, R=this.dbr(), [pt,pb]=this.plot();
+    const Y=db=>dy(db,H,R,pt,pb);
+    c.clearRect(0,0,W,H);
+    c.save(); c.beginPath(); c.rect(0,pt,W,pb-pt); c.clip(); // 清晰层只画范围内；越界由共享雾化层补全
+    c.lineWidth=1;
+    for(const bd of this.bands){
+      if(!this.isActive(bd)) continue;
+      c.strokeStyle=this.isSC?"rgba(255,92,138,.22)":"rgba(67,217,196,.22)";
+      c.beginPath();
+      for(let x=0;x<=W;x+=3){const y=Y(this.bandMagAt(bd,xf(x,W)));x===0?c.moveTo(x,y):c.lineTo(x,y);}
+      c.stroke();
+    }
+    c.strokeStyle=this.acc; c.lineWidth=2; c.beginPath();
+    for(let x=0;x<=W;x+=1){const y=Y(this.totalMagAt(xf(x,W)));x===0?c.moveTo(x,y):c.lineTo(x,y);}
+    c.stroke();
+    c.lineTo(W,Y(0)); c.lineTo(0,Y(0)); c.closePath();
+    c.fillStyle=this.isSC?"rgba(255,92,138,.06)":"rgba(67,217,196,.06)"; c.fill();
+    for(const bd of this.bands){
+      const active=this.isActive(bd);
+      const x=fx(sv(bd.fF),W), y=Y(Math.max(-R,Math.min(R,this.nodeGain(bd))));
+      bd._x=x; bd._y=y;
+      c.globalAlpha=active?1:0.5;
+      c.beginPath(); c.arc(x,y,active?6.5:5,0,7);
+      c.fillStyle=this.acc; c.fill();
+      c.globalAlpha=1;
+      c.fillStyle="#16181d"; c.font="bold 9.5px Inter"; c.textAlign="center"; c.textBaseline="middle";
+      c.fillText(bd.idx, x, y); c.textAlign="left";
+    }
+    c.restore(); // 节点越界的另一半由共享层绘制，不再被硬切掉
+    if(this.editBd) this.updateEdit(false);   // keep the numeric editor glued to its node
+    this._fogDirty=true; requestEQOverflow();
+  }
+
+  nodeAt(px,py){
+    let best=null,r=null;
+    for(const bd of this.bands){
+      const dx=px-bd._x, dyy=py-bd._y, d=Math.sqrt(dx*dx+dyy*dyy);
+      if(d<12 && (best===null||d<best)){best=d;r=bd;}
+    }
+    return r;
+  }
+  // nearest INACTIVE node (pool), else null when pool is empty
+  freeBand(f){
+    const free=this.bands.filter(b=>!this.isActive(b));
+    if(free.length===0) return null;
+    return free.reduce((a,b)=>Math.abs(sv(b.fF)-f)<Math.abs(sv(a.fF)-f)?b:a);
+  }
+
+  // canvas units -> layout units of the absolutely-positioned overlay layer.
+  // this.W is the *scaled* width from getBoundingClientRect, while CSS left/top
+  // are unscaled layout px, so every canvas coordinate must be divided by the
+  // panel zoom before it can be used to place an HTML element.
+  cvt(){
+    const AW=this.wrap.offsetWidth||this.W, AH=this.wrap.offsetHeight||this.H;
+    const k=AW/Math.max(1,this.W);
+    return [AW,AH,k];
+  }
+
+  showTip(bd,px,py){
+    const t=this.typeOf(bd);
+    let s=`#${bd.idx} ${this.typeName(t)} · ${fHzL(sv(bd.fF))}`;
+    if(this.typeHasGain(t)) s+=` · ${fDb(sv(bd.fG)*this.mult())}`;
+    if(t!==2&&t!==3) s+=` · Q ${f2(sv(bd.fQ))}`;
+    this.tip.textContent=s; this.tip.style.display="block";
+    const [AW,AH,k]=this.cvt();
+    this.tip.style.left=Math.min(px*k+12,AW-this.tip.offsetWidth-4)+"px";
+    this.tip.style.top=Math.max(4,py*k-30)+"px";
+  }
+  hideTip(){this.tip.style.display="none";}
+
+  // full 8-way type menu for ANY node (+ a Remove action)
+  showMenu(bd,px,py){
+    this.menu.innerHTML="";
+    const opts=this.isSC
+      ? [["Bell",0],["Notch",1],["Low Shelf",2],["High Shelf",3],["Low Cut 12",4],["Low Cut 24",5],["High Cut 12",6],["High Cut 24",7]]
+      : [["Bell",0],["Low Shelf",2],["High Shelf",3],["Low Cut 12",4],["Low Cut 24",5],["High Cut 12",6],["High Cut 24",7]]; // post EQ: no notch (trap is a sidechain-only protection tool)
+    opts.forEach(([label,val])=>{
+      const b=el("button",null,this.menu); b.textContent=label;
+      if(this.typeOf(bd)===val){b.style.color="var(--ink)";b.style.background="rgba(255,255,255,.04)";}
+      b.addEventListener("pointerdown",ev=>{
+        ev.stopPropagation();
+        bd.fT.sliderDragStarted(); bd.fT.setNormalisedValue(val/7); bd.fT.sliderDragEnded();
+        // entering a gain-type with 0 dB? give it something audible
+        if((val===0||val===2||val===3)&&Math.abs(sv(bd.fG))<0.5){
+          bd.fG.sliderDragStarted(); setScaled(bd.fG, (val===0?4:3)/this.mult()); bd.fG.sliderDragEnded();
+        }
+        this.menu.style.display="none"; this.drawCurve();
+      });
+    });
+    const sep=el("div",null,this.menu); sep.style.cssText="height:1px;background:var(--line);margin:2px 0";
+    const rm=el("button",null,this.menu); rm.textContent="✕ Remove";
+    rm.style.color="var(--sc)";
+    rm.addEventListener("pointerdown",ev=>{
+      ev.stopPropagation();
+      // "remove" = return node to the pool: Bell at 0 dB (inactive)
+      bd.fT.sliderDragStarted(); bd.fT.setNormalisedValue(0); bd.fT.sliderDragEnded();
+      bd.fG.sliderDragStarted(); setScaled(bd.fG, 0); bd.fG.sliderDragEnded();
+      this.menu.style.display="none"; this.drawCurve();
+    });
+    this.menu.style.display="block";
+    const [AW,AH,k]=this.cvt();
+    this.menu.style.left=Math.min(px*k,AW-120)+"px";
+    this.menu.style.top=Math.min(py*k,AH-(opts.length+2)*26)+"px";
+  }
+
+  bindCanvasEvents(){
+    let drag=null;
+    const xy=e=>{const r=this.curve.getBoundingClientRect();return [(e.clientX-r.left),(e.clientY-r.top)];};
+    this.curve.addEventListener("pointerdown",e=>{
+      const [px,py]=xy(e);
+      this.menu.style.display="none";
+      this._wLock=null;   // grabbing a node cancels any wheel-Q lock
+      const bd=this.nodeAt(px,py);
+      if(bd){
+        if(this.editBd&&this.editBd!==bd) this.openEdit(bd); // editor hops to the node under the cursor
+        const nx=(bd._x??px), ny=(bd._y??py);
+        drag={bd, ox:nx-px, oy:ny-py};   // grab offset: the node must not snap to the cursor
+        this.curve.setPointerCapture(e.pointerId);
+        bd.fF.sliderDragStarted(); bd.fG.sliderDragStarted();
+        e.preventDefault();
+      } else if(this.editBd) this.closeEdit();               // click on empty canvas dismisses the editor
+    });
+    this.curve.addEventListener("pointermove",e=>{
+      const [px,py]=xy(e);
+      if(drag){
+        const gx=px+drag.ox, gy=py+drag.oy;   // relative drag, no jump on press
+        setScaled(drag.bd.fF, xf(Math.max(0,Math.min(this.W,gx)),this.W));
+        if(this.typeHasGain(this.typeOf(drag.bd))){
+          const R=this.dbr();
+          const db=Math.max(-R,Math.min(R,this.dbAt(gy)));
+          setScaled(drag.bd.fG, db/this.mult());
+        }
+        this.showTip(drag.bd,drag.bd._x,drag.bd._y); this.drawCurve();
+      } else {
+        const bd=this.nodeAt(px,py);
+        if(bd){this.showTip(bd,px,py);this.curve.style.cursor="grab";}
+        else{this.hideTip();this.curve.style.cursor="crosshair";}
+        // walk away from the node and the readout goes with it
+        if(this.editBd){
+          const d=Math.hypot(px-this.editBd._x, py-this.editBd._y);
+          if(d>30) this.closeEdit();
+        }
+      }
+    });
+    const end=()=>{ if(drag){drag.bd.fF.sliderDragEnded();drag.bd.fG.sliderDragEnded();drag=null;} };
+    this.curve.addEventListener("pointerup",end);
+    this.curve.addEventListener("pointercancel",end);
+    this.curve.addEventListener("pointerleave",()=>{if(!drag)this.hideTip();});
+
+    // double-click a node  => numeric editor
+    // double-click empty  => activate the nearest pooled node at this spot (Bell)
+    this.curve.addEventListener("dblclick",e=>{
+      const [px,py]=xy(e);
+      const bd=this.nodeAt(px,py);
+      if(bd){ this.openEdit(bd); return; } // 包括圆点探入留白的可见部分
+      if(!this.inPlot(py))return; // 中央空白不创建节点
+      const f=xf(px,this.W);
+      const nb=this.freeBand(f);
+      if(!nb){ this.flashFull(); return; }          // pool exhausted (5 max)
+      const R=this.dbr();
+      nb.fT.sliderDragStarted(); nb.fT.setNormalisedValue(0); nb.fT.sliderDragEnded(); // Bell
+      nb.fF.sliderDragStarted(); setScaled(nb.fF, f); nb.fF.sliderDragEnded();
+      let db=Math.max(-R,Math.min(R,this.dbAt(py)));
+      if(Math.abs(db)<0.5) db=Math.min(4,R*0.3);
+      nb.fG.sliderDragStarted(); setScaled(nb.fG, db/this.mult()); nb.fG.sliderDragEnded();
+      this.drawCurve();
+    });
+
+    // right-click a node => full type menu
+    this.curve.addEventListener("contextmenu",e=>{
+      e.preventDefault();
+      const [px,py]=xy(e);
+      const bd=this.nodeAt(px,py);
+      if(bd) this.showMenu(bd,px,py);
+    });
+
+    // wheel over a node => Q. The band is LOCKED for ~1.2 s so the mouse does
+    // not have to chase a node that moves while its Q changes (e.g. cuts).
+    this.curve.addEventListener("wheel",e=>{
+      const [px,py]=xy(e); const now=performance.now();
+      const bd=(this._wLock&&now<this._wUntil&&this.bands.includes(this._wLock))?this._wLock:this.nodeAt(px,py);
+      if(bd){e.preventDefault();const d=-Math.sign(e.deltaY)*0.04*(e.shiftKey?0.25:1);
+        bd.fQ.sliderDragStarted();bd.fQ.setNormalisedValue(Math.max(0,Math.min(1,nz(bd.fQ)+d)));bd.fQ.sliderDragEnded();
+        this._wLock=bd; this._wUntil=now+1200;
+        this.showTip(bd,bd._x??px,bd._y??py);this.drawCurve();}
+    },{passive:false});
+  }
+
+  // ---- display-range selector (badge + dropdown) ----
+  rangeIdx(){ return Math.max(0,Math.min(3,Math.round(nz(this.fR)*3))); }
+  dbr(){ return this.ranges[this.rangeIdx()]; }
+  mult(){ return this.mults[this.rangeIdx()]; }
+  // 标题栏延伸区 32px + 中缝留白 24px；有效 dB 区域保持原高度。
+  plot(){const p=Math.min(24,this.H*0.2);return this.isSC?[32,this.H-p]:[p,this.H-32];}
+  inPlot(y){const [t,b]=this.plot();return y>=t&&y<=b;}
+  dbAt(y){const [t,b]=this.plot(),R=this.dbr();return ((t+b)*0.5-y)/((b-t)*0.5)*R;}
+  buildRangeMenu(){
+    this.rmenu.innerHTML="";
+    this.ranges.forEach((r,i)=>{
+      const b=el("button",null,this.rmenu); b.textContent="±"+r+" dB";
+      b.addEventListener("pointerdown",ev=>{ev.stopPropagation();
+        this.fR.sliderDragStarted(); this.fR.setNormalisedValue(i/3); this.fR.sliderDragEnded();
+        this.rmenu.style.display="none";});
+    });
+    this.badge.addEventListener("pointerdown",ev=>{
+      ev.stopPropagation(); ev.preventDefault();
+      const on=this.rmenu.style.display==="block";
+      document.querySelectorAll(".ddmenu,.rangemenu").forEach(m=>m.style.display="none");
+      this.rmenu.style.display=on?"none":"block";
+    });
+    const rb=()=>{this.badge.textContent="±"+this.dbr()+" dB ▾";};
+    this.fR.valueChangedEvent.addListener(rb); rb();
+  }
+
+  // ---- node numeric editor (double-click a node) ----
+  // The editor is bound to the BAND, not to a screen position: it follows its
+  // node wherever the node moves, and stays open until ✕ / Esc / a click on
+  // empty canvas (or another node, which re-binds it).
+  bindEditor(){
+    const ed=this.edit;
+    ed.querySelector(".nex").addEventListener("pointerdown",ev=>{ev.stopPropagation();this.closeEdit();});
+    ed.addEventListener("pointerdown",ev=>ev.stopPropagation());
+    ed.addEventListener("dblclick",ev=>ev.stopPropagation());
+    ed.addEventListener("wheel",ev=>ev.stopPropagation(),{passive:false});
+    ed.addEventListener("pointerleave",()=>{ if(this.editBd) this.closeEdit(); });
+    ed.querySelectorAll("input").forEach(inp=>{
+      inp.addEventListener("change",()=>{this.applyEditField(inp.dataset.f,inp.value);});
+      inp.addEventListener("keydown",ev=>{if(ev.key==="Escape")this.closeEdit();ev.stopPropagation();});
+      // drag the value up/down to scrub it (Pro-Q style), click still allows typing
+      let dg=null;
+      const field=()=>{const bd=this.editBd; if(!bd)return null;
+        return inp.dataset.f==="f"?bd.fF:inp.dataset.f==="g"?bd.fG:bd.fQ;};
+      inp.addEventListener("pointerdown",ev=>{
+        if(inp.disabled)return; const f=field(); if(!f)return;
+        dg={f,y:ev.clientY,n:nz(f),moved:false};
+        inp.setPointerCapture(ev.pointerId); ev.stopPropagation();
+      });
+      inp.addEventListener("pointermove",ev=>{
+        if(!dg)return;
+        const dy=dg.y-ev.clientY;
+        if(!dg.moved&&Math.abs(dy)<3)return;
+        if(!dg.moved){dg.moved=true; dg.f.sliderDragStarted(); inp.blur(); ev.preventDefault();}
+        const k=ev.shiftKey?0.0012:0.005;
+        dg.f.setNormalisedValue(Math.max(0,Math.min(1,dg.n+dy*k)));
+        this.updateEdit(false); this.drawCurve();
+      });
+      const stop=()=>{ if(dg&&dg.moved)dg.f.sliderDragEnded(); dg=null; };
+      inp.addEventListener("pointerup",stop);
+      inp.addEventListener("pointercancel",stop);
+    });
+  }
+  openEdit(bd){
+    this.editBd=bd;
+    this.edit.style.display="block";
+    this.updateEdit(true);
+  }
+  closeEdit(){ this.editBd=null; this.edit.style.display="none"; }
+  applyEditField(f,raw){
+    const bd=this.editBd; if(!bd)return;
+    const v=String(raw).trim(); if(!v){this.updateEdit(false);return;}
+    if(f==="f"){
+      const m=v.match(/(-?[\d.]+)\s*(k)?/i); if(!m){this.updateEdit(false);return;}
+      let hz=parseFloat(m[1]); if(m[2])hz*=1000;
+      if(!Number.isFinite(hz))return;
+      bd.fF.sliderDragStarted(); setScaled(bd.fF,hz); bd.fF.sliderDragEnded();
+    }else if(f==="g"){
+      if(!this.typeHasGain(this.typeOf(bd)))return;
+      const db=parseFloat(v); if(!Number.isFinite(db))return;
+      const R=this.dbr(), g=Math.max(-R,Math.min(R,db));
+      bd.fG.sliderDragStarted(); setScaled(bd.fG,g/this.mult()); bd.fG.sliderDragEnded();
+    }else if(f==="q"){
+      const q=parseFloat(v); if(!Number.isFinite(q))return;
+      bd.fQ.sliderDragStarted(); setScaled(bd.fQ,Math.max(0.1,Math.min(6,q))); bd.fQ.sliderDragEnded();
+    }
+    this.drawCurve();
+  }
+  updateEdit(fill){
+    const bd=this.editBd; if(!bd)return;
+    const ed=this.edit, t=this.typeOf(bd);
+    const ttl=ed.querySelector(".netitle");
+    ttl.textContent="#"+bd.idx+" "+this.typeName(t);
+    ttl.style.color=this.isSC?"var(--sc)":"var(--pq)";
+    const iF=ed.querySelector('input[data-f="f"]'),
+          iG=ed.querySelector('input[data-f="g"]'),
+          iQ=ed.querySelector('input[data-f="q"]');
+    if(fill||document.activeElement!==iF) iF.value=Math.round(sv(bd.fF));
+    iG.disabled=!this.typeHasGain(t);
+    if(fill||document.activeElement!==iG) iG.value=(sv(bd.fG)*this.mult()).toFixed(1);
+    iQ.disabled=!this.typeHasQ(t);
+    if(fill||document.activeElement!==iQ) iQ.value=sv(bd.fQ).toFixed(2);
+    // sit right above the node, centred on it; flip below when there is no room
+    const [AW,AH,k]=this.cvt();
+    const nx=bd._x*k, ny=bd._y*k;
+    const ew=ed.offsetWidth||80, eh=ed.offsetHeight||64;
+    let x=nx-ew*0.5; x=Math.max(4,Math.min(x,AW-ew-4));
+    let y=ny-eh-14, below=false;
+    if(y<4){y=ny+16; below=true;}
+    y=Math.max(4,Math.min(y,AH-eh-4));
+    ed.style.left=x+"px"; ed.style.top=y+"px";
+    ed.classList.toggle("up",below);
+    ed.style.setProperty("--ax",Math.max(11,Math.min(ew-11,nx-x))+"px");
+  }
+
+  flashFull(){
+    this.tip.textContent="ALL 5 NODES IN USE — REMOVE ONE FIRST";
+    this.tip.style.display="block";
+    this.tip.style.left=(this.W/2-90)+"px"; this.tip.style.top="8px";
+    clearTimeout(this._ft); this._ft=setTimeout(()=>this.hideTip(),1400);
+  }
+
+  redrawAll(){ this.size(); this.drawGrid(); this.drawSpec(); this.drawCurve(); }
+}
+
+// 同一帧的参数回调只触发一次雾化渲染；SC/Post 各有独立画布，未变化的面板直接复用。
+let fogFrame=0;
+function requestEQOverflow(){
+  if(fogFrame)return;
+  fogFrame=requestAnimationFrame(()=>{fogFrame=0;drawEQOverflow();});
+}
+function drawEQOverflow(){
+  if(!scPanel||!pqPanel)return;
+  const zone=document.getElementById("eqzone"),zr=zone.getBoundingClientRect();
+  if(zr.width<1||zr.height<1)return;
+  const W=Math.max(1,zr.width|0),H=Math.max(1,zr.height|0),dpr=Math.min(2,window.devicePixelRatio||1);
+  const steps=12,range=224,band=range/steps;
+  for(const p of [scPanel,pqPanel]){
+    if(!p._fogDirty)continue;
+    if(!p.W||!p.H){p.size();if(!p.W||!p.H)continue;}
+    p._fogDirty=false;
+    const cv=p.overflow,pw=(W*dpr)|0,ph=(H*dpr)|0;
+    if(cv.__pw!==pw||cv.__ph!==ph){cv.width=pw;cv.height=ph;cv.__pw=pw;cv.__ph=ph;}
+    const c=cv.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,W,H);
+    const r=p.curve.getBoundingClientRect(),ox=r.left-zr.left,oy=r.top-zr.top;
+    const R=p.dbr(),[pt,pb]=p.plot(),edge=p.isSC?pb:pt,Y=db=>dy(db,p.H,R,pt,pb);
+    const clampY=y=>p.isSC?Math.max(edge,Math.min(edge+range,y)):Math.max(edge-range,Math.min(edge,y));
+    const dim=p.wrap.closest(".eqsec").classList.contains("inactive")?.22:1;
+    const fog=(fns,style,width)=>{
+      if(!fns.length)return;
+      const paths=Array.from({length:steps},()=>new Path2D()),used=Array(steps).fill(false);
+      for(const fn of fns){
+        let px=0,py=clampY(Y(fn(xf(0,p.W))));
+        for(let x=3;;x+=3){
+          const xx=Math.min(x,p.W),yy=clampY(Y(fn(xf(xx,p.W))));
+          const d=p.isSC?(py+yy)*.5-edge:edge-(py+yy)*.5;
+          if(d>0&&d<range){
+            const k=Math.min(steps-1,(d/band)|0);
+            paths[k].moveTo(ox+px,oy+py);paths[k].lineTo(ox+xx,oy+yy);used[k]=true;
+          }
+          px=xx;py=yy;if(xx>=p.W)break;
+        }
+      }
+      for(let k=0;k<steps;k++){
+        if(!used[k])continue;
+        c.save();
+        c.filter=k===0?"none":`blur(${(0.4+k*0.55).toFixed(2)}px)`;
+        c.globalAlpha=dim*Math.pow(1-k/steps,1.15);
+        c.strokeStyle=style;c.lineWidth=width;c.lineCap="round";c.lineJoin="round";
+        c.stroke(paths[k]);c.restore();
+      }
+    };
+    fog(p.bands.filter(bd=>p.isActive(bd)).map(bd=>f=>p.bandMagAt(bd,f)),
+        p.isSC?"rgba(255,92,138,.22)":"rgba(67,217,196,.22)",1);
+    fog([f=>p.totalMagAt(f)],p.acc,2);
+
+    // 节点中心仍停在增益极限，但圆点和数字的越界半部必须完整显示。
+    const edgeY=oy+edge;
+    c.save();c.beginPath();
+    if(p.isSC)c.rect(0,edgeY,W,Math.max(0,H-edgeY));else c.rect(0,0,W,Math.max(0,edgeY));
+    c.clip();
+    for(const bd of p.bands){
+      const active=p.isActive(bd),x=ox+fx(sv(bd.fF),p.W),y=oy+Y(Math.max(-R,Math.min(R,p.nodeGain(bd))));
+      c.globalAlpha=dim*(active?1:.5);c.beginPath();c.arc(x,y,active?6.5:5,0,7);c.fillStyle=p.acc;c.fill();
+      c.fillStyle="#16181d";c.font="bold 9.5px Inter";c.textAlign="center";c.textBaseline="middle";c.fillText(bd.idx,x,y);
+    }
+    c.restore();
+  }
+}
+
+// ====================================================================
+//  bootstrap
+// ====================================================================
+dropdown(document.getElementById("sgMode"),"driveMode",["CLASSIC","HARMONIC","SCHRANZ"]);
+dropdown(document.getElementById("sgType"),"driveType",["TANH","TUBE","TAPE"]);
+dropdown(document.getElementById("sgOs"),"osFactor",["2X","4X","8X","16X","32X"],"down");
+dropdown(document.getElementById("sgLimOs"),"limiterOs",["2X","4X","8X","16X"],"down");
+dropdown(document.getElementById("sgLimMode"),"protectMode",["OFF","CLIP","MODERN","TRUE PEAK"]);
+dropdown(document.getElementById("sgMS"),"msMode",["ST","MID","SIDE","M/S"]);
+
+knob(document.getElementById("kIn"),"inGain","INPUT",fDb0,"var(--sc)",0);
+knob(document.getElementById("kDrive"),"drive","DRIVE",f2,"var(--sc)",0);
+knob(document.getElementById("kEvenOdd"),"evenOdd","EVEN/ODD",v=>Math.abs(v)<0.05?"BAL":(v<0?"E "+Math.round(-v*100):"O "+Math.round(v*100)),"var(--amber)",0);
+knob(document.getElementById("kMix"),"mix","HARMONICS",fPct,"var(--sc)",1);
+knob(document.getElementById("kHGain"),"harmGain","HARM GAIN",fDb0,"var(--amber)",0);
+knob(document.getElementById("kDeEmph"),"deEmph","DE-EMPH",fPct,"var(--amber)",1);
+knob(document.getElementById("kAir"),"airProtect","AIR PROTECT",v=>v>=19500?"OFF":fHz(v),"var(--pq)",20000);
+knob(document.getElementById("kOut"),"outGain","OUTPUT",fDb0,"var(--pq)",0);
+recolorKnob(document.getElementById("kIn"),"var(--sc)");
+recolorKnob(document.getElementById("kDrive"),"var(--sc)");
+recolorKnob(document.getElementById("kEvenOdd"),"var(--amber)");
+recolorKnob(document.getElementById("kMix"),"var(--sc)");
+recolorKnob(document.getElementById("kHGain"),"var(--amber)");
+recolorKnob(document.getElementById("kAir"),"var(--pq)");
+recolorKnob(document.getElementById("kDeEmph"),"var(--amber)");
+recolorKnob(document.getElementById("kOut"),"var(--pq)");
+
+boolBtn(document.getElementById("bSolo"),"harmSolo","act");
+boolBtn(document.getElementById("bAutoGain"),"autoGain","act");
+
+// OFF and CLIP do not use limiter oversampling.
+{
+  const modeSt = S("protectMode");
+  const osHost = document.getElementById("sgLimOs");
+  const osItem = osHost.closest(".dditem") || osHost;
+  const limHost = document.getElementById("sgLimMode");
+  const sync = () => {
+    const raw = modeSt.getNormalisedValue();
+    const idx = Number.isFinite(raw) ? Math.round(raw * 3) : 1;
+    const disabled = idx <= 1;
+    limHost.classList.toggle("off", idx === 0);
+    limHost.classList.toggle("on", idx > 0);
+    osItem.classList.toggle("disabled", disabled);
+    if (disabled)
+      document.querySelectorAll(".ddmenu").forEach(m => m.style.display = "none");
+  };
+  modeSt.valueChangedEvent.addListener(sync);
+  modeSt.propertiesChangedEvent.addListener(sync);
+  sync();
+}
+
+// MODE decides which EQ section is inside the signal path:
+//   Classic  -> SC EQ never runs (it only feeds the harmonic extractor)
+//   Harmonic -> both sections active
+//   Schranz  -> SC EQ IS the output; POST EQ sits after the early-out
+{
+  const mS = S("driveMode");
+  const applyMode = () =>
+  {
+    const m = Math.round(nz(mS) * 2);
+    document.getElementById("secSC").classList.toggle("inactive", m === 0);
+    document.getElementById("secPQ").classList.toggle("inactive", m === 2);
+    // Schranz bypasses the saturator: these knobs have no signal path.
+    for (const id of ["kDrive", "kEvenOdd", "kMix", "kHGain", "kDeEmph", "kAir"])
+      document.getElementById(id).classList.toggle("disabled", m === 2);
+    // ...and its oversampling module is shut down in the DSP as well.
+    document.getElementById("sgOs").closest(".dditem").classList.toggle("disabled", m === 2);
+    if(scPanel&&pqPanel){scPanel._fogDirty=pqPanel._fogDirty=true;requestEQOverflow();}
+  };
+  mS.valueChangedEvent.addListener(applyMode);
+  mS.propertiesChangedEvent.addListener(applyMode);
+  applyMode();
+}
+
+document.getElementById("bInit").addEventListener("click",e=>{NF("applyInit")();e.target.blur();});
+
+// PRESET: Factory / User submenus read from Overteon.vst3/Contents/presets.
+// Mouse wheel over the trigger cycles through the combined list.
+{
+  const btn=document.getElementById("bPresets");
+  const menu=document.getElementById("presetMenu");
+  const subs={Factory:document.getElementById("pmFactory"),User:document.getElementById("pmUser")};
+  const closeMenu=()=>menu.classList.remove("open");
+  let pool=[], cur=-1;
+
+  const fill=data=>{
+    pool=[];
+    for(const [folder,host] of Object.entries(subs)){
+      host.innerHTML="";
+      const list=(data&&data[folder])||[];
+      if(!list.length){
+        const d=el("div","pempty",host);
+        d.textContent="(EMPTY)";
+      }
+      for(const name of list){
+        pool.push([folder,name]);
+        const idx=pool.length-1;
+        const b=el("button","pitem",host);
+        b.textContent=name;
+        b.addEventListener("click",()=>{closeMenu();cur=idx;btn.textContent=name;NF("loadPresetAt")(folder,name);});
+      }
+    }
+    if(cur>=pool.length) cur=-1;
+  };
+
+  const fetchList=async()=>{
+    try{
+      const raw=await NF("listPresets")();
+      fill(typeof raw==="string"?JSON.parse(raw):raw);
+    }catch(_){fill(null);}
+  };
+
+  btn.addEventListener("click",async e=>{
+    e.stopPropagation();
+    const open=menu.classList.toggle("open");
+    if(open) await fetchList();
+    btn.blur();
+  });
+
+  btn.addEventListener("wheel",async e=>{
+    e.preventDefault();
+    if(!pool.length) await fetchList();
+    if(!pool.length) return;
+    const dir=e.deltaY>0?1:-1;
+    if(cur<0) cur=dir>0?0:pool.length-1;
+    else cur=(cur+dir+pool.length)%pool.length;
+    btn.textContent=pool[cur][1];
+    NF("loadPresetAt")(pool[cur][0],pool[cur][1]);
+  },{passive:false});
+
+  document.addEventListener("pointerdown",e=>{
+    if(menu.classList.contains("open")&&!menu.contains(e.target)&&e.target!==btn)
+      closeMenu();
+  });
+  document.getElementById("pmImport").addEventListener("click",()=>{closeMenu();NF("loadPreset")();});
+  document.getElementById("pmExport").addEventListener("click",()=>{closeMenu();NF("savePreset")(btn.textContent);});
+  window.__JUCE__.backend.addEventListener("presetName",n=>{btn.textContent=n;});
+}
+
+scPanel=new EQPanel("sc","var(--sc)");
+pqPanel=new EQPanel("pq","var(--pq)");
+scPanel._fogDirty=pqPanel._fogDirty=true;requestEQOverflow();
+
+// header composite meter: OUT bars (upper, pink) / IN bars (lower, teal) + HARM ring
+const mdb=v=>Math.max(0,Math.min(1,(v+60)/60));
+const hArc=document.getElementById("hArc"),hPct=document.getElementById("hPct");
+const levelChans=["OL","OR","IL","IR"].map(id=>{
+  const bar=document.getElementById("b"+id),trail=document.getElementById("p"+id);
+  return {key:id.toLowerCase(),bar,trail,cap:document.getElementById("c"+id),
+          len:trail.getTotalLength(),p:0,holdUntil:0,last:performance.now()};
+});
+const scGlass=document.querySelector("#secSC .controlpit"),pqGlass=document.querySelector("#secPQ .controlpit");
+function drawLevel(ch,v,now){
+  const level=mdb(v),dt=Math.min(.1,Math.max(0,(now-ch.last)/1000));
+  ch.last=now;
+  if(level>=ch.p){ch.p=level;ch.holdUntil=now+1100;} // 创新高，重新保持 1.1 秒
+  else if(now>ch.holdUntil)ch.p=Math.max(level,ch.p-dt*.18); // 随后约 10.8 dB/秒回落
+  ch.bar.setAttribute("stroke-dashoffset",100*(1-level));
+  ch.trail.setAttribute("stroke-dashoffset",100*(1-ch.p));
+  const tip=ch.trail.getPointAtLength(ch.len*ch.p);
+  ch.cap.setAttribute("cx",tip.x);ch.cap.setAttribute("cy",tip.y);
+  ch.cap.setAttribute("opacity",ch.p>.002?".95":"0");
+}
+// green plateau -> steep ramp to amber -> amber plateau -> steep ramp to red -> red plateau;
+// the last 3% switches to a hot bright red with a glow.
+function harmColor(f){
+  const G=[35,236,215],A=[240,162,59],R=[250,60,127],X=[255,42,68];
+  const mix=(a,b,t)=>a.map((v,i)=>Math.round(v+(b[i]-v)*t));
+  if(f>=0.97)return X;
+  if(f<0.45)return G;
+  if(f<0.60)return mix(G,A,(f-0.45)/0.15);
+  if(f<0.75)return A;
+  if(f<0.88)return mix(A,R,(f-0.75)/0.13);
+  return R;
+}
+window.__JUCE__.backend.addEventListener("meter",d=>{
+  // pathLength=100 让瞬时条与 Peak Hold 尾条共用同一几何。
+  const now=performance.now();
+  for(const ch of levelChans)drawLevel(ch,d[ch.key],now);
+  // 上方梅红光跟随 OUT，下方青绿光跟随 IN；平方响应让低电平更克制。
+  const outLight=Math.max(mdb(d.ol),mdb(d.or)),inLight=Math.max(mdb(d.il),mdb(d.ir));
+  scGlass.style.setProperty("--light",(outLight*outLight).toFixed(3));
+  pqGlass.style.setProperty("--light",(inLight*inLight).toFixed(3));
+  // Schranz bypasses the saturator, so the harmonic ratio is undefined.
+  if(Math.round(nz(S("driveMode"))*2)===2){
+    hArc.setAttribute("stroke-dashoffset",0);
+    hArc.setAttribute("stroke","#ff2a44");
+    hArc.style.filter="drop-shadow(0 0 6px #ff2a44)";
+    hPct.textContent="N/A";
+    hPct.setAttribute("fill","#ff2a44");
+    return;
+  }
+  const f=Math.max(0,Math.min(1,((d.hm??-100)+48)/48));
+  const c=harmColor(f);
+  hArc.setAttribute("stroke-dashoffset",100*(1-f));
+  hArc.setAttribute("stroke",`rgb(${c[0]},${c[1]},${c[2]})`);
+  hArc.style.filter=f>=0.97?"drop-shadow(0 0 4px #ff2a44)":"";
+  hPct.textContent=Math.round(f*100)+"%";
+  hPct.setAttribute("fill",f>=0.97?"#ff2a44":"#e7ebf2");
+});
+
+// spectrum -> feed the post-eq panel (output spectrum). The sidechain panel
+// shows the same source faintly; cheap single FFT shared.
+window.__JUCE__.backend.addEventListener("spectrum",arr=>{
+  for(let i=0;i<128&&i<arr.length;i++){
+    pqPanel.spectrum[i]=arr[i];
+    scPanel.spectrum[i]=arr[i]*0.85;
+  }
+  pqPanel.drawSpec();
+  scPanel.drawSpec();
+});
+
+// ---- layout zoom + resize ----
+function fit(){
+  const z=Math.min(window.innerWidth/1040, window.innerHeight/772);
+  document.body.style.zoom=z; window.__fitZ=z;
+}
+function redraw(){ scPanel.redrawAll(); pqPanel.redrawAll(); }
+fit(); redraw();
+window.addEventListener("resize",()=>{fit();redraw();});
+setTimeout(()=>{fit();redraw();},120);
+setTimeout(()=>{fit();redraw();},400);
+setTimeout(()=>{fit();redraw();},1000);
+let rc=0; setInterval(()=>{fit(); if(rc++%2===0) redraw();},1500);
+
+// spacebar guard
+for(const ev of ["keydown","keyup"])
+  window.addEventListener(ev,e=>{if(e.code==="Space"){e.preventDefault();e.stopPropagation();}},true);
+
+// dismiss menus on outside click
+document.addEventListener("pointerdown",e=>{
+  if(!e.target.closest(".ctxmenu")){scPanel.menu.style.display="none";pqPanel.menu.style.display="none";}
+  if(!e.target.closest(".rangebadge,.rangemenu"))document.querySelectorAll(".rangemenu").forEach(m=>m.style.display="none");
+  if(!e.target.closest(".ddwrap"))document.querySelectorAll(".ddmenu").forEach(m=>m.style.display="none");
+});
+
+// ---- about modal ----
+{
+  const ab=document.getElementById("about");
+  ab.querySelector("img").src=getBackendResourceAddress("eonun_logo.png");
+  document.getElementById("logo").addEventListener("click",()=>{ab.style.display="flex";});
+  document.getElementById("abClose").addEventListener("click",()=>{ab.style.display="none";});
+  document.getElementById("abSite").addEventListener("click",()=>{NF("openExternal")("https://eonun-official.github.io");});
+  ab.addEventListener("pointerdown",e=>{if(e.target===ab)ab.style.display="none";});
+  window.addEventListener("keydown",e=>{if(e.key==="Escape")ab.style.display="none";});
+}
+
+</script>
+</body></html>
