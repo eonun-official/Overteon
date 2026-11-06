@@ -477,6 +477,10 @@ void OvEqView::paint (QPainter* g)
     g->setRenderHint (QPainter::SmoothPixmapTransform, true);
     g->drawImage (QRectF (0, 0, w, h), m_content,
                   QRectF (0, 0, m_content.width(), m_content.height()));
+
+    // Tell the seam glass that this half changed.  Queued by the receiver, so
+    // this cannot re-enter paint() and spin.
+    emit contentChanged();
 }
 
 void OvEqView::paintContent (QPainter* g, double w, double h,

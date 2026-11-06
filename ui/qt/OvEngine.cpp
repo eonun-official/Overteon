@@ -93,6 +93,12 @@ void OvEngine::tick()
     // Only notify on a real change.  Emitting unconditionally 30x a second
     // made both EQ plots repaint even with identical data, and each repaint
     // re-renders the plot and runs the glow blur.
+    //
+    // The threshold below is in display units, 0..1 over the plot's 85 dB
+    // range, and the plot is ~900 px wide with 128 bins — one bin is about
+    // 7 px, so 0.004 (0.34 dB) cannot move a pixel.  It was 0.0005, which the
+    // FFT of a moving signal exceeds on almost every poll, so the plots
+    // repainted at the full 30 Hz for changes nobody could see.
     if ((++m_tickCount % 2) == 0)
     {
         float spec[128];
@@ -102,7 +108,7 @@ void OvEngine::tick()
         for (int i = 0; i < 128; ++i)
         {
             const double v = (double) spec[i];
-            if (std::abs (m_spectrum.at (i).toDouble() - v) > 0.0005)
+            if (std::abs (m_spectrum.at (i).toDouble() - v) > 0.004)
             {
                 m_spectrum[i] = v;
                 changed = true;

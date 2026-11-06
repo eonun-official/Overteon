@@ -7,10 +7,12 @@
 //  It therefore cannot be painted by either OvEqView on its own: this item
 //  takes the rendered image of both and blurs them together.
 //
-//  Same construction as FrostEngine in web_fx/index.html: dual-Kawase
-//  pyramid, saturate(.85), the .018 veil, and the CSS
+//  Same construction as FrostEngine in web_fx/index.html: half-resolution
+//  capture, 7-tap dual Gaussian, saturate(.85), the .018 veil, and the CSS
 //  mask-image: radial-gradient(ellipse at center, #000 0%, #000 45%,
-//  transparent 78%) applied as a destination-in fade.
+//  transparent 78%) applied as a destination-in fade.  All of it lives in
+//  OvFrost, shared with the control pits so the three glass surfaces cannot
+//  drift apart.
 // ============================================================
 #include <QQuickPaintedItem>
 #include <QImage>
@@ -39,6 +41,10 @@ signals:
     void viewsChanged();
 
 private:
+    void attach (OvEqView*);
+    void scheduleRebuild();
+
     OvEqView* m_top = nullptr;
     OvEqView* m_bottom = nullptr;
+    bool m_scheduled = false;
 };

@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstdio>
 #include <chrono>
+#include <complex>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -103,30 +105,62 @@ public:
 
     OvMeters meters() const override
     {
-        const double t = frozen ? 1.0 : now();
+        renderTo (frozen ? 1.0 : now());
+
         OvMeters m;
-        // rise-and-fall envelope (6 s) so the peak hold is observable
-        const double env = 0.5 + 0.5 * std::sin (t * 2.0 * 3.14159265 / 6.0);
-        const double in = -34.0 + 26.0 * env + 1.5 * std::sin (t * 4.7);
-        m.inL  = (float) in;
-        m.inR  = (float) (in - 1.7 + 0.8 * std::sin (t * 1.3));
-        m.outL = (float) (in + 0.6);
-        m.outR = (float) (m.inR + 0.6);
-        m.harm = (float) (-14.0 + 3.0 * std::sin (t * 0.6));
+        // Peak of the last block, not a fabricated number: the bar length is
+        // driven by the samples that were actually generated.
+        auto peakDb = [&] (int offset)
+        {
+            float pk = 0.0f;
+            for (int i = 0; i < kBlock; ++i)
+            {
+                const int idx = (m_ringPos - kBlock + i + offset + kFft * 2) % kFft;
+                pk = std::max (pk, std::abs (m_ring[(size_t) idx]));
+            }
+            return 20.0f * std::log10 (std::max (pk, 1e-6f));
+        };
+
+        m.inL  = peakDb (0);
+        m.inR  = peakDb (0);        // mono mock: L and R carry the same signal
+        m.outL = peakDb (0);
+        m.outR = peakDb (0);
+
+        // Stand-in for the plug-in's harmonic/dry ratio: the real one comes out
+        // of the DSP, which the preview does not link.  Swept with the same LFO
+        // as the signal so the ring ramps along with the level.
+        m.harm = (float) (-40.0 + 40.0 * m_lfo);
         return m;
     }
 
     void spectrum (float* dst, int n) override
     {
-        const double t = frozen ? 1.0 : now();
+        renderTo (frozen ? 1.0 : now());
+
+        // A real FFT of the generated audio, mapped to log bins exactly as
+        // OvJuceSource::spectrum() does, so the spectrum shows the square
+        // wave's own harmonic series (60 Hz, 180, 300, 420 ...) instead of a
+        // drawn-on curve.
+        for (int i = 0; i < kFft; ++i)
+        {
+            const int idx = (m_ringPos + i) % kFft;
+            const double w = 0.5 - 0.5 * std::cos (2.0 * kPi * i / (kFft - 1));  // Hann
+            m_fft[(size_t) i] = std::complex<float> ((float) (m_ring[(size_t) idx] * w), 0.0f);
+        }
+        fft (m_fft);
+
+        const float fsr = (float) sampleRate();
         for (int i = 0; i < n; ++i)
         {
-            const double x = (double) i / (double) (n - 1);
-            double v = 0.55 * std::exp (-std::pow ((x - 0.32) / 0.24, 2.0))
-                     + 0.30 * std::exp (-std::pow ((x - 0.72) / 0.18, 2.0))
-                     + 0.10 * (0.5 + 0.5 * std::sin (t * 3.0 + x * 9.0));
-            v *= 0.92 + 0.08 * std::sin (t * 5.0 + x * 40.0);
-            dst[i] = (float) std::clamp (v, 0.0, 1.0);
+            const float frac = (float) i / (float) std::max (1, n - 1);
+            const float fr   = 20.0f * std::pow (1000.0f, frac);      // 20 Hz .. 20 kHz
+            const int   bin  = std::clamp ((int) (fr / fsr * (float) kFft), 0, kFft / 2);
+
+            const float re = m_fft[(size_t) bin].real();
+            const float im = m_fft[(size_t) bin].imag();
+            const float mag = 2.0f * std::sqrt (re * re + im * im) / (float) kFft;
+            const float db  = 20.0f * std::log10 (std::max (mag, 1e-7f));
+            dst[i] = std::clamp ((db + 85.0f) / 85.0f, 0.0f, 1.0f);
         }
     }
 
@@ -134,6 +168,98 @@ public:
     int driveModeIndex() const override { return 1; }
 
 private:
+    // ----------------------------------------------------------------
+    //  The mock SIGNAL.
+    //
+    //  A 60 Hz square-wave bass whose amplitude is swept by a 0.25 Hz LFO,
+    //  generated as real samples and then analysed — the meters read the peak
+    //  of what was generated and the spectrum is an FFT of it.  Nothing is
+    //  drawn from a formula, so the spectrum shows the square wave's actual
+    //  harmonic series and the bars respond to the same signal a real input
+    //  would give them.
+    //
+    //  Why a square: it steps between two exact levels instead of gliding, so
+    //  the peak-hold trail and its cap dot can be seen holding on a value and
+    //  then jumping, which is exactly what they do with real program material.
+    // ----------------------------------------------------------------
+    static constexpr int    kFft   = 2048;
+    static constexpr int    kBlock = 1024;
+    static constexpr double kPi    = 3.14159265358979323846;
+    static constexpr double kSigHz = 60.0;      // the bass
+    static constexpr double kLfoHz = 0.25;      // 4 s sweep
+
+    mutable std::vector<float>            m_ring = std::vector<float> (kFft, 0.0f);
+    mutable int                           m_ringPos = 0;
+    mutable double                        m_phase = 0.0;   // sample phase, 0..1
+    mutable double                        m_lfoPhase = 0.0;
+    mutable double                        m_lfo = 0.5;
+    mutable double                        m_generatedUntil = -1.0;
+    mutable std::vector<std::complex<float>> m_fft = std::vector<std::complex<float>> (kFft);
+
+    /// Generate every sample between the last call and `t` into the ring
+    /// buffer.  Called from both meters() and spectrum(), so whichever the
+    /// engine polls first advances the signal and the other sees the result.
+    void renderTo (double t) const
+    {
+        if (m_generatedUntil < 0.0) { m_generatedUntil = t; return; }
+        if (t <= m_generatedUntil) return;
+
+        const double dt = std::min (t - m_generatedUntil, 0.25);   // cap a stall
+        m_generatedUntil = t;
+
+        const double fs = sampleRate();
+        const int n = std::min (int (dt * fs), kFft);
+        const double dPhase = kSigHz / fs;
+        const double dLfo   = kLfoHz / fs;
+
+        for (int i = 0; i < n; ++i)
+        {
+            m_phase += dPhase;
+            if (m_phase >= 1.0) m_phase -= 1.0;
+            m_lfoPhase += dLfo;
+            if (m_lfoPhase >= 1.0) m_lfoPhase -= 1.0;
+
+            m_lfo = 0.5 + 0.5 * std::sin (2.0 * kPi * m_lfoPhase);
+
+            // amplitude in the audio domain: -42 dB .. -6 dB peak
+            const double db   = -42.0 + 36.0 * m_lfo;
+            const double amp  = std::pow (10.0, db / 20.0);
+            const double sq   = m_phase < 0.5 ? 1.0 : -1.0;    // 50 % duty square
+            m_ring[(size_t) m_ringPos] = (float) (amp * sq);
+            m_ringPos = (m_ringPos + 1) % kFft;
+        }
+    }
+
+    /// In-place iterative radix-2 FFT (Cooley-Tukey).
+    static void fft (std::vector<std::complex<float>>& a)
+    {
+        const int n = (int) a.size();
+        for (int i = 1, j = 0; i < n; ++i)
+        {
+            int bit = n >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) std::swap (a[(size_t) i], a[(size_t) j]);
+        }
+        for (int len = 2; len <= n; len <<= 1)
+        {
+            const double ang = -2.0 * kPi / len;
+            const std::complex<float> wl (float (std::cos (ang)), float (std::sin (ang)));
+            for (int i = 0; i < n; i += len)
+            {
+                std::complex<float> w (1.0f, 0.0f);
+                for (int k = 0; k < len / 2; ++k)
+                {
+                    const auto u = a[(size_t) (i + k)];
+                    const auto v = a[(size_t) (i + k + len / 2)] * w;
+                    a[(size_t) (i + k)] = u + v;
+                    a[(size_t) (i + k + len / 2)] = u - v;
+                    w *= wl;
+                }
+            }
+        }
+    }
+
     struct Row
     {
         std::string id, label;

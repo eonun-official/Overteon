@@ -70,6 +70,13 @@ public:
     /// other half's.  Null until the view has painted once.
     QImage contentImage() const { return m_content; }
 
+    /// Emitted right after m_content has been re-rendered.  OvSeamFrost listens
+    /// to this: without it the seam glass never learns that the plots changed,
+    /// so it paints once while m_content is still null and then sits blank
+    /// forever.  (Measured: 0 px of the seam strip differed between a run with
+    /// the glass and one with ONYXTEON_NOFROST, while the control pits — which
+    /// repaint from their own paint() — differed by 15936 px.)
+
     /// Two-pass separable Gaussian (the "dual Gaussian": one horizontal, one
     /// vertical convolution), sigma in item pixels, plus CSS saturate().
     /// Shared with OvSeamFrost so both glass surfaces match.
@@ -86,6 +93,8 @@ public:
     void hoverLeaveEvent (QHoverEvent*) override;
 
 signals:
+    /// m_content was just re-rendered; the seam glass has to rebuild.
+    void contentChanged();
     void engineChanged();
     void prefixChanged();
     void accentChanged();
