@@ -9,6 +9,7 @@
 
 #include <QGuiApplication>
 #include <QQuickView>
+#include <QQmlContext>
 #include <QQuickWindow>
 #include <QScreen>
 #include <QTimer>

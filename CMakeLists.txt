@@ -115,6 +115,10 @@ juce_add_binary_data(FxWebAssets
         web_fx/eonun_logo.png
         web_fx/edix.otf)
 
+# Declared before first use: both the web-browser feature flags below and the
+# FxWebEditor exclusion depend on it, and CMake reads variables in order.
+option(OVERTEON_QT_UI "Build the Qt6/QML editor instead of the WebView one" ON)
+
 # The WebView editor needs the platform web engine; the Qt editor does not, and
 # requiring it would also force the WebView2 NuGet package on a cross-build.
 if(OVERTEON_QT_UI)
@@ -145,8 +149,16 @@ juce_add_plugin(HarmonicInjector
     PRODUCT_NAME "OnyxTEON")
 
 target_sources(HarmonicInjector PRIVATE
-    src/FxProcessor.cpp
-    src/FxWebEditor.cpp)
+    src/FxProcessor.cpp)
+
+# FxWebEditor implements the JUCE WebBrowserComponent editor.  With the Qt
+# editor enabled JUCE_WEB_BROWSER is 0, so juce::WebBrowserComponent does not
+# exist and this file cannot compile.  Keep it in the source list (so IDE and
+# WebView builds still see it) but tell CMake not to compile it.
+if(OVERTEON_QT_UI)
+    set_source_files_properties(src/FxWebEditor.cpp PROPERTIES
+        HEADER_FILE_ONLY TRUE)
+endif()
 
 # ---------------------------------------------------------------------------
 #  Qt6 / QML editor
@@ -154,8 +166,6 @@ target_sources(HarmonicInjector PRIVATE
 #  The DSP, parameters and host integration stay JUCE; only the editor is Qt.
 #  OVERTEON_QT_UI=OFF falls back to the WebView editor.
 # ---------------------------------------------------------------------------
-option(OVERTEON_QT_UI "Build the Qt6/QML editor instead of the WebView one" ON)
-
 if(OVERTEON_QT_UI)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets)
 
@@ -253,14 +263,24 @@ if(NOT WIN32)
     set(OVERTEON_UNIXLIKE TRUE)
 endif()
 
+# JUCE_WEB_BROWSER=1 pulls juce::WebBrowserComponent in, which on Linux means
+# gtk/webkit2gtk headers.  The Qt editor does not need any of that, so the flag
+# has to follow OVERTEON_QT_UI -- otherwise a Qt build still demands the
+# webkit2gtk-4.1 dev package.
+if(OVERTEON_QT_UI)
+    set(OVERTEON_WEB_BROWSER 0)
+else()
+    set(OVERTEON_WEB_BROWSER 1)
+endif()
+
 target_compile_definitions(HarmonicInjector PUBLIC
-    JUCE_WEB_BROWSER=1
+    JUCE_WEB_BROWSER=${OVERTEON_WEB_BROWSER}
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
     $<$<NOT:$<PLATFORM_ID:Windows>>:BUILD_UNIXLIKE=1>
-    $<$<PLATFORM_ID:Windows>:JUCE_USE_WIN_WEBVIEW2=1>
-    $<$<PLATFORM_ID:Windows>:JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1>)
+    $<$<AND:$<PLATFORM_ID:Windows>,$<NOT:$<BOOL:${OVERTEON_QT_UI}>>>:JUCE_USE_WIN_WEBVIEW2=1>
+    $<$<AND:$<PLATFORM_ID:Windows>,$<NOT:$<BOOL:${OVERTEON_QT_UI}>>>:JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1>)
 
 target_link_libraries(HarmonicInjector
     PRIVATE
