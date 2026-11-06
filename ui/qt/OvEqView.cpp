@@ -1054,7 +1054,19 @@ void OvEqView::paintFrost (QPainter* g, const QImage& content,
     if (std::getenv ("ONYXTEON_NOFROST") != nullptr) return;
     if (content.isNull()) return;
 
-    const double dpr = content.devicePixelRatio() > 0 ? content.devicePixelRatio() : 1.0;
+    // The content image is in DEVICE pixels but is deliberately left untagged
+    // (tagging it made the blit scale the scene twice).  Its ratio therefore
+    // has to be derived from its size, not read from devicePixelRatio(), which
+    // is 1.0 here.
+    //
+    // Reading 1.0 was a real bug on a HiDPI display: the strip was copied from
+    // row `h - 32` of a 434-row image that holds 1.302x as many rows, so the
+    // sample sat ~70 device rows too high and the glass showed a blurred
+    // ghost of the EQ curve and the spectrum — a "reflection" of the curve
+    // hanging under the plot.
+    const double dpr = (w > 0.0 && content.width() > 0)
+                           ? content.width() / w
+                           : 1.0;
 
     // ---- control pit geometry -------------------------------------------
     //   .controlpit{ width:640px; height:32px; left:50% }

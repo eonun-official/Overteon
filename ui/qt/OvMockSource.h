@@ -130,7 +130,16 @@ public:
         // Stand-in for the plug-in's harmonic/dry ratio: the real one comes out
         // of the DSP, which the preview does not link.  Swept with the same LFO
         // as the signal so the ring ramps along with the level.
-        m.harm = (float) (-40.0 + 40.0 * m_lfo);
+        //
+        // The LFO is evaluated from the absolute time, exactly as the page's
+        // mock does.  Reading the sample-phase LFO instead made the ring
+        // disagree with the page at any pinned instant: the generator primes
+        // its ring from t - 2048/48000, so at t = 1.0 its phase has advanced
+        // 0.011 of a cycle while the page's has advanced 0.25, and the ring
+        // showed amber where the page showed the hot red of a 100 % reading.
+        const double tt = frozen ? 1.0 : now ();
+        const double lfoAbs = 0.5 + 0.5 * std::sin (2.0 * kPi * kLfoHz * tt);
+        m.harm = (float) (-40.0 + 40.0 * lfoAbs);
         return m;
     }
 

@@ -138,17 +138,31 @@ string mockBackendScript ()
   const emit = (eventId, payload) =>
     window.__JUCE__.backend.emitByBackend(eventId, JSON.stringify(payload));
 
-  // JUCE: convertFrom0to1 uses pow(norm, 1/skew)
-  const scaledOf = (p) =>
-    Math.pow(p.norm, 1 / p.skew) * (p.hi - p.lo) + p.lo;
+  // JUCE: convertFrom0to1 uses pow(norm, 1/skew).
+  //
+  // A CHOICE parameter carries no lo/hi/skew - C() only stores its choices
+  // and default - so the float formula produced NaN for every combo box and the page
+  // fell back to its own zero.  That is why driveMode arrived as Classic (so
+  // the sidechain section drew itself inactive), and why every EQ type and
+  // range was wrong while the mock's table said otherwise.  A combo box's
+  // value is its INDEX, which is also what ComboBoxState in JUCE expects.
+  const isChoice = (p) => p.kind === "c";
+  const choiceCount = (p) => p.choices.length;
 
-  const propsOf = (p) => ({
-    eventType: "propertiesChanged",
-    start: p.lo, end: p.hi, skew: p.skew,
-    name: p.id, label: p.id,
-    numSteps: p.kind === "c" ? p.choices.length - 1 : 100,
-    interval: 0, parameterIndex: 0,
-  });
+  const valueOfParam = (p) => isChoice (p)
+      ? Math.max (0, Math.min (choiceCount (p) - 1, Math.round (p.norm * (choiceCount (p) - 1))))
+      : Math.pow(p.norm, 1 / p.skew) * (p.hi - p.lo) + p.lo;
+
+  const propsOf = (p) => isChoice (p)
+      ? ({ eventType: "propertiesChanged",
+           start: 0, end: choiceCount (p) - 1, skew: 1,
+           name: p.id, label: p.id,
+           numSteps: choiceCount (p) - 1,
+           interval: 0, parameterIndex: 0 })
+      : ({ eventType: "propertiesChanged",
+           start: p.lo, end: p.hi, skew: p.skew,
+           name: p.id, label: p.id, numSteps: 100,
+           interval: 0, parameterIndex: 0 });
 
   const functions = ["applyInit", "savePreset", "loadPreset", "listPresets",
                      "loadPresetAt", "openExternal"];
@@ -186,12 +200,17 @@ string mockBackendScript ()
 
       if (payload.eventType === "requestInitialUpdate") {
         emit(eventId, propsOf(p));
-        emit(eventId, { eventType: "valueChanged", value: scaledOf(p) });
+        emit(eventId, { eventType: "valueChanged", value: valueOfParam(p) });
       } else if (payload.eventType === "valueChanged") {
-        // the page sends SCALED values (SliderState.setNormalisedValue)
-        const lin = (payload.value - p.lo) / (p.hi - p.lo);
-        p.norm = Math.pow(Math.min(1, Math.max(0, lin)), p.skew);
-        emit(eventId, { eventType: "valueChanged", value: scaledOf(p) });
+        if (isChoice (p)) {
+          // a combo box sends its index
+          p.norm = Math.max (0, Math.min (1, payload.value / (choiceCount (p) - 1)));
+        } else {
+          // a slider sends the SCALED value (SliderState.setNormalisedValue)
+          const lin = (payload.value - p.lo) / (p.hi - p.lo);
+          p.norm = Math.pow(Math.min(1, Math.max(0, lin)), p.skew);
+        }
+        emit(eventId, { eventType: "valueChanged", value: valueOfParam(p) });
       }
     },
     initialisationData: {
@@ -216,6 +235,24 @@ string mockBackendScript ()
   // Qt capture taken with ONYXTEON_T can be compared against the same instant.
   const FROZEN  = /[?&]freeze=1/.test(location.search);
   const mT      = /[?&]t=([0-9.]+)/.exec(location.search);
+
+  // ?pq1Freq=595&pq1Gain=-7.2 sets parameters by name, the same way the Qt
+  // preview's --set does.  Without this a comparison could only ever run the
+  // defaults, and the defaults are all 0 dB — a flat curve tests nothing.
+  (function applyUrlParams () {
+    const qs = location.search.replace(/^[?]/, "").split("&");
+    for (const kv of qs) {
+      const i = kv.indexOf("=");
+      if (i < 0) continue;
+      const k = decodeURIComponent(kv.slice(0, i));
+      const v = parseFloat(decodeURIComponent(kv.slice(i + 1)));
+      const p = P[k];
+      if (!p || !isFinite(v)) continue;
+      p.target = p.norm = (p.kind === "c")
+          ? Math.max(0, Math.min(1, Math.round(v) / (p.choices.length - 1)))
+          : Math.pow(Math.max(0, Math.min(1, (v - p.lo) / (p.hi - p.lo))), p.skew);
+    }
+  })();
   const PINNED  = FROZEN ? 1.0 : (mT ? parseFloat(mT[1]) : null);
 
   const SR = 48000, BLOCK = 1024, FFTN = 2048;
@@ -295,6 +332,23 @@ string mockBackendScript ()
     return out;
   }
 
+  // ?debug=1: report the state the CSS actually sees.  Without this, "the
+  // glow looks weaker than the Qt build" cannot be told apart from "the glow
+  // is switched off" — the pit is then just blur plus the .018 veil.
+  const DEBUG = /[?&]debug=1/.test(location.search);
+  function reportDebug () {
+    const el = document.querySelector("#secPQ .controlpit");
+    if (!el) return;
+    const cs = getComputedStyle(el, "::before");
+    const out = {
+      light: el.style.getPropertyValue("--light"),
+      beforeOpacity: cs.opacity,
+      beforeBackground: cs.backgroundImage.slice(0, 60),
+      clip: cs.clipPath || cs.webkitClipPath,
+    };
+    el.setAttribute("data-probe", JSON.stringify(out));
+  }
+
   const t0 = performance.now();
   setInterval(() => {
     const t = (PINNED !== null) ? PINNED : (performance.now() - t0) / 1000;
@@ -303,6 +357,7 @@ string mockBackendScript ()
     const lfo = 0.5 + 0.5 * Math.sin(2 * Math.PI * 0.25 * (t % 4));
     emit("meter", { il: pk, ir: pk, ol: pk, or: pk, hm: -40 + 40 * lfo });
     emit("spectrum", spectrumBins());
+    if (DEBUG) reportDebug();
 
     // ease towards the target so UI changes never jump
     for (const id in P) {
@@ -310,7 +365,7 @@ string mockBackendScript ()
       if (Math.abs(p.norm - p.target) > 1e-4) {
         p.norm += (p.target - p.norm) * 0.2;
         emit("__juce__slider" + id,
-             { eventType: "valueChanged", value: scaledOf(p) });
+             { eventType: "valueChanged", value: valueOfParam(p) });
       }
     }
   }, 33);

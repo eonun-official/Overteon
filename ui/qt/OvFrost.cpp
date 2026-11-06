@@ -207,20 +207,40 @@ QImage composite (const QImage& capture, double w, double h, double dpr,
                  QRectF (0, 0, blurred.width(), blurred.height()));
 
     // ---- .controlpit::before — accent glow tied to the meter -------------
+    //
+    //   .controlpit.top::before{
+    //     background: radial-gradient(ellipse 70% 160% at 50% 0%,
+    //                 accent .36 0%, accent .13 38%, accent 0 78%);
+    //     opacity: var(--light) }
+    //
+    // "ellipse 70% 160%" means rx = 0.70 * width and ry = 1.60 * height — in
+    // this 640x32 box a 448x51 ellipse, not a circle.  It was drawn as a
+    // circle of radius 0.42*w, so it was both too narrow (269 instead of 448)
+    // and far too tall for the strip, and the last stop was at 100 % where the
+    // CSS finishes at 78 %, so the falloff was stretched as well.
     if (p.accent.isValid() && p.light > 0.001)
     {
+        const double rx = w * 0.70;
+        const double ry = h * 1.60;
         const double cx = w / 2.0;
         const double cy = (p.shape == Shape::TrapTop) ? 0.0 : h;
-        const double rad = w * 0.42;
-        QRadialGradient gr (QPointF (cx, cy), rad);
-        const double a = p.light * 0.36;          // light is already squared
+
+        g.save();
+        g.translate (cx, cy);
+        g.scale (rx, ry);                     // unit circle -> the CSS ellipse
+        QRadialGradient gr (QPointF (0, 0), 1.0);
+        const double a = p.light * 0.36;      // light is already squared
         QColor c0 = p.accent; c0.setAlphaF (std::clamp (a, 0.0, 1.0));
-        QColor c1 = p.accent; c1.setAlphaF (std::clamp (a * 0.36, 0.0, 1.0));
+        QColor c1 = p.accent; c1.setAlphaF (std::clamp (a * (0.13 / 0.36), 0.0, 1.0));
         QColor c2 = p.accent; c2.setAlphaF (0.0);
         gr.setColorAt (0.00, c0);
         gr.setColorAt (0.38, c1);
+        gr.setColorAt (0.78, c2);             // CSS finishes here, not at 100 %
         gr.setColorAt (1.00, c2);
-        g.fillRect (QRectF (0, 0, w, h), gr);
+        g.setPen (Qt::NoPen);
+        g.setBrush (gr);
+        g.drawRect (QRectF (-1, -1, 2, 2));
+        g.restore();
     }
 
     // ---- rgba(255,255,255,.018) veil -------------------------------------
@@ -228,18 +248,34 @@ QImage composite (const QImage& capture, double w, double h, double dpr,
                 QColor (255, 255, 255, int (std::lround (p.veil * 255.0))));
 
     // ---- mask-image, seam only -------------------------------------------
+    //
+    //   mask-image: radial-gradient(ellipse at center,
+    //               #000 0%, #000 45%, transparent 78%)
+    //
+    // ELLIPSE, not a circle.  A QRadialGradient is circular, so drawing it at
+    // radius max(w,h)/2 (=275 in a 550x68 box) left the vertical direction
+    // only 34/275 = 12 % of the ramp used: the mask never reached its 45 %
+    // stop vertically, so the top and bottom edges stayed fully opaque and the
+    // glass looked like a hard-edged rectangle.
+    //
+    // The gradient is therefore drawn in a unit circle and the painter is
+    // scaled to the box, which is what the CSS ellipse is: radii w/2 and h/2
+    // (farthest-corner from the centre).
     if (p.shape == Shape::Ellipse)
     {
         g.setCompositionMode (QPainter::CompositionMode_DestinationIn);
-        QRadialGradient m (QPointF (w / 2.0, h / 2.0),
-                           std::max (w, h) * 0.5);
+        g.save();
+        g.translate (w / 2.0, h / 2.0);
+        g.scale (w / 2.0, h / 2.0);
+        QRadialGradient m (QPointF (0, 0), 1.0);
         m.setColorAt (0.00, QColor (0, 0, 0, 255));
         m.setColorAt (0.45, QColor (0, 0, 0, 255));
         m.setColorAt (0.78, QColor (0, 0, 0, 0));
         m.setColorAt (1.00, QColor (0, 0, 0, 0));
         g.setPen (Qt::NoPen);
         g.setBrush (m);
-        g.drawRect (QRectF (0, 0, w, h));
+        g.drawRect (QRectF (-1, -1, 2, 2));
+        g.restore();
     }
 
     return out;
