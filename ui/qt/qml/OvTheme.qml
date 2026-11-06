@@ -22,7 +22,12 @@ QtObject {
     // design space: #wrap is 1040 x 772 in the CSS
     readonly property real designW: 1040
     readonly property real designH: 772
-    readonly property real deckH:   110
+    // Measured off the reference render, not guessed: in web_fx/index.html the
+    // deck's top border sits on row 666 of the 772-tall design, so the EQ zone
+    // is 666 px and the deck is 106.  It was 110 here, which made every EQ plot
+    // 2 px shorter than the page: the plot rect, the dB grid, the ruler labels
+    // and the curve all sat a few pixels off.
+    readonly property real deckH:   106
     readonly property real headerH: 56
     readonly property real barH:    32
     readonly property real pitW:    640

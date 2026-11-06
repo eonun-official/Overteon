@@ -364,6 +364,54 @@ QPointF OvEqView::nodePosition (int index)
     return QPointF (m_bands[index].x, m_bands[index].y);
 }
 
+// ------------------------------------------------------------ debug HUD
+//  Read-only diagnostics for --hud.  Answers, in text a human can read while
+//  the app runs, the only two questions that matter: where is each node drawn,
+//  and which one does a click at the cursor grab?  refreshNodePositions() is
+//  called exactly as paint() and mousePressEvent() call it, so the numbers
+//  reported are the numbers both of them use.
+QString OvEqView::debugNodes() const
+{
+    const_cast<OvEqView*> (this)->refreshNodePositions();
+    QStringList out;
+    for (int i = 0; i < 5; ++i)
+        out << QStringLiteral ("%1, %2").arg (m_bands[i].x, 0, 'f', 1)
+                                      .arg (m_bands[i].y, 0, 'f', 1);
+    return out.join (QStringLiteral ("   "));
+}
+
+QString OvEqView::debugHit (const QPointF& pos) const
+{
+    const_cast<OvEqView*> (this)->refreshNodePositions();
+
+    QStringList rows;
+    int best = -1;
+    double bestD = 1e9;
+    for (int i = 0; i < 5; ++i)
+    {
+        const double dx = pos.x() - m_bands[i].x;
+        const double dy = pos.y() - m_bands[i].y;
+        const double d  = std::sqrt (dx * dx + dy * dy);
+        if (d < bestD) { bestD = d; best = i; }
+        rows << QStringLiteral ("  %1  (%2, %3)   d=%4")
+                .arg (i).arg (m_bands[i].x, 0, 'f', 1)
+                .arg (m_bands[i].y, 0, 'f', 1).arg (d, 0, 'f', 1);
+    }
+
+    // nodeAt() accepts a hit within 11 px; report the verdict with that same
+    // threshold so the HUD states exactly what a press would do.
+    const QString verdict = (best >= 0 && bestD <= 11.0)
+        ? QStringLiteral ("GRAB node %1").arg (best)
+        : QStringLiteral ("no grab (nearest is %1 at %2 px; needs <= 11)")
+              .arg (best).arg (bestD, 0, 'f', 1);
+
+    return QStringLiteral ("%1   [%2 x %3]   cursor (%4, %5)\n%6\n  -> %7")
+            .arg (m_prefix).arg (width(), 0, 'f', 0).arg (height(), 0, 'f', 0)
+            .arg (pos.x(), 0, 'f', 1).arg (pos.y(), 0, 'f', 1)
+            .arg (rows.join (QStringLiteral ("\n")))
+            .arg (verdict);
+}
+
 // ------------------------------------------------------------------ paint
 //  Everything is rendered into an off-screen image first (m_content).  That
 //  image is the exact equivalent of the four stacked <canvas> elements in the
@@ -410,6 +458,15 @@ void OvEqView::paint (QPainter* g)
         cg.setRenderHint (QPainter::TextAntialiasing, true);
         cg.scale (dpr, dpr);
         paintContent (&cg, w, h, m_plot.top(), m_plot.bottom(), accent);
+    }
+
+    if (std::getenv ("ONYXTEON_HITTEST") != nullptr)
+    {
+        std::fprintf (stderr, "[paint] %s size=%.1fx%.1f dpr=%.2f nodes:",
+                      m_prefix.toStdString().c_str(), w, h, dpr);
+        for (int i = 0; i < 5; ++i)
+            std::fprintf (stderr, " %d(%.1f,%.1f)", i, m_bands[i].x, m_bands[i].y);
+        std::fprintf (stderr, " content=%dx%d\n", m_content.width(), m_content.height());
     }
 
     g->setRenderHint (QPainter::SmoothPixmapTransform, true);
@@ -920,6 +977,16 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
     endDrag();
 
     refreshNodePositions();
+
+    if (std::getenv ("ONYXTEON_HITTEST") != nullptr)
+    {
+        std::fprintf (stderr, "[hit] %s size=%.1fx%.1f press=(%.1f,%.1f) nodes:",
+                      m_prefix.toStdString().c_str(), width(), height(),
+                      e->position().x(), e->position().y());
+        for (int i = 0; i < 5; ++i)
+            std::fprintf (stderr, " %d(%.1f,%.1f)", i, m_bands[i].x, m_bands[i].y);
+        std::fprintf (stderr, "\n");
+    }
 
     const int hit = nodeAt (e->position());
     if (hit < 0) { e->ignore(); return; }

@@ -29,6 +29,11 @@ import tempfile
 import time
 
 import numpy as np
+
+# px_diff noise floor: identical builds differ by a pixel or two of text
+# antialiasing, so "0 px exactly" is not a usable bar.
+NOISE_PX = 8
+NOISE_D = 6
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -191,13 +196,40 @@ def capture_window(display, out, pid=None):
         return None
     env = dict(os.environ, DISPLAY=display)
     wid = ids[-1]
+    # Delete first: `import` leaves the previous file in place when it fails,
+    # and then os.path.exists() is true for a stale image.  Two identical
+    # stale captures read as "0 px changed" — the UI was reported as frozen
+    # while it was animating at 62 fps.
+    for f in (out, out + ".tmp.png"):
+        try: os.unlink(f)
+        except OSError: pass
     r = subprocess.run(["import", "-window", wid, out], env=env,
                        capture_output=True, text=True)
-    return out if os.path.exists(out) else None
+    if r.returncode != 0 or not os.path.exists(out):
+        return None
+    return out
+
+
+def raise_window(display, pid):
+    """Bring the preview to the top before measuring.
+
+    An obscured window is not exposed, and Qt stops rendering while it is not
+    exposed — so a capture of a window that is merely *covered* reads as zero
+    changes and the UI looks frozen while it is running normally.  Measured:
+    0 px changed while covered, 83523 px once raised.
+    """
+    ids = find_windows_by_pid(display, pid) if pid else find_windows(display)
+    if not ids:
+        return False
+    env = dict(os.environ, DISPLAY=display)
+    return subprocess.run(["wmctrl", "-ia", ids[-1]], env=env,
+                          capture_output=True).returncode == 0
 
 
 def frame_activity(display, seconds=3.0, samples=4, pid=None):
     """Pixels that change between captures — 0 means the UI is frozen."""
+    raise_window(display, pid)
+    time.sleep(0.3)
     a_path = os.path.join(RUN, "fa.png")
     changed = []
     prev = None
@@ -276,14 +308,16 @@ def main():
     a, b = shots_from_exe(args.size)
     det = px_diff(a, b)
     results["deterministic"] = det
-    ok = det.get("changed") == 0
+    # A handful of pixels at a tiny delta is antialiasing noise on text edges
+    # (the same build twice differs by ~1 px at max 3), not a style change.
+    ok = det.get("changed", 1) <= NOISE_PX and det.get("max_delta", 99) <= NOISE_D
     print(f"  {'PASS' if ok else 'FAIL'}  same build rendered twice: "
           f"{det.get('changed')} px differ (max {det.get('max_delta')})")
 
     if args.ref:
         ref = px_diff(args.ref, a)
         results["vs_reference"] = ref
-        ok = ref.get("changed") == 0
+        ok = ref.get("changed", 1) <= NOISE_PX and ref.get("max_delta", 99) <= NOISE_D
         print(f"  {'PASS' if ok else 'FAIL'}  vs {os.path.basename(args.ref)}: "
               f"{ref.get('changed')} px differ (max {ref.get('max_delta')})")
 

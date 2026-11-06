@@ -57,6 +57,15 @@ public:
     /// the geometry from the current parameter values.
     Q_INVOKABLE QPointF nodePosition (int index);
 
+    /// Debug HUD support (--hud).  Given a point in this item's own
+    /// coordinates, report where every node really is and which one a click
+    /// there would grab.  One line per node plus a verdict, so a human can see
+    /// for themselves that the hit-test and the drawing agree.
+    Q_INVOKABLE QString debugHit (const QPointF& pos) const;
+
+    /// Node centres as "x,y" pairs, for the HUD.
+    Q_INVOKABLE QString debugNodes() const;
+
     /// The last rendered plot image; OvSeamFrost blurs it together with the
     /// other half's.  Null until the view has painted once.
     QImage contentImage() const { return m_content; }

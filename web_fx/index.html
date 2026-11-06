@@ -216,6 +216,12 @@ canvas{display:block}
 body.frostjs .frostcanvas{display:block}
 body.frostjs #hdr::before{-webkit-backdrop-filter:none;backdrop-filter:none;background:transparent}
 body.frostjs .controlpit::after{-webkit-backdrop-filter:none;backdrop-filter:none;background:transparent}
+/* ?nofrost=1 drops the canvas frost AND the CSS fallback, so a capture shows
+   exactly what is underneath with no blur of any kind.  Without this the
+   browser still applies backdrop-filter and the reference has a soft band
+   across the seam that the comparison then blames on the other renderer. */
+body.nofrost .frostcanvas{display:none}
+body.nofrost #hdr::before,body.nofrost .controlpit::after{-webkit-backdrop-filter:none;backdrop-filter:none;background:transparent}
 #hdrFrost{z-index:1}
 .controlpit .frostcanvas{z-index:0;left:0;top:0;width:100%;height:100%}
 /* the glass sits under the controls (.pitcontrols has z-index:1), exactly like
@@ -2209,7 +2215,8 @@ document.getElementById("bInit").addEventListener("click",e=>{NF("applyInit")();
   // reference Gaussian.
   const noFrost = /[?&]nofrost=1/.test(location.search);
   if (!noFrost) document.body.classList.add("frostjs");
-  else console.log("[frost] disabled by ?nofrost=1");
+  else { document.body.classList.add("nofrost");
+         console.log("[frost] disabled by ?nofrost=1 (canvas and CSS fallback)"); }
 
   if (!noFrost) Frost.add(document.getElementById("scFrost"), {
     sources: () => scC,

@@ -21,6 +21,9 @@
 
 #include <QApplication>
 #include <QGuiApplication>
+#include <QCursor>
+#include <QLabel>
+#include <QVBoxLayout>
 #include <QQuickView>
 #include <QQuickWindow>
 #include <QQuickItem>
@@ -54,6 +57,9 @@
 
 namespace
 {
+    /// #wrap in web_fx/index.html: every layout number is derived from it.
+    constexpr double OvThemeDesignW = 1040.0;
+
     // ---- compatibility mode ------------------------------------------------
     //
     //  Qt Quick's own window does not present under wine: the scene renders
@@ -189,6 +195,9 @@ int main (int argc, char** argv)
     bool sizeGiven = false;
     QString shot, customQml;
     int shotDelay = 1200;
+    bool hud = false;             // --hud: separate read-out window
+    QPointF probe (-1, -1);       // --probe x,y: ask the hit-test about a point
+                                  // without moving the real pointer
     bool compat = wine || qEnvironmentVariableIsSet ("ONYXTEON_COMPAT");
     QStringList presets;          // id=value pairs, applied before the first frame
 
@@ -221,6 +230,15 @@ int main (int argc, char** argv)
         else if (a == "--no-compat")
         {
             compat = false;
+        }
+        else if (a == "--hud")
+        {
+            hud = true;
+        }
+        else if (a == "--probe" && i + 1 < argc)
+        {
+            const auto xy = QString::fromLatin1 (argv[++i]).split (QLatin1Char (','));
+            if (xy.size() == 2) probe = QPointF (xy[0].toDouble(), xy[1].toDouble());
         }
         else if (a == "--freeze")
         {
@@ -369,6 +387,46 @@ int main (int argc, char** argv)
             prm->setValue (val);
     }
 
+    // Does the node end up where the cursor went?  This is the "the place I can
+    // drag it and the node itself are not together" complaint, asked as a
+    // number: press on a node, move to a known point, and compare the node's
+    // resulting position with that point.
+    if (std::getenv ("ONYXTEON_DRAGFOLLOW") != nullptr)
+    {
+        QTimer::singleShot (900, [&] {
+            OvEqView* v = nullptr;
+            for (auto* c : view.rootObject()->findChildren<OvEqView*>())
+                if (c->prefix() == QStringLiteral ("sc")) v = c;
+            if (v == nullptr) { std::fprintf (stderr, "[follow] no view\n"); app->quit(); return; }
+
+            std::fprintf (stderr, "[follow] view %gx%g\n", v->width(), v->height());
+            for (int i = 0; i < 5; ++i)
+            {
+                const QPointF start = v->nodePosition (i);
+                const QPointF goal  = start + QPointF (37.0, -26.0);
+
+                auto send = [&] (QEvent::Type t, QPointF p, Qt::MouseButton b,
+                                 Qt::MouseButtons held) {
+                    QMouseEvent m (t, p, p, p, b, held, Qt::NoModifier);
+                    QCoreApplication::sendEvent (v, &m);
+                };
+                send (QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+                send (QEvent::MouseMove, goal, Qt::NoButton, Qt::LeftButton);
+                send (QEvent::MouseButtonRelease, goal, Qt::LeftButton, Qt::NoButton);
+
+                const QPointF now = v->nodePosition (i);
+                const double dx = now.x() - goal.x(), dy = now.y() - goal.y();
+                const double off = std::hypot (dx, dy);
+                std::fprintf (stderr,
+                    "[follow] node %d  start (%6.1f,%6.1f)  goal (%6.1f,%6.1f)"
+                    "  got (%6.1f,%6.1f)  off %5.2f px  %s\n",
+                    i, start.x(), start.y(), goal.x(), goal.y(),
+                    now.x(), now.y(), off, off <= 1.0 ? "PASS" : "FAIL");
+            }
+            app->quit();
+        });
+    }
+
     // Regression harness for the stuck-drag bug: press in empty space, then
     // move with no button held.  No node may move.
     if (std::getenv ("ONYXTEON_DRAGTEST2") != nullptr)
@@ -433,8 +491,151 @@ int main (int argc, char** argv)
 
     view.resize (w, h);
 
+    // Declared out here on purpose: the block below only shows the view for
+    // the duration of the setup, and a holder declared inside it would destroy
+    // the debug window the moment the block ended (it did, and the window
+    // never appeared).
+    std::unique_ptr<QWidget> hudWin;
+
+    // Window-level event trace (ONYXTEON_HITTEST): every press the QQuickWindow
+    // receives, plus the item Qt finds under it.  This separates "the window
+    // never got the click" from "an item above the plot swallowed it".
+    if (std::getenv ("ONYXTEON_HITTEST") != nullptr)
+    {
+        struct Trace : QObject
+        {
+            QQuickWindow* w;
+            explicit Trace (QQuickWindow* win) : w (win) {}
+            bool eventFilter (QObject*, QEvent* e) override
+            {
+                if (e->type() != QEvent::MouseButtonPress) return false;
+                auto* me = static_cast<QMouseEvent*> (e);
+                const QPointF p = me->position();
+                QStringList hits;
+                for (QQuickItem* it = w->contentItem()->childAt (p.x(), p.y());
+                     it != nullptr; it = it->parentItem())
+                    hits << QStringLiteral ("%1[%2]")
+                            .arg (it->objectName().isEmpty()
+                                      ? QString::fromLatin1 (it->metaObject()->className())
+                                      : it->objectName())
+                            .arg (it->isEnabled() ? "on" : "off");
+                std::fprintf (stderr, "[win] press (%.1f,%.1f) -> %s\n",
+                              p.x(), p.y(),
+                              hits.isEmpty() ? "(nothing)" : hits.join ('/').toStdString().c_str());
+                return false;
+            }
+        };
+        view.installEventFilter (new Trace (&view));
+    }
+
     {
         view.show();
+
+        // ---- --hud: a separate, unscaled read-out window ----------------
+        //  A label next to the UI that says, live, where each EQ node is
+        //  drawn and which node a click at the cursor would grab.  This
+        //  replaces guessing from screenshots: the numbers are the same ones
+        //  paint() and mousePressEvent() use.
+        if (hud)
+        {
+            auto* win = new QWidget (nullptr, Qt::Tool | Qt::WindowStaysOnTopHint);
+            win->setWindowTitle (QStringLiteral ("OnyxTEON hit-test"));
+            win->setStyleSheet (QStringLiteral (
+                "QWidget{background:#16181d;color:#e7ebf2}"
+                "QLabel{font-family:monospace;font-size:11px;color:#e7ebf2}"
+                "QLabel#head{color:#4a525f}"));
+            auto* lay = new QVBoxLayout (win);
+            lay->setContentsMargins (10, 8, 10, 8);
+            auto* st = new QLabel (win);
+            st->setObjectName ("head");
+            auto* body = new QLabel (win);
+            body->setTextFormat (Qt::PlainText);
+            lay->addWidget (st);
+            lay->addWidget (body);
+            win->resize (430, 190);
+            win->show();
+            hudWin.reset (win);
+
+            // Track the cursor by polling, not by an event filter.  A filter
+            // on the QQuickWindow never fired for motion that had already been
+            // routed to a QML item, and a HUD that says "move the cursor" while
+            // the cursor is moving is worse than useless.
+            // Everything below is in WINDOW coordinates.  Mixing item-local
+            // sizes with window-space points is what made the first version of
+            // this HUD report nonsense, and it is the same mistake that makes a
+            // hit-test look "offset" from the drawing.
+            auto views = view.rootObject()
+                             ? view.rootObject()->findChildren<OvEqView*> ()
+                             : QList<OvEqView*> ();
+
+            auto* tick = new QTimer (win);
+            tick->setInterval (40);       // 25 Hz is plenty for reading text
+            QObject::connect (tick, &QTimer::timeout,
+                              [&view, views, body, st, &probe] {
+                const QPointF winPos = (probe.x() >= 0)
+                                       ? probe
+                                       : QPointF (view.mapFromGlobal (QCursor::pos()));
+
+                OvEqView* hot = nullptr;
+                QRectF hotRect;
+                QStringList rows;
+                for (auto* v : views)
+                {
+                    const QPointF a = v->mapToScene ({0, 0});
+                    const QPointF b = v->mapToScene ({v->width(), v->height()});
+                    const QRectF r (a, b);
+                    rows << QStringLiteral ("  %1: local %2x%3   screen %4,%5-%6,%7")
+                            .arg (v->prefix().isEmpty() ? QStringLiteral ("?")
+                                                        : v->prefix())
+                            .arg (v->width(), 0, 'f', 0).arg (v->height(), 0, 'f', 0)
+                            .arg (r.left(), 0, 'f', 0).arg (r.top(), 0, 'f', 0)
+                            .arg (r.right(), 0, 'f', 0).arg (r.bottom(), 0, 'f', 0);
+                    if (hot == nullptr && r.contains (winPos)) { hot = v; hotRect = r; }
+                }
+
+                const QString qmlGeom = view.rootObject()
+                        ? view.rootObject()->property ("geomText").toString()
+                        : QStringLiteral ("(no qml)");
+                st->setText (QStringLiteral ("window %1x%2   dpr %3   cursor (%4, %5)\n%6\n%7")
+                             .arg (view.width()).arg (view.height())
+                             .arg (view.devicePixelRatio(), 0, 'f', 2)
+                             .arg (winPos.x(), 0, 'f', 0).arg (winPos.y(), 0, 'f', 0)
+                             .arg (qmlGeom)
+                             .arg (rows.join (QStringLiteral ("\n"))));
+
+                if (hot == nullptr)
+                { body->setText (QStringLiteral ("\ncursor is outside both plots")); return; }
+
+                // nodes in WINDOW coordinates, so these numbers are literally
+                // where the disc is on screen
+                const double scale = hotRect.width() / std::max (1.0, hot->width());
+                QStringList nl;
+                int best = -1;
+                double bestD = 1e9;
+                for (int i = 0; i < 5; ++i)
+                {
+                    const QPointF n = hot->nodePosition (i);
+                    const QPointF w = hot->mapToScene (n);
+                    const double d = std::hypot (w.x() - winPos.x(), w.y() - winPos.y());
+                    if (d < bestD) { bestD = d; best = i; }
+                    nl << QStringLiteral ("  %1 (%2, %3)  d=%4")
+                            .arg (i).arg (w.x(), 0, 'f', 0).arg (w.y(), 0, 'f', 0)
+                            .arg (d, 0, 'f', 0);
+                }
+                const double grabR = 11.0 * scale;
+                body->setText (QStringLiteral ("\nnodes on screen (window px):\n%1\n"
+                                               "  -> %2   grab radius %3 px")
+                               .arg (nl.join (QStringLiteral ("\n")))
+                               .arg (bestD <= grabR
+                                     ? QStringLiteral ("GRAB node %1").arg (best)
+                                     : QStringLiteral ("no grab (nearest %1, %2 px)")
+                                           .arg (best).arg (bestD, 0, 'f', 0))
+                               .arg (grabR, 0, 'f', 0));
+            });
+            tick->start();
+
+            std::fprintf (stderr, "[hud] hit-test window open\n");
+        }
 
         // Prove the event loop is alive independently of the render loop: a
         // plain QTimer that fires even if nothing is ever painted.

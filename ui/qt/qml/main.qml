@@ -35,6 +35,7 @@ Item {
 
     Item {
         id: design
+        objectName: "design"
         width: OvTheme.designW
         height: OvTheme.designH
         anchors.centerIn: parent
@@ -47,6 +48,7 @@ Item {
         // --------------------------------------------------------- EQ zone
         Item {
             id: eqzone
+        objectName: "eqzone"
             x: 0
             y: 0
             width: parent.width
@@ -58,6 +60,7 @@ Item {
             // renders as a washed-out slab.
             Item {
                 id: plotLayer
+        objectName: "plotLayer"
                 anchors.fill: parent
 
                 // Do NOT set layer.enabled here.  A layered item renders its
@@ -68,6 +71,7 @@ Item {
 
                 OvEqView {
                     id: scView
+                    objectName: "scView"      // found by the --hud debug window
                     x: 0; y: 0
                     width: parent.width
                     height: parent.height / 2
@@ -80,6 +84,7 @@ Item {
 
                 OvEqView {
                     id: pqView
+                    objectName: "pqView"
                     x: 0; y: parent.height / 2
                     width: parent.width
                     height: parent.height / 2
