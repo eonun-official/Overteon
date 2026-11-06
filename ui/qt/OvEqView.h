@@ -113,6 +113,7 @@ signals:
     void hoverEnded();
 
 private:
+public:
     struct Band
     {
         double freq = 1000.0, gain = 0.0, q = 0.707;
@@ -120,6 +121,7 @@ private:
         double x = 0.0, y = 0.0;
         bool   active = false;
     };
+private:
 
     double  valueOf (const QString& id, double fallback) const;
     QString textOf (const QString& id) const;
@@ -204,6 +206,7 @@ private:
     int    m_hoverBand = -1;
 
     bool m_spectrumGate = false;
+    std::chrono::steady_clock::time_point m_glowPainted {};
     QImage m_content;        // the plot, rendered off-screen
     QImage m_unfrosted;      // the plot before paintFrost() touched it
     std::chrono::steady_clock::time_point m_lastMoveTime;
@@ -215,8 +218,10 @@ private:
     //  picture that had not changed.  They are rendered once into m_bg and
     //  blitted instead.
     QImage m_bg;
+
     QImage  m_frostLayer;   // last composited control-pit glass
     quint64 m_frostKey = 0;
+    std::chrono::steady_clock::time_point m_frostBuiltAt {};
     // Everything above the spectrum — the five band curves, the total curve and
     // its fill, the overflow fog and the five nodes.  None of it moves unless a
     // parameter or the geometry does, while the spectrum moves every poll.  It

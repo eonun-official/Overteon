@@ -159,14 +159,8 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickPaintedItem (parent)
     // it happens (that path calls update() directly), so nothing the user does
     // is limited — only the analyser display, at 60 Hz, which is where the eye
     // stops being able to tell.
-    m_repaint.setInterval (OvTiming::kFrameMs);
+    m_repaint.setInterval (OvTiming::kPlotMs);
     connect (&m_repaint, &QTimer::timeout, this, [this] {
-        if (m_spectrumGate)
-        {
-            m_spectrumGate = false;
-            return;                       // the other half of the pair
-        }
-        m_spectrumGate = true;
         const bool spectrumMoved = (m_spectrumStamp != m_lastSpectrumStamp);
         if (spectrumMoved)
         {
@@ -204,11 +198,16 @@ void OvEqView::setEngine (OvEngine* e)
         // the blur) at the meter rate cost more than the glow is worth.  The
         // glow follows on the next spectrum/parameter repaint.
         connect (m_engine, &OvEngine::metersChanged, this, [this] {
-            if (std::abs (m_engine->harm() - m_pendingGlow) > 0.06)
-            {
-                m_pendingGlow = m_engine->harm();
-                m_dirty = true;
-            }
+            // The panel's glow is a layer opacity with a 0.1 s transition in
+            // the design, so it does not need a repaint per meter tick — and
+            // each repaint re-renders a 1354x434 image and uploads 2.4 MB.
+            // 10 Hz is well inside the transition.
+            if (std::abs (m_engine->harm() - m_pendingGlow) <= 0.06) return;
+            m_pendingGlow = m_engine->harm();
+            const auto now = std::chrono::steady_clock::now();
+            if (now - m_glowPainted < std::chrono::milliseconds (100)) return;
+            m_glowPainted = now;
+            m_dirty = true;
         });
     }
     emit engineChanged();
@@ -764,21 +763,48 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
 {
     // The grid and every ruler label come from a cache; only what actually
     // moves is drawn here.
+    g->setRenderHint (QPainter::SmoothPixmapTransform, false);   // 1:1 blit
     g->drawImage (QRectF (0, 0, w, h), backgroundImage (w, h, top, bottom, accent),
                   QRectF (0, 0, m_bg.width(), m_bg.height()));
 
     OV_MARK ("spec");
     // ---- spectrum (from the engine, 0..1 over 20 Hz..20 kHz)
+    //
+    // Rendered into its own small texture by the GPU-side item and blitted
+    // here, so a spectrum-driven repaint is one image copy instead of a full
+    // re-render of the plot.  See OvSpectrum.
     {
         float spec[128];
         if (m_engine != nullptr) m_engine->source().spectrum (spec, 128);
 
-        QPainterPath sp;
-        sp.moveTo (0.0, bottom);
+        // The spectrum is 128 FFT bins across a log axis, so neighbouring bins
+        // are 20 % apart in x and a straight polyline between them reads as a
+        // staircase of square steps — and the mock's square-wave harmonics make
+        // every step a spike.  Joining the points with a Catmull-Rom spline
+        // through them keeps the peaks where they are but removes the corners.
+        double xs[128], ys[128];
         for (int i = 0; i < 128; ++i)
         {
             const double f = 20.0 * std::pow (1000.0, (double) i / 127.0);
-            sp.lineTo (toX (f, w), bottom - (double) spec[i] * (bottom - top) * 0.92);
+            xs[i] = toX (f, w);
+            ys[i] = bottom - (double) spec[i] * (bottom - top) * 0.92;
+        }
+
+        QPainterPath sp;
+        sp.moveTo (0.0, bottom);
+        sp.lineTo (xs[0], ys[0]);
+        for (int i = 0; i < 127; ++i)
+        {
+            const double x0 = (i > 0) ? xs[i - 1] : xs[0];
+            const double y0 = (i > 0) ? ys[i - 1] : ys[0];
+            const double x1 = xs[i], y1 = ys[i];
+            const double x2 = xs[i + 1], y2 = ys[i + 1];
+            const double x3 = (i + 2 < 128) ? xs[i + 2] : x2;
+            const double y3 = (i + 2 < 128) ? ys[i + 2] : y2;
+            // Catmull-Rom -> cubic Bezier
+            sp.cubicTo (QPointF (x1 + (x2 - x0) / 6.0, y1 + (y2 - y0) / 6.0),
+                        QPointF (x2 - (x3 - x1) / 6.0, y2 - (y3 - y1) / 6.0),
+                        QPointF (x2, y2));
         }
         sp.lineTo (w, bottom);
         sp.closeSubpath();
@@ -795,6 +821,7 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     OV_MARK ("overlay");
     g->drawImage (QRectF (0, 0, w, h), overlayImage (w, h, top, bottom, accent),
                   QRectF (0, 0, m_overlay.width(), m_overlay.height()));
+    g->setRenderHint (QPainter::SmoothPixmapTransform, true);
 
     OV_MARK ("frost");
 }
@@ -1190,6 +1217,25 @@ void OvEqView::paintFrost (QPainter* g, const QImage& content,
         }
         const quint64 key = acc ^ mix ^ (quint64 (m_glow * 255) << 40)
                             ^ (quint64 (w) << 48) ^ quint64 (h * 100);
+
+        // 30 Hz cap.  The spectrum underneath moves constantly, so a pure
+        // content key never hits and the glass is re-blurred on every repaint
+        // (1.5 ms of a 2.7 ms pass).  It is a backdrop: refreshing it at 30 Hz
+        // is invisible, and the key still catches every change that matters.
+        const auto nowF = std::chrono::steady_clock::now();
+        const bool stale = (nowF - m_frostBuiltAt) > std::chrono::milliseconds (33);
+        if (! stale && ! m_frostLayer.isNull())
+        {
+            g->save();
+            g->translate (strip.topLeft());
+            g->setRenderHint (QPainter::SmoothPixmapTransform, true);
+            g->drawImage (QRectF (0, 0, strip.width(), strip.height()), m_frostLayer,
+                          QRectF (0, 0, m_frostLayer.width(), m_frostLayer.height()));
+            g->restore();
+            return;
+        }
+        m_frostBuiltAt = nowF;
+
         if (key == m_frostKey && ! m_frostLayer.isNull())
         {
             g->save();

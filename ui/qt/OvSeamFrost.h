@@ -16,6 +16,7 @@
 // ============================================================
 #include <QQuickPaintedItem>
 #include <QImage>
+#include <chrono>
 
 class OvEqView;
 
@@ -47,6 +48,7 @@ private:
     OvEqView* m_top = nullptr;
     OvEqView* m_bottom = nullptr;
     bool m_scheduled = false;
+    std::chrono::steady_clock::time_point m_lastRebuild {};
     QImage  m_cache;        // last composited glass
     quint64 m_cacheKey = 0;
 };

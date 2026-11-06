@@ -44,6 +44,12 @@ void OvSeamFrost::scheduleRebuild()
     m_scheduled = true;
     QTimer::singleShot (0, this, [this] {
         m_scheduled = false;
+        // Coalesce to 30 Hz.  The plots repaint at 60 and the seam's own
+        // composite is ~0.25 ms; refreshing it faster than this only burns CPU
+        // for a surface that is already the output of a 3 px blur.
+        const auto now = std::chrono::steady_clock::now();
+        if (now - m_lastRebuild < std::chrono::milliseconds (33)) return;
+        m_lastRebuild = now;
         update();
     });
 }

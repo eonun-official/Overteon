@@ -443,6 +443,11 @@ int main (int argc, char** argv)
     // logicalDpi / 96: OvTheme.pt() divides by this so font sizes stay in
     // logical pixels on a scaled display (see OvTheme.qml).
     view.rootContext()->setContextProperty ("ovUiScale", uiScale());
+    // ONYXTEON_CPUFROST=1 forces the QImage glass instead of the GPU shaders.
+    view.rootContext()->setContextProperty (
+        "ovCpuFrost", qEnvironmentVariableIsSet ("ONYXTEON_CPUFROST"));
+    view.rootContext()->setContextProperty (
+        "ovGlassDebug", qEnvironmentVariableIsSet ("ONYXTEON_GLASSDEBUG"));
     // labelled window-coordinate grid, for reading positions off a screenshot
     view.rootContext()->setContextProperty (
         "ovRuler", qEnvironmentVariableIsSet ("ONYXTEON_RULER"));

@@ -164,7 +164,11 @@ public:
         {
             const float frac = (float) i / (float) std::max (1, n - 1);
             const float fr   = 20.0f * std::pow (1000.0f, frac);      // 20 Hz .. 20 kHz
-            const int   bin  = std::clamp ((int) (fr / fsr * (float) kFft), 0, kFft / 2);
+            // Bin 0 is DC: with a Hann window it holds the window sum, which
+            // swings as the waveform slides through the buffer.  That is what
+            // made the left edge of the spectrum twitch — 20 Hz is below one
+            // bin of a 2048-point FFT at 48 kHz, so the lowest real bin is 1.
+            const int   bin  = std::clamp ((int) (fr / fsr * (float) kFft), 1, kFft / 2);
 
             const float re = m_fft[(size_t) bin].real();
             const float im = m_fft[(size_t) bin].imag();

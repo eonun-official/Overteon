@@ -296,10 +296,16 @@ QImage composite (const QImage& capture, double w, double h, double dpr,
         g.save();
         g.translate (w / 2.0, h / 2.0);
         g.scale (w / 2.0 * kCorner, h / 2.0 * kCorner);
+        // The design's stops are 0%/45%/78%.  The glass was reading as too
+        // small, so the solid core is extended and the fade stretched: the
+        // strip is 550x68 and at 45 % the fully-opaque region was only about
+        // 350x44 of it, with everything outside fading to nothing well before
+        // the edge.  55 % / 92 % keeps the same feathered look but covers
+        // noticeably more of the strip.
         QRadialGradient m (QPointF (0, 0), 1.0);
         m.setColorAt (0.00, QColor (0, 0, 0, 255));
-        m.setColorAt (0.45, QColor (0, 0, 0, 255));
-        m.setColorAt (0.78, QColor (0, 0, 0, 0));
+        m.setColorAt (0.55, QColor (0, 0, 0, 255));
+        m.setColorAt (0.92, QColor (0, 0, 0, 0));
         m.setColorAt (1.00, QColor (0, 0, 0, 0));
         g.setPen (Qt::NoPen);
         g.setBrush (m);

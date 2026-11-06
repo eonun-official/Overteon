@@ -23,13 +23,21 @@ namespace OvTiming
 
     // Every consumer uses these; they exist so a call site reads clearly, not
     // to allow a different rate.
-    constexpr int kPlotHz   = kFrameHz;
-    constexpr int kPlotMs   = kFrameMs;
-    // The meter pod is a 550x73 surface with four strokes and a ring; its own
-    // paint costs 2 ms and its data arrives at 60 Hz, so 120 repaints a second
-    // bought nothing but CPU.  The WINDOW still presents at kFrameHz.
-    constexpr int kMeterHz  = 60;
-    constexpr int kPollHz   = kFrameHz;
+    constexpr int kPlotHz   = 30;
+    constexpr int kPlotMs   = 1000 / kPlotHz;
+    // Meter and spectrum data arrive at 33 ms in the design (the page's mock
+    // pushes `meter` and `spectrum` on a 33 ms timer), so the surfaces that
+    // only show that data are refreshed at 30 Hz.  Anything the user touches —
+    // a drag, a knob — repaints from its own signal in the frame it happens,
+    // and the WINDOW still presents at kFrameHz.  This is fidelity to the
+    // design, not a compromise: refreshing a 2.4 MB plot texture faster than
+    // its data changes only burns CPU.
+    constexpr int kMeterHz  = 30;
+    // The engine's poll runs the source's analysis — for the mock that is a
+    // 2048-point FFT.  At kFrameHz that was 120 FFTs a second to feed displays
+    // that refresh at 30, so the cost landed in the callback rather than in the
+    // paint.  60 Hz keeps host automation responsive and halves it.
+    constexpr int kPollHz   = 60;
     constexpr int kPollMs   = kFrameMs;
 }
 
