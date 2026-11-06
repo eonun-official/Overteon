@@ -60,7 +60,12 @@ Item {
     OvMeterView {
         id: pod
         width: Math.min (550, root.width * 0.55)
-        height: width * 64.0 / 480.0
+        // The art is 64/480 of the width, but its halo is a real Gaussian
+        // (stdDeviation 2.5 in viewBox units) that spills past the art — the
+        // SVG's #hpod carries overflow:visible for exactly that.  A painted
+        // item clips at its own bounds, so the item is 24 px taller at each
+        // end with the art centred inside it.
+        height: width * 64.0 / 480.0 + 48
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.verticalCenter: parent.verticalCenter
         engine: root.engine

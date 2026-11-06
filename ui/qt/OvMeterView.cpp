@@ -1,4 +1,5 @@
 #include "OvMeterView.h"
+#include "OvFrost.h"
 #include "OvEngine.h"
 #include "OvQmlTypes.h"
 
@@ -189,113 +190,88 @@ void OvMeterView::advance (double dt)
 // i.e. a blurred copy drawn UNDER the sharp graphic.  QPainter has no filter
 // pipeline, so the same result is produced by rendering the pod twice: once
 // blur-glow-only and once sharp, with the glow underneath.
-void OvMeterView::drawPod (QPainter* g, bool glowOnly)
+void OvMeterView::drawPod (QPainter* g, PodPass pass)
 {
     const double frac = m_harmFrac;
     const QColor hc = harmColor (frac);
     const QRectF ring (240 - 28, 32 - 28, 56, 56);
 
-    // In the glow pass only the strokes and the ring are drawn.  Text is
-    // skipped: a 1.7 px blur of a 7 px glyph is invisible, and rasterising
-    // it was most of the pass's cost.
-
-    // ---- static hook guides --------------------------------------------
-    g->setPen (QPen (kTrack, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    g->setBrush (Qt::NoBrush);
-    for (const auto* p : { &m_outL.path, &m_outR.path, &m_inL.path, &m_inR.path })
-        g->drawPath (*p);
-
-    // ---- harmonic ring (drawn first so the bars overlap it like the SVG)
-
-    g->setBrush (Qt::NoBrush);
-    QColor guide = QColor ("#3b4350"); guide.setAlphaF (0.07f);
-    g->setPen (QPen (guide, 3.0));
-    g->drawEllipse (ring);
-
-    // filter:url(#harmGlow) is stdDeviation 2.5 merged with the source: a
-    // soft ring a couple of pixels wide, not a fat donut
-    QColor glow = hc; glow.setAlphaF (0.12f);
-    g->setPen (QPen (glow, 6.0, Qt::SolidLine, Qt::RoundCap));
-    g->drawArc (ring, 90 * 16, -int (frac * 360.0 * 16.0));
-
-    // The design adds one more thing in the hot zone:
-    //     hArc.style.filter = f>=0.97 ? "drop-shadow(0 0 4px #ff2a44)" : "";
-    // i.e. above 97 % the ring gains a tight red halo on top of the normal
-    // glow, so "almost clipping" is visible at a glance rather than only in the
-    // colour of the 4 px stroke.
-    if (frac >= 0.97)
+    // ---- the ring:  <circle id="hArc" stroke-width="4" filter="url(#harmGlow)"/>
+    // Drawn alone in GlowRing so its halo is built from the ring only.  The old
+    // code faked this glow with 6 px and 9 px semi-transparent strokes, which is
+    // why the halo had no falloff.
+    if (pass != GlowBars)
     {
-        QColor hot ("#ff2a44"); hot.setAlphaF (0.55f);
-        g->setPen (QPen (hot, 9.0, Qt::SolidLine, Qt::RoundCap));
-        g->drawArc (ring, 90 * 16, -int (frac * 360.0 * 16.0));
-        hot.setAlphaF (0.85f);
-        g->setPen (QPen (hot, 5.0, Qt::SolidLine, Qt::RoundCap));
+        g->setBrush (Qt::NoBrush);
+
+        if (pass == Sharp)
+        {
+            QColor guide (QStringLiteral ("#3b4350"));
+            guide.setAlphaF (0.07f);
+            g->setPen (QPen (guide, 3.0));
+            g->drawEllipse (ring);
+        }
+
+        g->setPen (QPen (hc, 4.0, Qt::SolidLine, Qt::RoundCap));
         g->drawArc (ring, 90 * 16, -int (frac * 360.0 * 16.0));
     }
 
-    g->setPen (QPen (hc, 4.0, Qt::SolidLine, Qt::RoundCap));
-    g->drawArc (ring, 90 * 16, -int (frac * 360.0 * 16.0));
-
-    // ---- meter bars -----------------------------------------------------
-    // The design draws each channel as a hero stroke along the hook path,
-    // trimmed with stroke-dashoffset (stroke-width 1.8, round caps), plus a
-    // dimmer peak-hold trail, plus a small cap dot at the TRAIL's tip.
-    //
-    // Two details matter and both were wrong before:
-    //   * the path must be stroked with FLAT caps — QPainter draws round caps
-    //     on every segment of a sampled polyline, which stacks ~100 discs and
-    //     turns a 1.8 px line into a filled wedge;
-    //   * the cap dot rides the trail (peak hold), not the instantaneous bar.
-    struct Bar { const Channel* ch; QColor bright, trail; };
-    const Bar bars[] { { &m_outL, kOutBright, kOutTrail }, { &m_outR, kOutBright, kOutTrail },
-                       { &m_inL,  kInBright,  kInTrail  }, { &m_inR,  kInBright,  kInTrail  } };
-
-    for (const auto& b : bars)
+    // ---- bars + cap dots:  <g filter="url(#neon)">
+    if (pass != GlowRing)
     {
-        // stroke only: drawPath() also fills with the current brush, and a
-        // leftover brush from the ring would fill the region between the path
-        // start and the trimmed end (a solid wedge — the "right triangle")
-        g->setBrush (Qt::NoBrush);
-
-        // The design stacks three separate SVG paths with the SAME geometry and
-        // different stroke-dashoffset, so each shows only where it is longer
-        // than the one drawn after it:
-        //     trail (#p.., 2.6 px, dim)  ->  drawn first, shows the held peak
-        //     bar   (#b.., 1.8 px, bright) -> drawn over it, the live level
-        // To keep both visible the trail is drawn 2 px OFFSET above the bar
-        // (as the design's two separate paths sit on adjacent rows) — drawing
-        // them on identical geometry hides the trail completely.
-        if (b.ch->peak > 0.002)
+        // static hook guides — unfiltered in the design
+        if (pass == Sharp)
         {
-            QColor trail = b.trail;
-            trail.setAlphaF (0.85f);
-            g->setPen (QPen (trail, 2.2, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
-            g->drawPath (partial (b.ch->poly, b.ch->peak));
+            g->setPen (QPen (kTrack, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            g->setBrush (Qt::NoBrush);
+            for (const auto* p : { &m_outL.path, &m_outR.path, &m_inL.path, &m_inR.path })
+                g->drawPath (*p);
         }
 
-        // the live level
-        if (b.ch->level > 0.002)
-        {
-            g->setPen (QPen (b.bright, 1.8, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
-            g->drawPath (partial (b.ch->poly, b.ch->level));
-        }
+        struct Bar { const Channel* ch; QColor bright, trail; };
+        const Bar bars[] { { &m_outL, kOutBright, kOutTrail }, { &m_outR, kOutBright, kOutTrail },
+                           { &m_inL,  kInBright,  kInTrail  }, { &m_inR,  kInBright,  kInTrail  } };
 
-        // cap dot at the peak-hold position (design: #cOL/#cOR/#cIL/#cIR)
-        if (b.ch->peak > 0.002)
+        for (const auto& b : bars)
         {
-            const int ti = std::clamp (int (b.ch->peak * double (b.ch->poly.size() - 1)),
-                                       0, int (b.ch->poly.size()) - 1);
-            const QPointF tip = b.ch->poly[ti];
-            QColor dot = b.bright;
-            dot.setAlphaF (0.95f);
-            g->setPen (Qt::NoPen);
-            g->setBrush (dot);
-            g->drawEllipse (tip, 1.6, 1.6);
+            g->setBrush (Qt::NoBrush);
+
+            // The trails are NOT filtered in the design (their <g> has no
+            // filter), so they belong to the sharp pass only.  Including them
+            // in the halo would widen it in the wrong colour.
+            if (pass == Sharp && b.ch->peak > 0.002)
+            {
+                QColor trail = b.trail;
+                trail.setAlphaF (0.72f);          // the design's opacity=".72"
+                g->setPen (QPen (trail, 2.6, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
+                g->drawPath (partial (b.ch->poly, b.ch->peak));
+            }
+
+            if (b.ch->level > 0.002)
+            {
+                g->setPen (QPen (b.bright, 1.8, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
+                g->drawPath (partial (b.ch->poly, b.ch->level));
+            }
+
+            // cap dot at the trail's tip (design: #cOL/#cOR/#cIL/#cIR, r=1.7),
+            // inside the filtered group so it glows too
+            if (b.ch->peak > 0.002)
+            {
+                const int ti = std::clamp (int (b.ch->peak * double (b.ch->poly.size() - 1)),
+                                           0, int (b.ch->poly.size()) - 1);
+                QColor dot = b.bright;
+                dot.setAlphaF (0.95f);
+                g->setPen (Qt::NoPen);
+                g->setBrush (dot);
+                g->drawEllipse (b.ch->poly[(size_t) ti], 1.7, 1.7);
+            }
         }
     }
 
     // ---- text -----------------------------------------------------------
-    if (glowOnly) return;
+    //  The SVG draws every text element unfiltered, so it exists only in the
+    //  sharp pass.
+    if (pass != Sharp) return;
     QFont f = g->font();
     f.setFamily (QStringLiteral ("Inter"));
     f.setPixelSize (15);
@@ -365,25 +341,23 @@ void OvMeterView::paint (QPainter* g)
     // aspect and land on the same rows as the web page.
     const double sx = width() / 480.0;
 
-    // ---- glow layer (feGaussianBlur stdDeviation 1.7) -------------------
-    // The halo is only rebuilt when the pod's geometry changes (the four
-    // peaks and the harmonic ring), not when the live level moves: the glow
-    // of a 1.8 px stroke is identical for any length.  Drawing the four
-    // trimmed paths twice a frame cost 4.3 ms; this makes it a cache hit on
-    // most frames.
+    // ---- the two halos ---------------------------------------------------
+    //  <filter id="neon">     feGaussianBlur stdDeviation="1.7"  on the bars
+    //  <filter id="harmGlow"> feGaussianBlur stdDeviation="2.5"  on the ring
+    //  each merged as blurred-under-sharp.  OvFrost::dualGaussian does the
+    //  blurring, so this tree has one blur implementation everywhere.
+    //
+    //  stdDeviation is in viewBox units, so it scales by sx like the art.  The
+    //  bleed must exceed 3 sigma of the widest (2.5 * 1.146 * 3 = 8.6 px) and
+    //  the item must be taller than the art, or a painted item clips the halo
+    //  at its own bounds — the SVG uses overflow:visible for the same reason.
     if (std::getenv ("ONYXTEON_NOGLOW") == nullptr)
     {
-        const double sxr = width() / 480.0;
-        constexpr double gscale = 0.5;
-        constexpr double kBleed = 6.0;          // px of bleed, top and bottom
+        constexpr double gscale = 1.0;
+        constexpr double kBleed = 24.0;
         const int iw = std::max (1, int (std::lround (width() * gscale)));
-        const int ih = std::max (1, int (std::lround ((64.0 * sxr + 2 * kBleed) * gscale)));
+        const int ih = std::max (1, int (std::lround ((64.0 * sx + 2 * kBleed) * gscale)));
 
-        // Quantised to 1/512 of the range.  The pod is ~550 px wide, so 1/512
-        // is well under one pixel, and the finer 1/8192 key used before made
-        // the glow layer rebuild on almost every meter tick: rebuilding it
-        // cost 1.1 ms of the 2.5 ms the pod painted, which was the difference
-        // between ~93 fps and ~113 fps on a 120 Hz panel.
         const auto qk = [] (double v) { return quint64 (std::clamp (v, 0.0, 1.0) * 511.0); };
         const quint64 key = qk (m_outL.peak)
                           | (qk (m_outR.peak) << 9)
@@ -392,35 +366,52 @@ void OvMeterView::paint (QPainter* g)
                           | (qk (m_harmFrac)  << 36)
                           | (quint64 (iw * 31 + ih) << 48);
 
-        if (m_glowKey != key || m_glowBlurred.size() != QSize (iw, ih))
+        auto build = [&] (QImage& layer, QImage& blurred, PodPass pass, double sigmaCss)
         {
-            m_glowKey = key;
-            if (m_glowLayer.width() != iw || m_glowLayer.height() != ih)
-                m_glowLayer = QImage (iw, ih, QImage::Format_ARGB32_Premultiplied);
-            m_glowLayer.fill (Qt::transparent);
+            if (layer.size() != QSize (iw, ih))
+                layer = QImage (iw, ih, QImage::Format_ARGB32_Premultiplied);
+            layer.fill (Qt::transparent);
 
-            QPainter gp (&m_glowLayer);
+            QPainter gp (&layer);
             gp.setRenderHint (QPainter::Antialiasing, true);
-            // same transform as the sharp pass, plus the bleed, scaled down
             gp.translate (0.0, kBleed * gscale);
             gp.scale (sx * gscale, sx * gscale);
-            drawPod (&gp, true);
+            drawPod (&gp, pass);
+            gp.end();
 
-            // 1.7 * sx is the design's stdDeviation in item pixels; the buffer is
-            // at gscale, and the 14-tap kernel needs a little more spread to
-            // reach the same tail as a 3-sigma Gaussian.
-            m_glowBlurred = blurImage (m_glowLayer, 2.1 * sx * gscale);
+            const double sigma = sigmaCss * sx * gscale;
+            blurred = OvFrost::dualGaussian (layer, sigma);
+        };
+
+        if (m_glowKey != key || m_barsBlur.size() != QSize (iw, ih))
+        {
+            m_glowKey = key;
+            build (m_barsLayer, m_barsBlur, GlowBars, 1.7);
+
+            // The ring's filter is REPLACED in the hot zone.  The SVG carries
+            //     filter="url(#harmGlow)"                       -> stdDeviation 2.5
+            // but the script sets, above 97 %,
+            //     hArc.style.filter = "drop-shadow(0 0 4px #ff2a44)"
+            // and an inline style beats a presentation attribute, so harmGlow
+            // is not applied there at all.
+            //
+            // Measured, rather than assuming the spec's radius/2: a 4 px rect
+            // under drop-shadow(0 0 4px) has the same tail as the same rect
+            // under feGaussianBlur stdDeviation="4" —
+            //     drop-shadow  0 2 9 23 44 69 [255 255]  79 57 33 15 4 0
+            //     sd=4 blur    0 2 9 23 44 69 [ 86  89]  79 57 33 15 4 0
+            // so Chromium maps the blur radius to sigma 1:1.  The Schranz / N/A
+            // branch uses 6 px, i.e. sigma 6.
+            const double ringSigma = (m_harmFrac >= 0.97) ? 4.0 : 2.5;
+            build (m_ringLayer, m_ringBlur, GlowRing, ringSigma);
         }
 
-        // Bilinear upscale: a nearest 2x of a half-res halo shows the source
-        // pixels as blocks.  The blur is cheap enough that the extra filtering
-        // does not matter.
         g->save();
-        g->setOpacity (0.85);
         g->setRenderHint (QPainter::SmoothPixmapTransform, true);
-        g->drawImage (QRectF (0.0, (height() - 64.0 * sx) * 0.5 - kBleed,
-                              iw / gscale, ih / gscale),
-                      m_glowBlurred);
+        const QRectF halo (0.0, (height() - 64.0 * sx) * 0.5 - kBleed,
+                           iw / gscale, ih / gscale);
+        g->drawImage (halo, m_barsBlur);
+        g->drawImage (halo, m_ringBlur);
         g->restore();
     }
 
@@ -428,92 +419,6 @@ void OvMeterView::paint (QPainter* g)
     g->scale (sx, sx);
     g->setRenderHint (QPainter::Antialiasing, true);
 
-    drawPod (g, false);
+    drawPod (g, Sharp);
 }
 
-// ---------------------------------------------------------------------------
-//  Glow blur.
-//
-//  The design's filter is  feGaussianBlur stdDeviation=1.7  merged with the
-//  source.  A truncated separable Gaussian costs 2·(6σ+1) taps per pixel; at
-//  σ≈3 for a 550 px wide pod that is ~40 taps, which dropped the pod from 58
-//  to 43 fps.
-//
-//  So the glow uses the same dual-Gaussian construction as the glass
-//  (X-PostProcessing-Library's DualGaussianBlur shape: two 1-D passes over a
-//  7-tap kernel with quadratic spacing, .40/.15/.10/.05 at 0, ±1, ±2, ±6).
-//  It is 14 taps per pixel instead of 40, and for a *halo* — which is only
-//  ever seen as a soft bloom around a 1.8 px stroke — the difference is not
-//  visible.
-// ---------------------------------------------------------------------------
-QImage OvMeterView::blurImage (const QImage& src, double sigma)
-{
-    if (src.isNull() || sigma <= 0.0) return src;
-
-    QImage work = src.convertToFormat (QImage::Format_ARGB32_Premultiplied);
-    const int w = work.width(), h = work.height();
-    if (w < 2 || h < 2) return work;
-
-    // The 7-tap kernel's variance is 2·(0.15·1² + 0.10·2² + 0.05·6²)·o²
-    // = 4.70·o², so the tap offset that yields this sigma is sigma/2.168.
-    const double offset = std::max (0.35, sigma / 2.1684);
-    const int step[3] = { std::max (1, int (std::lround (offset))),
-                          std::max (1, int (std::lround (2.0 * offset))),
-                          std::max (1, int (std::lround (6.0 * offset))) };
-    constexpr double tw[3] = { 0.15, 0.10, 0.05 };
-    constexpr double centre = 0.40;
-
-    std::vector<double> tmp (size_t (w) * size_t (h) * 4);
-
-    // horizontal
-    for (int y = 0; y < h; ++y)
-    {
-        const auto* line = reinterpret_cast<const QRgb*> (work.constScanLine (y));
-        double* out = tmp.data() + size_t (y) * size_t (w) * 4;
-        for (int x = 0; x < w; ++x)
-        {
-            const QRgb c = line[x];
-            double r = qRed (c) * centre, g = qGreen (c) * centre;
-            double b = qBlue (c) * centre, a = qAlpha (c) * centre;
-            for (int k = 0; k < 3; ++k)
-            {
-                const QRgb pl = line[std::clamp (x - step[k], 0, w - 1)];
-                const QRgb pr = line[std::clamp (x + step[k], 0, w - 1)];
-                r += (qRed (pl)   + qRed (pr))   * tw[k];
-                g += (qGreen (pl) + qGreen (pr)) * tw[k];
-                b += (qBlue (pl)  + qBlue (pr))  * tw[k];
-                a += (qAlpha (pl) + qAlpha (pr)) * tw[k];
-            }
-            const size_t o = size_t (x) * 4;
-            out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
-        }
-    }
-
-    // vertical
-    for (int y = 0; y < h; ++y)
-    {
-        auto* line = reinterpret_cast<QRgb*> (work.scanLine (y));
-        for (int x = 0; x < w; ++x)
-        {
-            const double* c = tmp.data() + (size_t (y) * size_t (w) + size_t (x)) * 4;
-            double r = c[0] * centre, g = c[1] * centre;
-            double b = c[2] * centre, a = c[3] * centre;
-            for (int k = 0; k < 3; ++k)
-            {
-                const double* pu = tmp.data()
-                    + (size_t (std::clamp (y - step[k], 0, h - 1)) * size_t (w) + size_t (x)) * 4;
-                const double* pd = tmp.data()
-                    + (size_t (std::clamp (y + step[k], 0, h - 1)) * size_t (w) + size_t (x)) * 4;
-                r += (pu[0] + pd[0]) * tw[k];
-                g += (pu[1] + pd[1]) * tw[k];
-                b += (pu[2] + pd[2]) * tw[k];
-                a += (pu[3] + pd[3]) * tw[k];
-            }
-            line[x] = qRgba (int (std::clamp (r, 0.0, 255.0)),
-                             int (std::clamp (g, 0.0, 255.0)),
-                             int (std::clamp (b, 0.0, 255.0)),
-                             int (std::clamp (a, 0.0, 255.0)));
-        }
-    }
-    return work;
-}

@@ -40,14 +40,21 @@ private:
 
     /// The pod graphics.  `glowOnly` marks the pre-blur pass that produces the
     /// feGaussianBlur halo drawn underneath the sharp layer.
-    void drawPod (QPainter* g, bool glowOnly);
+    /// Which parts of the pod to draw.
+    ///
+    /// The design filters two groups with DIFFERENT amounts:
+    ///     <filter id="neon">     feGaussianBlur stdDeviation="1.7"  <- bars+dots
+    ///     <filter id="harmGlow"> feGaussianBlur stdDeviation="2.5"  <- the ring
+    /// each merged as <feMergeNode in="b"/><feMergeNode in="SourceGraphic"/>,
+    /// i.e. a blurred copy underneath the sharp one.  So the halo is built as
+    /// two separate blurred images, each from its own group.
+    enum PodPass { Sharp, GlowBars, GlowRing };
+    void drawPod (QPainter* g, PodPass pass);
 
     /// Everything the pod draws, quantised, so a repaint can be skipped when
     /// nothing moved.
     quint64 stateKey() const;
 
-    /// Separable Gaussian blur of a premultiplied ARGB image.
-    static QImage blurImage (const QImage& src, double sigma);
 
     OvEngine* m_engine = nullptr;
 
@@ -73,8 +80,9 @@ private:
     double  m_clock = 0.0;
     std::chrono::steady_clock::time_point m_last {};
     QTimer  m_timer;
-    QImage  m_glowLayer;
-    QImage  m_glowBlurred;
+    // Two halos: the design blurs two groups by different amounts.
+    QImage  m_barsLayer, m_barsBlur;
+    QImage  m_ringLayer, m_ringBlur;
     // The glow only has to be re-blurred when the pod's own pixels change;
     // re-running a separable Gaussian over the whole pod every frame cost
     // ~15 fps.
