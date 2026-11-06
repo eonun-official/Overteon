@@ -271,6 +271,8 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
         if (auto* scr = QGuiApplication::primaryScreen())
             scale = scr->logicalDotsPerInch() / 96.0;
         impl->view->rootContext()->setContextProperty ("ovUiScale", scale);
+        impl->view->rootContext()->setContextProperty (
+            "ovCpuFrost", qEnvironmentVariableIsSet ("ONYXTEON_CPUFROST"));
         impl->view->setResizeMode (QQuickView::SizeRootObjectToView);
         impl->view->setColor (QColor (0x16, 0x18, 0x1d));
         impl->view->setSource (QUrl (QStringLiteral ("qrc:/qml/main.qml")));

@@ -13,6 +13,7 @@ Item {
     property string title: "SIDECHAIN EQ"
     property int driveMode: 1
     property real meterLight: 0.0      // 0..1, drives the accent glow
+    property bool cpuFrost: false      // ONYXTEON_CPUFROST=1
 
     // .controlpit::before opacity, transition: opacity .1s linear, and the
     // CSS formula level*level*0.36
@@ -84,6 +85,23 @@ Item {
         height: OvTheme.barH
 
         readonly property real pitW: Math.min (OvTheme.pitW, width)
+
+        // GPU glass for the control pit.  The CPU path rasterised this strip
+        // into the plot's QImage on every repaint (1.0-1.5 ms); here it is four
+        // fragment passes and costs the CPU nothing.
+        OvGpuGlass {
+            visible: ! root.cpuFrost
+            x: (parent.width - bar.pitW) / 2
+            y: 0
+            width: bar.pitW
+            height: bar.height
+            source: root.view
+            ellipse: false
+            trapTop: root.headerTop
+            sigmaCss: 3.0
+            accent: root.accent
+            glow: root.meterLight * root.meterLight
+        }
 
         // The frosted glass (backdrop blur + veil + accent glow) is painted by
         // OvEqView itself, in the same image it renders the plot into — the

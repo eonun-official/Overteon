@@ -1018,7 +1018,9 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
                      QString::number (i + 1));
     }
 
-    paintFrost (g, m_content, w, h, accent);
+    // The GPU glass in QML owns this surface now unless the CPU path is forced.
+    if (std::getenv ("ONYXTEON_CPUFROST") != nullptr)
+        paintFrost (g, m_content, w, h, accent);
 }
 
 // ---------------------------------------------------------------------------

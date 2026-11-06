@@ -28,7 +28,7 @@ option(OVERTEON_PREVIEW_ONLY "Build only overteon-qml-preview (no JUCE plugin)" 
 if(OVERTEON_PREVIEW_ONLY)
     set(CMAKE_AUTOMOC ON)
     set(CMAKE_AUTORCC ON)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets ShaderTools)
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
     add_executable(overteon-qml-preview
@@ -168,7 +168,7 @@ endif()
 #  OVERTEON_QT_UI=OFF falls back to the WebView editor.
 # ---------------------------------------------------------------------------
 if(OVERTEON_QT_UI)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets ShaderTools)
 
     # HarmonicInjector was created by juce_add_plugin before this point, so
     # AUTOMOC has to be enabled on the target itself (not via CMAKE_AUTOMOC).
@@ -205,6 +205,34 @@ if(OVERTEON_QT_UI)
         endforeach()
     endif()
 
+    # ---- GPU frost shaders ------------------------------------------------
+    # Qt 6 cannot compile GLSL at run time, so the sources are baked to .qsb
+    # and shipped in their own resource bundle (rcc needs literal paths, so a
+    # ${VAR} entry in ov_ui.qrc would not work).
+    set(OVERTEON_SHADER_QSBS "")
+    foreach(_sh
+        ui/qt/shaders/blur.vert  ui/qt/shaders/blur.frag
+        ui/qt/shaders/glass.vert ui/qt/shaders/glass.frag)
+        get_filename_component(_shname ${_sh} NAME)
+        set(_qsb "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/${_shname}.qsb")
+        add_custom_command(OUTPUT ${_qsb}
+            COMMAND /usr/lib/qt6/bin/qsb --glsl 100,120,150,300es,310es,320,330,410,440
+                    -o ${_qsb} ${CMAKE_CURRENT_SOURCE_DIR}/${_sh}
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_sh}
+            COMMENT "qsb ${_shname}")
+        list(APPEND OVERTEON_SHADER_QSBS ${_qsb})
+    endforeach()
+    add_custom_target(overteon_shaders DEPENDS ${OVERTEON_SHADER_QSBS})
+
+    set(OVERTEON_SHADER_QRC "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/ov_shaders.qrc")
+    file(WRITE ${OVERTEON_SHADER_QRC}
+        "<RCC><qresource prefix=\"/shaders\">\n"
+        "  <file alias=\"blur.vert.qsb\">blur.vert.qsb</file>\n"
+        "  <file alias=\"blur.frag.qsb\">blur.frag.qsb</file>\n"
+        "  <file alias=\"glass.vert.qsb\">glass.vert.qsb</file>\n"
+        "  <file alias=\"glass.frag.qsb\">glass.frag.qsb</file>\n"
+        "</qresource></RCC>\n")
+
     # The QML + font bundle has to be compiled into every plugin binary: the
     # shared-code target is a static archive and nothing references the rcc
     # object, so a plain target_sources there would be dropped by the linker.
@@ -224,7 +252,8 @@ if(OVERTEON_QT_UI)
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp
         ui/qt/OvFrost.cpp
-        ui/qt/ov_ui.qrc)
+        ui/qt/ov_ui.qrc
+        ${OVERTEON_SHADER_QRC})
 
     target_include_directories(overteon-qml-preview PRIVATE ui/qt)
     target_link_libraries(overteon-qml-preview PRIVATE

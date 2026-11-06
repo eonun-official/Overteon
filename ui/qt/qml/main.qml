@@ -21,6 +21,9 @@ Item {
 
     property var engine: null
 
+    // ONYXTEON_CPUFROST=1 falls back to the QImage glass, for comparisons.
+    property bool cpuFrost: (typeof ovCpuFrost !== "undefined") ? ovCpuFrost : false
+
     width: 1040
     height: 772
 
@@ -114,9 +117,20 @@ Item {
                 }
             }
 
-            // #hdr::before — the elliptical frost on the seam.  It spans both
-            // plots, so it is painted from both of their images at once.
+            // #hdr::before — the elliptical frost on the seam.
+            // GPU version; OvSeamFrost (below) is the verified CPU fallback.
+            OvGpuGlass {
+                visible: ! root.cpuFrost
+                width: 550
+                height: 68
+                x: (parent.width - width) / 2
+                y: parent.height / 2 - height / 2
+                source: plotLayer
+                ellipse: true
+            }
+
             OvSeamFrost {
+                visible: root.cpuFrost
                 id: seamFrost
                 width: 550
                 height: 68
@@ -144,6 +158,7 @@ Item {
                     title: "SIDECHAIN EQ"
                     driveMode: root.driveMode
                     meterLight: root.outLight
+                    cpuFrost: root.cpuFrost
                 }
 
                 OvEqSection {
@@ -159,6 +174,7 @@ Item {
                     title: "POST EQ"
                     driveMode: root.driveMode
                     meterLight: root.inLight
+                    cpuFrost: root.cpuFrost
                 }
             }
 
