@@ -31,6 +31,24 @@ Item {
 
     // menus are plain items parented here (see OvMenu): Qt Popup would ignore
     // the design scale and appear at the wrong size and position
+    // Ground truth, straight from QML, for the --hud window: the size the
+    // root item actually got, the scale that was computed, and every plot's
+    // own geometry.  Reading these from C++ reports whatever findChild
+    // returned; this reports what is drawn.
+    readonly property string geomText: {
+        let t = "root " + width.toFixed(0) + "x" + height.toFixed(0)
+              + "  scaleFit " + scaleFit.toFixed(3)
+              + "  design " + design.width.toFixed(0) + "x" + design.height.toFixed(0)
+              + "  dscale " + design.scale.toFixed(3)
+        t += "\nplotLayer " + plotLayer.width.toFixed(0) + "x" + plotLayer.height.toFixed(0)
+        t += "  sc " + scView.width.toFixed(0) + "x" + scView.height.toFixed(0)
+        t += "  pq " + pqView.width.toFixed(0) + "x" + pqView.height.toFixed(0)
+        t += "\nsc node1 on screen: "
+        const p = scView.mapToItem (null, scView.nodePosition (1))
+        t += "(" + p.x.toFixed(0) + ", " + p.y.toFixed(0) + ")"
+        return t
+    }
+
     Component.onCompleted: OvMenu.host = design
 
     Item {
@@ -200,4 +218,44 @@ Item {
 
     Keys.onEscapePressed: { OvMenu.close(); about.close() }
     focus: true
+    // ---------------------------------------------------------------------------
+    //  ONYXTEON_RULER=1 overlay: a labelled grid in WINDOW coordinates, drawn on
+    //  top of everything.  A screenshot then shows exactly where each element sits
+    //  without any inference from item geometry or mapping APIs.
+    // ---------------------------------------------------------------------------
+    Item {
+        id: ruler
+        visible: (typeof ovRuler !== "undefined") ? ovRuler : false
+        anchors.fill: parent
+        z: 99999
+
+        Repeater {
+            model: Math.ceil (ruler.height / 100)
+            delegate: Item {
+                y: index * 100
+                width: ruler.width
+                height: 1
+                Rectangle { width: parent.width; height: 1; color: "#66ff8800" }
+                Text {
+                    x: 2; y: -14
+                    text: "" + (index * 100)
+                    color: "#ffcc00"; font.pixelSize: 13; font.bold: true
+                }
+            }
+        }
+        Repeater {
+            model: Math.ceil (ruler.width / 200)
+            delegate: Item {
+                x: index * 200
+                width: 1
+                height: ruler.height
+                Rectangle { width: 1; height: parent.height; color: "#6600ccff" }
+                Text {
+                    x: 2; y: 2
+                    text: "" + (index * 200)
+                    color: "#00ddff"; font.pixelSize: 13; font.bold: true
+                }
+            }
+        }
+    }
 }

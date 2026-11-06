@@ -442,15 +442,19 @@ void OvEqView::paint (QPainter* g)
     const double w = width(), h = height();
     const QColor accent (m_accent);
 
-    // the off-screen buffer, at the window's device pixel ratio
+    // The off-screen buffer is a plain device-pixel image: devicePixelRatio
+    // left at 1.0 on purpose.  QQuickPaintedItem hands us a painter that
+    // ALREADY carries the device-pixel-ratio transform (measured: m11 = 1.302
+    // on this display), so tagging the buffer with that same ratio made the
+    // blit scale the scene twice — the plot came out 1.302x too large and was
+    // clipped by the item's bounds, which is why only three of the five EQ
+    // nodes were visible on a scaled display and all five were fine at dpr 1.
+    // Both rects are now explicit, so there is nothing left to interpret.
     const qreal dpr = window() != nullptr ? window()->devicePixelRatio() : 1.0;
     const int pw = int (std::lround (w * dpr)), ph = int (std::lround (h * dpr));
     if (m_content.width() != pw || m_content.height() != ph)
-    {
         m_content = QImage (std::max (1, pw), std::max (1, ph),
                             QImage::Format_ARGB32_Premultiplied);
-        m_content.setDevicePixelRatio (dpr);
-    }
 
     {
         QPainter cg (&m_content);
@@ -470,7 +474,8 @@ void OvEqView::paint (QPainter* g)
     }
 
     g->setRenderHint (QPainter::SmoothPixmapTransform, true);
-    g->drawImage (QRectF (0, 0, w, h), m_content);
+    g->drawImage (QRectF (0, 0, w, h), m_content,
+                  QRectF (0, 0, m_content.width(), m_content.height()));
 }
 
 void OvEqView::paintContent (QPainter* g, double w, double h,
@@ -826,7 +831,6 @@ void OvEqView::paintFrost (QPainter* g, const QImage& content,
         crop.setDevicePixelRatio (1.0);
         // CSS blur(3px) == Gaussian std-dev 3 px; the crop is in device pixels
         QImage b = gaussianBlur (crop, 3.0 * dpr, 0.85);
-        b.setDevicePixelRatio (dpr);
 
         if (std::getenv ("ONYXTEON_FROSTDEBUG") != nullptr)
         {

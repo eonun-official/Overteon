@@ -364,6 +364,9 @@ int main (int argc, char** argv)
     // logicalDpi / 96: OvTheme.pt() divides by this so font sizes stay in
     // logical pixels on a scaled display (see OvTheme.qml).
     view.rootContext()->setContextProperty ("ovUiScale", uiScale());
+    // labelled window-coordinate grid, for reading positions off a screenshot
+    view.rootContext()->setContextProperty (
+        "ovRuler", qEnvironmentVariableIsSet ("ONYXTEON_RULER"));
 
     view.setSource (sourceUrl);
 
@@ -486,6 +489,27 @@ int main (int argc, char** argv)
             std::fprintf (stderr, "[drag2] real drag: sc2Freq %.1f -> %.1f Hz -> %s\n",
                           f2before, f2after, dragWorks ? "PASS" : "FAIL");
             app->quit();
+        });
+    }
+
+    if (std::getenv ("ONYXTEON_DUMP") != nullptr)
+    {
+        QTimer::singleShot (1500, [&view] {
+            auto* r = view.rootObject();
+            std::fprintf (stderr, "[dump] root %s %gx%g\n",
+                          r ? r->metaObject()->className() : "null",
+                          r ? r->property ("width").toDouble() : 0.0,
+                          r ? r->property ("height").toDouble() : 0.0);
+            for (auto* v : view.rootObject()->findChildren<OvEqView*>())
+                std::fprintf (stderr, "[dump] view %p prefix=%s %gx%g at (%g,%g) "
+                              "visible=%d parent=%s\n", (void*) v,
+                              v->prefix().toStdString().c_str(), v->width(), v->height(),
+                              v->x(), v->y(), (int) v->isVisible(),
+                              v->parentItem() ? v->parentItem()->metaObject()->className() : "null");
+            for (auto* q : view.rootObject()->findChildren<QQuickItem*>())
+                if (q->objectName().startsWith ("OvEqView"))
+                    std::fprintf (stderr, "[dump] named %s %gx%g\n",
+                                  q->objectName().toStdString().c_str(), q->width(), q->height());
         });
     }
 
