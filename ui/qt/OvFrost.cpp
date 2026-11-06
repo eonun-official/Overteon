@@ -5,6 +5,7 @@
 #include <QLinearGradient>
 #include <QRadialGradient>
 #include <algorithm>
+#include <vector>
 #include <cmath>
 
 namespace OvFrost
@@ -50,20 +51,38 @@ void blitInto (QImage& capture, const QImage& src, const QRectF& dest)
 
 QImage dualGaussian (const QImage& src, double sigma)
 {
-    if (src.isNull()) return src;
+    if (src.isNull() || sigma <= 0.0) return src;
 
     const QImage in = src.convertToFormat (QImage::Format_ARGB32_Premultiplied);
     const int w = in.width(), h = in.height();
     if (w < 2 || h < 2) return in;
 
-    // offset = sigma / sqrt(variance-per-unit-offset), then whole pixels, and
-    // never less than one: exactly FrostEngine's
-    //   const offset = Math.max(0.35, sigma / Math.sqrt(VAR_PER_OFFSET2));
-    //   const step = TAP_OFF.map(o => Math.max(1, Math.round(o * offset)));
-    const double offset = std::max (0.35, sigma / std::sqrt (kVarPerOffset2));
-    int step[3];
-    for (int k = 0; k < 3; ++k)
-        step[k] = std::max (1, int (std::lround (kTapOffset[k] * offset)));
+    // ---- taps -----------------------------------------------------------
+    //  A separable Gaussian is two 1-D passes, and each 1-D Gaussian is
+    //  symmetric, so the whole kernel is a centre weight plus one weight per
+    //  integer offset out to 3 sigma (where the tail is below 0.3 %).
+    //
+    //  The first version of this used X-PostProcessing-Library's fixed 7-tap
+    //  set (0, +-1, +-2, +-6 at .40 .15 .10 .05).  Its variance is right, but
+    //  the taps are ROUNDED to whole pixels, so for a given sigma they land on
+    //  positions with gaps between them.  Over the big glass surfaces that is
+    //  invisible; on a thin 4 px ring it is not — the profile came out as
+    //  140 140 25 0 12 12 0 0 …, i.e. the halo's tail broke off a few pixels
+    //  from the stroke instead of fading smoothly like feGaussianBlur.
+    //
+    //  So the taps are derived from sigma directly.  It is still exactly the
+    //  dual (two-pass) Gaussian — same construction, same variance — only
+    //  without the rounding artefacts.
+    const int radius = std::max (1, int (std::ceil (3.0 * sigma)));
+    const double inv2s2 = 1.0 / (2.0 * sigma * sigma);
+    std::vector<double> wt ((size_t) radius + 1);
+    double sum = 0.0;
+    for (int i = 0; i <= radius; ++i)
+    {
+        wt[(size_t) i] = std::exp (-double (i) * double (i) * inv2s2);
+        sum += (i == 0) ? wt[0] : 2.0 * wt[(size_t) i];
+    }
+    for (double& v : wt) v /= sum;          // taps sum to 1, so no gain change
 
     QImage tmp (w, h, QImage::Format_ARGB32_Premultiplied);
     QImage out (w, h, QImage::Format_ARGB32_Premultiplied);
@@ -75,19 +94,19 @@ QImage dualGaussian (const QImage& src, double sigma)
         QRgb* d = reinterpret_cast<QRgb*> (tmp.scanLine (y));
         for (int x = 0; x < w; ++x)
         {
-            double r = qRed   (s[x]) * kCentreWeight;
-            double g = qGreen (s[x]) * kCentreWeight;
-            double b = qBlue  (s[x]) * kCentreWeight;
-            double a = qAlpha (s[x]) * kCentreWeight;
-            for (int k = 0; k < 3; ++k)
+            double r = qRed (s[x]) * wt[0];
+            double g = qGreen (s[x]) * wt[0];
+            double b = qBlue (s[x]) * wt[0];
+            double a = qAlpha (s[x]) * wt[0];
+            for (int k = 1; k <= radius; ++k)
             {
-                const QRgb l = clampFetch (s, w, x - step[k]);
-                const QRgb rr = clampFetch (s, w, x + step[k]);
-                const double wt = kTapWeight[k];
-                r += (qRed (l)   + qRed (rr))   * wt;
-                g += (qGreen (l) + qGreen (rr)) * wt;
-                b += (qBlue (l)  + qBlue (rr))  * wt;
-                a += (qAlpha (l) + qAlpha (rr)) * wt;
+                const QRgb l = clampFetch (s, w, x - k);
+                const QRgb rr = clampFetch (s, w, x + k);
+                const double t = wt[(size_t) k];
+                r += (qRed (l)   + qRed (rr))   * t;
+                g += (qGreen (l) + qGreen (rr)) * t;
+                b += (qBlue (l)  + qBlue (rr))  * t;
+                a += (qAlpha (l) + qAlpha (rr)) * t;
             }
             d[x] = qRgba (int (std::clamp (r, 0.0, 255.0)),
                           int (std::clamp (g, 0.0, 255.0)),
@@ -99,32 +118,31 @@ QImage dualGaussian (const QImage& src, double sigma)
     // ---- vertical pass ----
     for (int y = 0; y < h; ++y)
     {
-        // pre-fetch the rows this one needs, clamped
-        const QRgb* rows[7];
-        for (int k = 0; k < 3; ++k)
+        std::vector<const QRgb*> up ((size_t) radius + 1), dn ((size_t) radius + 1);
+        for (int k = 0; k <= radius; ++k)
         {
-            rows[k]       = reinterpret_cast<const QRgb*> (
-                                tmp.constScanLine (std::clamp (y - step[k], 0, h - 1)));
-            rows[3 + k]   = reinterpret_cast<const QRgb*> (
-                                tmp.constScanLine (std::clamp (y + step[k], 0, h - 1)));
+            up[(size_t) k] = reinterpret_cast<const QRgb*> (
+                                 tmp.constScanLine (std::clamp (y - k, 0, h - 1)));
+            dn[(size_t) k] = reinterpret_cast<const QRgb*> (
+                                 tmp.constScanLine (std::clamp (y + k, 0, h - 1)));
         }
-        const QRgb* c = reinterpret_cast<const QRgb*> (tmp.constScanLine (y));
         QRgb* d = reinterpret_cast<QRgb*> (out.scanLine (y));
         for (int x = 0; x < w; ++x)
         {
-            double r = qRed (c[x]) * kCentreWeight;
-            double g = qGreen (c[x]) * kCentreWeight;
-            double b = qBlue (c[x]) * kCentreWeight;
-            double a = qAlpha (c[x]) * kCentreWeight;
-            for (int k = 0; k < 3; ++k)
+            const QRgb c = up[0][x];
+            double r = qRed (c) * wt[0];
+            double g = qGreen (c) * wt[0];
+            double b = qBlue (c) * wt[0];
+            double a = qAlpha (c) * wt[0];
+            for (int k = 1; k <= radius; ++k)
             {
-                const QRgb u = rows[k][x];
-                const QRgb d2 = rows[3 + k][x];
-                const double wt = kTapWeight[k];
-                r += (qRed (u)   + qRed (d2))   * wt;
-                g += (qGreen (u) + qGreen (d2)) * wt;
-                b += (qBlue (u)  + qBlue (d2))  * wt;
-                a += (qAlpha (u) + qAlpha (d2)) * wt;
+                const QRgb u = up[(size_t) k][x];
+                const QRgb v = dn[(size_t) k][x];
+                const double t = wt[(size_t) k];
+                r += (qRed (u)   + qRed (v))   * t;
+                g += (qGreen (u) + qGreen (v)) * t;
+                b += (qBlue (u)  + qBlue (v))  * t;
+                a += (qAlpha (u) + qAlpha (v)) * t;
             }
             d[x] = qRgba (int (std::clamp (r, 0.0, 255.0)),
                           int (std::clamp (g, 0.0, 255.0)),

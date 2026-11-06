@@ -35,7 +35,7 @@ int main (int argc, char** argv)
     // 1.5 buffer px.  This is the 7-tap set the page uses, so the numbers must
     // match FrostEngine's behaviour: 3 px stripes (the plot's fine detail) get
     // flattened, and the result is close to a true Gaussian of the same sigma.
-    std::printf ("\n[glass] dualGaussian (7-tap, half-res sigma 1.5)\n");
+    std::printf ("\n[glass] dualGaussian (separable, half-res sigma 1.5)\n");
     {
         // Model the real pipeline: the plot has 3 px stripes in CSS pixels, the
         // capture halves that (so 1.5 px in buffer pixels), and only then does
