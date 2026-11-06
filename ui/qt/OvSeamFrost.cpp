@@ -1,8 +1,8 @@
 #include "OvSeamFrost.h"
 #include "OvEqView.h"
+#include "OvFrost.h"
 
 #include <QPainter>
-#include <QRadialGradient>
 #include <QQuickWindow>
 #include <algorithm>
 #include <cmath>
@@ -39,11 +39,24 @@ void OvSeamFrost::setBottomView (OvEqView* v)
     update();
 }
 
+// The seam glass is #hdr::before in the design:
+//
+//     width:550px; height:68px; left:50%; top:50%  (centred on the seam)
+//     backdrop-filter: blur(3px) saturate(.85)
+//     background: rgba(255,255,255,.018)
+//     mask-image: radial-gradient(ellipse at center,
+//                 #000 0%, #000 45%, transparent 78%)
+//
+// and in the page's FrostEngine it is the same Glass pipeline as the control
+// pits, only with shape:"ellipse", no accent glow and light:()=>0.  It is
+// reproduced here through OvFrost so both surfaces go through identical code:
+// half-resolution capture, 7-tap dual Gaussian, saturate, bilinear upscale,
+// veil, then the radial mask.
 void OvSeamFrost::paint (QPainter* g)
 {
     if (m_top == nullptr || m_bottom == nullptr) return;
 
-    const QImage top = m_top->contentImage();
+    const QImage top    = m_top->contentImage();
     const QImage bottom = m_bottom->contentImage();
     if (top.isNull() && bottom.isNull()) return;
 
@@ -51,71 +64,47 @@ void OvSeamFrost::paint (QPainter* g)
     if (w < 2.0 || h < 2.0) return;
 
     const qreal dpr = window() != nullptr ? window()->devicePixelRatio() : 1.0;
-    const int pw = int (std::lround (w * dpr)), ph = int (std::lround (h * dpr));
 
-    // Collect the content under the strip from both halves.  The strip is
-    // centred on the seam, so its upper part comes from the sidechain plot and
-    // its lower part from the post eq plot.
-    //
-    // +8 px of bleed on every side so the filter never clamps at the rim: the
-    // source is rendered slightly larger and the extra border is cropped away
-    // by the drawing below.
-    constexpr int kPad = 8;
-    QImage canvas (pw + 2 * kPad, ph + 2 * kPad, QImage::Format_ARGB32_Premultiplied);
-    canvas.fill (QColor (0x16, 0x18, 0x1d));
+    // ---- 1. half-resolution capture of both halves ----------------------
+    QImage capture = OvFrost::beginCapture (w, h);
+    const double scale = capture.width() / w;      // buffer px per item px
 
+    auto blit = [&] (OvEqView* view, const QImage& img)
     {
-        QPainter cg (&canvas);
-        cg.setRenderHint (QPainter::SmoothPixmapTransform, true);
-        cg.translate (kPad, kPad);
-        cg.scale (dpr, dpr);
+        if (view == nullptr || img.isNull()) return;
 
-        // position of this strip in each view's own coordinates
-        auto blit = [&] (OvEqView* view, const QImage& img)
-        {
-            if (view == nullptr || img.isNull()) return;
+        // where this view sits in the glass's own coordinates...
+        const QPointF origin = view->mapToItem (this, QPointF (0, 0));
+        const QRectF self (0, 0, w, h);
+        const QRectF target (origin, QSizeF (view->width(), view->height()));
+        if (! target.intersects (self)) return;
 
-            // where the view sits in this item's coordinate space
-            const QPointF origin = view->mapToItem (this, QPointF (0, 0));
-            const QRectF target (origin, QSizeF (view->width(), view->height()));
-            const QRectF self (0, 0, w, h);
-            if (! target.intersects (self)) return;
+        // ...then in capture pixels, and clipped to this view like the page
+        // does with ctx.save()/clip per source canvas.
+        const QRectF dst (origin * scale,
+                          QSizeF (view->width() * scale, view->height() * scale));
+        QPainter cp (&capture);
+        cp.setRenderHint (QPainter::SmoothPixmapTransform, true);
+        cp.setClipRect (dst);
+        cp.drawImage (dst, img, QRectF (0, 0, img.width(), img.height()));
+    };
 
-            cg.save();
-            cg.setClipRect (target);
-            cg.drawImage (target, img, QRectF (0, 0, img.width(), img.height()));
-            cg.restore();
-        };
+    blit (m_top, top);
+    blit (m_bottom, bottom);
 
-        blit (m_top, top);
-        blit (m_bottom, bottom);
-    }
+    // ---- 2..8. blur, saturate, upscale, veil, radial mask ---------------
+    OvFrost::Params p;
+    p.shape    = OvFrost::Shape::Ellipse;
+    p.accent   = QColor();          // the seam has no accent glow
+    p.light    = 0.0;
+    p.sigmaCss = 3.0;
+    p.saturate = 0.85;
+    p.veil     = 0.018;
 
-    // separable Gaussian, sigma 3 px in item space
-    QImage blurred = OvEqView::gaussianBlur (canvas, 3.0 * dpr, 0.85);
-    blurred.setDevicePixelRatio (1.0);
-    const QRectF src (kPad, kPad, pw, ph);
+    const QImage out = OvFrost::composite (capture, w, h, dpr, p);
+    if (out.isNull()) return;
 
     g->setRenderHint (QPainter::SmoothPixmapTransform, true);
-    g->save();
-    g->setClipRect (QRectF (0, 0, w, h));
-    g->drawImage (QRectF (0, 0, w, h), blurred, src);
-
-    // background: rgba(255,255,255,.018)
-    g->fillRect (QRectF (0, 0, w, h), QColor (255, 255, 255, 5));
-
-    // mask-image: radial-gradient(ellipse at center, #000 0%, #000 45%,
-    // transparent 78%) — a destination-in fade over the whole strip
-    g->setCompositionMode (QPainter::CompositionMode_DestinationIn);
-    g->translate (w * 0.5, h * 0.5);
-    g->scale (w * 0.5, h * 0.5);
-    QRadialGradient m (0, 0, 1);
-    m.setColorAt (0.00, QColor (0, 0, 0, 255));
-    m.setColorAt (0.45, QColor (0, 0, 0, 255));
-    m.setColorAt (0.78, QColor (0, 0, 0, 0));
-    m.setColorAt (1.00, QColor (0, 0, 0, 0));
-    g->setBrush (m);
-    g->setPen (Qt::NoPen);
-    g->drawRect (QRectF (-1, -1, 2, 2));
-    g->restore();
+    g->drawImage (QRectF (0, 0, w, h), out,
+                  QRectF (0, 0, out.width(), out.height()));
 }

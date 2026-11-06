@@ -1,4 +1,5 @@
 #include "OvEqView.h"
+#include "OvFrost.h"
 #include "OvEngine.h"
 #include "OvQmlTypes.h"
 #include "OvParam.h"
@@ -819,114 +820,64 @@ QImage OvEqView::gaussianBlur (const QImage& src, double sigma, double sat)
 void OvEqView::paintFrost (QPainter* g, const QImage& content,
                            double w, double h, const QColor& accent)
 {
+    if (std::getenv ("ONYXTEON_NOFROST") != nullptr) return;
+    if (content.isNull()) return;
+
     const double dpr = content.devicePixelRatio() > 0 ? content.devicePixelRatio() : 1.0;
 
-    auto blurredRect = [&] (const QRectF& r) -> QImage
-    {
-        // +8 px of bleed so the filter never clamps at the rim
-        QRectF bled = r.adjusted (-8, -8, 8, 8).intersected (QRectF (0, 0, w, h));
-        const QRect src (int (bled.x() * dpr), int (bled.y() * dpr),
-                         int (bled.width() * dpr), int (bled.height() * dpr));
-        QImage crop = content.copy (src);
-        crop.setDevicePixelRatio (1.0);
-        // CSS blur(3px) == Gaussian std-dev 3 px; the crop is in device pixels
-        QImage b = gaussianBlur (crop, 3.0 * dpr, 0.85);
-
-        if (std::getenv ("ONYXTEON_FROSTDEBUG") != nullptr)
-        {
-            auto stats = [] (const QImage& im)
-            {
-                double sum = 0, sum2 = 0; long n = 0;
-                for (int y = 0; y < im.height(); y += 2)
-                {
-                    const auto* p = reinterpret_cast<const QRgb*> (im.constScanLine (y));
-                    for (int x = 0; x < im.width(); x += 2)
-                    { const double v = qGray (p[x]); sum += v; sum2 += v * v; ++n; }
-                }
-                const double m = sum / n;
-                return std::pair<double,double> { m, std::sqrt (sum2 / n - m * m) };
-            };
-            const auto a = stats (crop), bb = stats (b);
-            std::fprintf (stderr, "[frost] %s src=%dx%d dpr=%.2f crop(mean=%.1f sd=%.2f) blur(mean=%.1f sd=%.2f)\n",
-                          m_prefix.toStdString().c_str(), crop.width(), crop.height(), dpr,
-                          a.first, a.second, bb.first, bb.second);
-        }
-        return b;
-    };
-
-    if (std::getenv ("ONYXTEON_NOFROST") != nullptr) return;
-
-    // ---- control pit ---------------------------------------------------
+    // ---- control pit geometry -------------------------------------------
+    //   .controlpit{ width:640px; height:32px; left:50% }
+    //   .controlpit.top{top:0}   .controlpit.bottom{bottom:0}
     const double pitW = std::min (double (OvThemePitWidth), w);
     const double pitX = (w - pitW) * 0.5;
     const double barH = OvThemeBarHeight;
     const double barY = m_headerTop ? 0.0 : h - barH;
+    const QRectF strip (pitX, barY, pitW, barH);
+
+    // ---- 1. half-resolution capture of just this strip -------------------
+    // Same pipeline as the page: FrostEngine captures at half resolution, so
+    // fine detail is gone before the blur runs and the result reads as frosted
+    // glass rather than a slightly soft copy of the plot.
+    QImage capture = OvFrost::beginCapture (strip.width(), strip.height());
+    const double scale = capture.width() / std::max (1.0, strip.width());
 
     {
-        const QRectF strip (pitX, barY, pitW, barH);
-        const QImage b = blurredRect (strip);
-
-        QPainterPath trap;
-        if (m_headerTop)
-        {
-            trap.moveTo (pitX + pitW * 0.20, barY);
-            trap.lineTo (pitX + pitW * 0.80, barY);
-            trap.lineTo (pitX + pitW, barY + barH);
-            trap.lineTo (pitX, barY + barH);
-        }
-        else
-        {
-            trap.moveTo (pitX, barY);
-            trap.lineTo (pitX + pitW, barY);
-            trap.lineTo (pitX + pitW * 0.80, barY + barH);
-            trap.lineTo (pitX + pitW * 0.20, barY + barH);
-        }
-        trap.closeSubpath();
-
-        g->save();
-        g->setClipPath (trap);
-        g->drawImage (strip, b, QRectF (0, 0, b.width(), b.height()));
-
-        // background: rgba(255,255,255,.018)
-        g->fillRect (strip, QColor (255, 255, 255, int (std::lround (0.018 * 255.0))));
-
-
-        // .controlpit::before — the accent glow band.
-        //
-        //   background: radial-gradient(ellipse 70% 160% at 50% 0%,
-        //               accent .36 0%, accent .13 38%, accent 0 78%)
-        //   opacity: var(--light) = level²      (transition: opacity .1s linear)
-        //
-        // Two things this must get right, both were wrong before:
-        //   * the gradient's alphas are STATIC (.36/.13/0) — the meter only
-        //     drives the layer OPACITY.  Squaring the level again here made the
-        //     glow level⁴, i.e. invisible at any sane meter reading.
-        //   * the gradient stops at 78 %, not 100 %, so the band has a flat
-        //     core and fades out well before the bar edge.
-        if (m_glow > 0.001)
-        {
-            const QPointF anchor (pitX + pitW * 0.5, m_headerTop ? barY : barY + barH);
-
-            g->save();
-            g->setOpacity (std::clamp (m_glow, 0.0, 1.0));   // --light
-            g->translate (anchor);
-            g->scale (pitW * 0.70, barH * 1.60);             // ellipse 70% 160%
-            QRadialGradient grad (0, 0, 1);
-            QColor c0 = accent; c0.setAlphaF (0.36);
-            QColor c1 = accent; c1.setAlphaF (0.13);
-            QColor c2 = accent; c2.setAlphaF (0.00);
-            grad.setColorAt (0.00, c0);
-            grad.setColorAt (0.38, c1);
-            grad.setColorAt (0.78, c2);
-            grad.setColorAt (1.00, c2);
-            g->setBrush (grad);
-            g->setPen (Qt::NoPen);
-            g->drawRect (QRectF (-1, -1, 2, 2));
-            g->restore();
-        }
-        g->restore();
+        QPainter cp (&capture);
+        cp.setRenderHint (QPainter::SmoothPixmapTransform, true);
+        // the strip's rectangle inside the content image, in capture pixels
+        const QRectF srcInContent (strip.x() * dpr, strip.y() * dpr,
+                                   strip.width() * dpr, strip.height() * dpr);
+        cp.drawImage (QRectF (0, 0, capture.width(), capture.height()),
+                      content, srcInContent);
+        Q_UNUSED (scale);
     }
 
+    if (std::getenv ("ONYXTEON_FROSTDEBUG") != nullptr)
+    {
+        std::fprintf (stderr, "[frost] %s strip=%.0fx%.0f capture=%dx%d dpr=%.2f\n",
+                      m_prefix.toStdString().c_str(), strip.width(), strip.height(),
+                      capture.width(), capture.height(), dpr);
+    }
+
+    // ---- 2..8. blur + saturate + veil + accent glow ----------------------
+    OvFrost::Params p;
+    p.shape    = m_headerTop ? OvFrost::Shape::TrapTop : OvFrost::Shape::TrapBottom;
+    p.accent   = accent;
+    p.light    = m_glow;          // --light, already level^2
+    p.sigmaCss = 3.0;
+    p.saturate = 0.85;
+    p.veil     = 0.018;
+
+    const QImage glass = OvFrost::composite (capture, strip.width(), strip.height(),
+                                             dpr, p);
+    if (glass.isNull()) return;
+
+    g->save();
+    g->translate (strip.topLeft());
+    g->setRenderHint (QPainter::SmoothPixmapTransform, true);
+    g->drawImage (QRectF (0, 0, strip.width(), strip.height()), glass,
+                  QRectF (0, 0, glass.width(), glass.height()));
+    g->restore();
 }
 
 // ----------------------------------------------------------- interaction

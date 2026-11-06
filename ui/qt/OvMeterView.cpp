@@ -175,7 +175,11 @@ void OvMeterView::advance (double dt)
         }
     }
 
-    const double f = std::clamp ((double (m.harm) + 48.0) / 48.0, 0.0, 1.0);
+    double f = std::clamp ((double (m.harm) + 48.0) / 48.0, 0.0, 1.0);
+    // test hook: ONYXTEON_HARM=0..1 pins the harmonic fraction so the ring's
+    // colour ramp can be inspected at known values.
+    if (const char* h = std::getenv ("ONYXTEON_HARM"))
+        f = std::clamp (std::atof (h), 0.0, 1.0);
     m_harmFrac = f;
 }
 
@@ -213,6 +217,21 @@ void OvMeterView::drawPod (QPainter* g, bool glowOnly)
     QColor glow = hc; glow.setAlphaF (0.12f);
     g->setPen (QPen (glow, 6.0, Qt::SolidLine, Qt::RoundCap));
     g->drawArc (ring, 90 * 16, -int (frac * 360.0 * 16.0));
+
+    // The design adds one more thing in the hot zone:
+    //     hArc.style.filter = f>=0.97 ? "drop-shadow(0 0 4px #ff2a44)" : "";
+    // i.e. above 97 % the ring gains a tight red halo on top of the normal
+    // glow, so "almost clipping" is visible at a glance rather than only in the
+    // colour of the 4 px stroke.
+    if (frac >= 0.97)
+    {
+        QColor hot ("#ff2a44"); hot.setAlphaF (0.55f);
+        g->setPen (QPen (hot, 9.0, Qt::SolidLine, Qt::RoundCap));
+        g->drawArc (ring, 90 * 16, -int (frac * 360.0 * 16.0));
+        hot.setAlphaF (0.85f);
+        g->setPen (QPen (hot, 5.0, Qt::SolidLine, Qt::RoundCap));
+        g->drawArc (ring, 90 * 16, -int (frac * 360.0 * 16.0));
+    }
 
     g->setPen (QPen (hc, 4.0, Qt::SolidLine, Qt::RoundCap));
     g->drawArc (ring, 90 * 16, -int (frac * 360.0 * 16.0));
