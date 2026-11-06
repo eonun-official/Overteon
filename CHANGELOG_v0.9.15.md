@@ -22,7 +22,7 @@
 | 产品名 | `Overteon` | `OnyxTEON` |
 | LV2 URI | `https://eonun.com/plugins/Overteon` | `https://eonun.com/plugins/OnyxTEON` |
 | bundle id | `com.eonun.overteon` | `com.eonun.onyxteon` |
-| 插件代码 | `Onyx` | `Onyx` |
+| 插件代码 | `Ovtn` | `Onyx` |
 | bundle 名 | `Overteon.lv2` / `.vst3` | `OnyxTEON.lv2` / `.vst3` |
 | 预设目录 | `~/Eonun/Overteon Presets` | `~/Eonun/OnyxTEON Presets` |
 | QML import 命名空间 | — | `OnyxTEON 1.0` |
