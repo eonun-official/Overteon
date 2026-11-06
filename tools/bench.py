@@ -191,15 +191,39 @@ def find_windows(display):
 
 
 def capture_specific(display, wid, out):
-    """Grab exactly this window.  Returns the path, or None if it failed."""
+    """Grab exactly this window.  Returns the path, or None if it failed.
+
+    ImageMagick's `import -window <id>` works on Carla's canvas but fails on
+    jalv's editor with "missing an image filename", so `xwd | convert` is tried
+    as well.  Both go through the same X server; only the tool differs.
+    """
     if not wid:
         return None
     env = dict(os.environ, DISPLAY=display)
     if os.path.exists(out):
         os.unlink(out)
+
     subprocess.run(["import", "-window", wid, out], env=env,
                    capture_output=True, timeout=30)
-    return out if os.path.exists(out) else None
+    if os.path.exists(out) and os.path.getsize(out) > 0:
+        return out
+
+    # fallback: xwd to a temp file, then convert
+    xwd = out + ".xwd"
+    try:
+        with open(xwd, "wb") as f:
+            subprocess.run(["xwd", "-id", wid, "-silent"], env=env,
+                           stdout=f, stderr=subprocess.DEVNULL, timeout=30)
+        subprocess.run(["convert", xwd, out], env=env,
+                       capture_output=True, timeout=30)
+    except Exception:
+        pass
+    finally:
+        if os.path.exists(xwd):
+            os.unlink(xwd)
+    if os.path.exists(out) and os.path.getsize(out) > 0:
+        return out
+    return None
 
 
 def editor_window(display, pid=None):
@@ -230,7 +254,10 @@ def editor_window(display, pid=None):
                           capture_output=True, text=True).stdout
     best = None
     for line in tree.splitlines():
-        if '"OnyxTEON" "OnyxTEON"' not in line:
+        # The editor's X class.  jalv.gtk3 names its wrapper window "OnyxTEON"
+        # too but with class Jalv.gtk3, so the class is what separates the Qt
+        # window from the host's frame.
+        if '"OnyxTEON" "OnyxTEON"' not in line and '("OnyxTEON" "OnyxTEON")' not in line:
             continue
         m = re.match(r"^(\s*)(0x[0-9a-f]+)\s", line)
         if not m:
@@ -260,7 +287,10 @@ def editor_window_state(display):
                           capture_output=True, text=True).stdout
     best = None
     for line in tree.splitlines():
-        if '"OnyxTEON" "OnyxTEON"' not in line:
+        # The editor's X class.  jalv.gtk3 names its wrapper window "OnyxTEON"
+        # too but with class Jalv.gtk3, so the class is what separates the Qt
+        # window from the host's frame.
+        if '"OnyxTEON" "OnyxTEON"' not in line and '("OnyxTEON" "OnyxTEON")' not in line:
             continue
         m = re.match(r"^(\s*)(0x[0-9a-f]+)\s", line)
         sz = re.search(r"(\d+)x(\d+)\+", line)
@@ -533,6 +563,182 @@ def capture_rms(ports, seconds=1.5):
             "dbfs": 20.0 * np.log10(max(rms, 1e-9)) if rms > 0 else -999.0}
 
 
+def run_carla(args):
+    """`-Gc`: the plug-in in carla-single, with its UI and real audio.
+
+    Worth having next to jalv because Carla and jalv are completely different
+    hosts and they disagree on the two things that matter here:
+
+      * Carla lays out a host canvas for the editor and drives the idle callback
+        hard, so the UI animates properly; jalv idles at ~11.8 Hz and that rate
+        becomes the frame rate straight away.
+      * Carla reports each editor window as "<name> (GUI)" with our Qt window as
+        its child, so the geometry is visible from the outside — that is how the
+        device/logical pixel mistake was finally found (a 1763x1309 canvas with a
+        1354x1005 editor inside it).
+
+    So `-Gj` answers "does it work in a slow host" and `-Gc` answers "does it
+    work at all, at the right size".  Both are worth running.
+    """
+    results = {"mode": "carla"}
+
+    pkg = os.path.join(ROOT, "tools", "package.sh")
+    r = subprocess.run([pkg, "--check"], capture_output=True, text=True)
+    if r.returncode != 0:
+        print("installing the LV2 bundle (it differed from the build)")
+        subprocess.run([pkg, "--no-build"], capture_output=True, text=True)
+    print(f"bundle        {LV2_BUNDLE}")
+
+    started_jack = not server_up()
+    jack = None
+    if started_jack:
+        print(f"jack          starting a private server '{JACK_SERVER}'")
+        jack = Proc(["jackd", *JACK_ARGS], "jack")
+        if not jack.wait_port(server_up, timeout=15):
+            print("FAIL: jackd did not come up")
+            print(jack.log_text()[-1200:])
+            jack.stop()
+            return 1
+    else:
+        print(f"jack          reusing the server already on '{JACK_SERVER}'")
+    results["jack"] = {"server": JACK_SERVER, "started_by_bench": started_jack}
+
+    carla = play = None
+    try:
+        print("carla         carla-single lv2 (its own window manager for the UI)")
+        carla = Proc(["carla-single", "lv2", LV2_URI], "carla",
+                     {"JACK_DEFAULT_SERVER": JACK_SERVER,
+                      "LV2_PATH": os.path.expanduser("~/.lv2"),
+                      "DISPLAY": args.display})
+
+        # Carla registers the ports under the plug-in name, not a short client
+        # name, so they are looked up by the plug-in's own name.
+        def carla_ports():
+            return [x for x in jack_ports() if x.startswith("OnyxTEON:")]
+        if not carla.wait_port(lambda: len(carla_ports()) >= 4, timeout=40):
+            print("FAIL: carla never registered the plug-in's ports")
+            print((carla.log_text() or "")[-1500:])
+            return finish(results, args)
+        ports_in  = sorted([x for x in carla_ports() if "In"  in x])
+        ports_out = sorted([x for x in carla_ports() if "Out" in x])
+        print(f"              {len(ports_in)} in / {len(ports_out)} out")
+
+        flac = args.flac
+        if not os.path.exists(flac):
+            print(f"FAIL: no audio file at {flac}")
+            return finish(results, args)
+        print(f"mpv           {os.path.basename(flac)}")
+        play = Proc(["mpv", "--no-video", "--really-quiet", "--no-terminal",
+                     "--ao=jack", "--jack-name=mpvplay", "--loop-file=inf", flac],
+                    "mpv", {"JACK_DEFAULT_SERVER": JACK_SERVER})
+        if not play.wait_port(lambda: len(jack_ports("mpvplay:")) >= 2, timeout=25):
+            print("FAIL: mpv did not open its JACK port")
+            print((play.log_text() or "")[-1200:])
+            return finish(results, args)
+
+        src = sorted([x for x in jack_ports("mpvplay:") if "out_" in x])
+        made = []
+        for x, d in zip(src, ports_in[:2]):
+            if jc(["jack_connect", x, d]).returncode == 0:
+                made.append((x, d))
+        results["audio"] = {"file": flac, "connections": [f"{a} -> {b}" for a, b in made]}
+        print(f"connections   {len(made)}: "
+              + ", ".join(f"{a.split(':')[1]}->{b.split(':')[1]}" for a, b in made))
+        if len(made) < 2:
+            print("FAIL: could not connect mpv to the plug-in")
+            return finish(results, args)
+
+        time.sleep(3)
+        sig = capture_rms(ports_out, seconds=1.5)
+        results["audio"]["signal"] = sig
+        if sig:
+            print(f"  signal         peak {sig['peak']:.3f}, {sig['dbfs']:+.1f} dBFS rms")
+
+        # ---- the editor window, and does it move? ----------------------
+        def carla_editor():
+            tree = subprocess.run(["xwininfo", "-root", "-tree"],
+                                  env=dict(os.environ, DISPLAY=args.display),
+                                  capture_output=True, text=True).stdout
+            best = None
+            for line in tree.splitlines():
+                if '"OnyxTEON" "OnyxTEON"' not in line:
+                    continue
+                m = re.match(r"^(\s*)(0x[0-9a-f]+)\s", line)
+                sz = re.search(r"(\d+)x(\d+)\+", line)
+                if not m or not sz or int(sz.group(1)) < 200:
+                    continue
+                if best is None or len(m.group(1)) > best[0]:
+                    best = (len(m.group(1)), m.group(2), int(sz.group(1)), int(sz.group(2)))
+            return best
+
+        found = carla.wait_port(lambda: carla_editor(), timeout=25)
+        if not found:
+            print("  ui window      DID NOT OPEN")
+            results["jalv"] = {"ui_missing": True}
+            return finish(results, args)
+        _, wid, ew, eh = carla_editor()
+        print(f"  ui window      {wid}  {ew}x{eh}")
+
+        # The host's canvas is the parent of that window; the editor must fill
+        # it.  A mismatch is the device-vs-logical pixel bug.
+        parent = subprocess.run(["xwininfo", "-id", wid, "-tree"],
+                                env=dict(os.environ, DISPLAY=args.display),
+                                capture_output=True, text=True).stdout
+        pm = re.search(r"Parent window id: (0x[0-9a-f]+)", parent)
+        canvas = None
+        if pm:
+            pinfo = subprocess.run(["xwininfo", "-id", pm.group(1)],
+                                   env=dict(os.environ, DISPLAY=args.display),
+                                   capture_output=True, text=True).stdout
+            pw = re.search(r"Width:\s+(\d+)", pinfo)
+            ph = re.search(r"Height:\s+(\d+)", pinfo)
+            if pw and ph:
+                canvas = (int(pw.group(1)), int(ph.group(1)))
+        if canvas:
+            fills = (abs(canvas[0] - ew) <= 2 and abs(canvas[1] - eh) <= 2)
+            results["jalv"] = {"ui_window": wid, "editor": [ew, eh],
+                               "canvas": list(canvas), "fills_canvas": fills}
+            print(f"  canvas         {canvas[0]}x{canvas[1]}  "
+                  f"{'filled' if fills else 'NOT FILLED — the editor is the wrong size'}")
+
+        shots = []
+        for i in range(6):
+            f = os.path.join(RUN, f"carla_{i}.png")
+            if os.path.exists(f):
+                os.unlink(f)
+            ed = carla_editor()          # the id moves; re-resolve every frame
+            shots.append(capture_specific(args.display, ed[1] if ed else None, f))
+            time.sleep(1.0)
+        best = None
+        for i in range(len(shots) - 1):
+            if shots[i] and shots[i + 1]:
+                d = px_diff(shots[i], shots[i + 1])
+                if best is None or d["changed"] > best["changed"]:
+                    best = d
+        if best is None:
+            print("  ui frames      could not capture the window")
+        else:
+            results["jalv"] = results.get("jalv", {})
+            results["jalv"]["ui_moving"] = best
+            if best["changed"] <= NOISE_PX:
+                results["jalv"]["ui_frozen"] = True
+                print(f"  ui frames      FROZEN ({best['changed']} px changed)")
+            else:
+                print(f"  ui frames      {best['changed']} px changed  <-- animating")
+
+        results["live"] = {"alive": carla.alive() and play.alive()}
+        print(f"  processes      carla {'alive' if carla.alive() else 'DIED'}, "
+              f"mpv {'alive' if play.alive() else 'DIED'}")
+        return finish(results, args)
+
+    finally:
+        for x in (play, carla):
+            if x is not None:
+                x.stop()
+        if jack is not None:
+            jack.stop()
+
+
 def run_jalv(args):
     """The `--jalv` mode: build the whole chain, measure it, tear it down."""
     results = {"mode": "jalv"}
@@ -799,9 +1005,12 @@ def main():
     ap.add_argument("-j", "--jalv", action="store_true",
                     help="bench the LV2 plug-in in jalv (console host), "
                          "fed with real audio")
-    ap.add_argument("-G", dest="ui", action="store_true",
-                    help="bench through jalv.gtk3 with the plug-in UI — the "
-                         "mode to use for UI work")
+    # -G picks the GUI host:  -Gj = jalv.gtk3,  -Gc = carla-single.
+    # Short options take their value attached, so both `-Gj` and `-G j` work;
+    # the attached form is the one to type.
+    ap.add_argument("-G", dest="gui_host", choices=["j", "c"], metavar="{j,c}",
+                    help="-Gj: jalv.gtk3 with the plug-in UI;  "
+                         "-Gc: carla-single with it")
     ap.add_argument("--flac",
                     default=os.path.expanduser("~/wtf/export/K33C - Fixed.flac"),
                     help="audio file mpv plays into the plug-in (--jalv only)")
@@ -812,8 +1021,14 @@ def main():
                          "proves the signal check can fail")
     args = ap.parse_args()
 
-    if args.ui:
-        args.jalv = True          # -G is a jalv mode, just the gtk3 host
+    if args.gui_host is not None:
+        ensure_dir()
+        if args.gui_host == "c":
+            return run_carla(args)
+        args.jalv = True          # -Gj is the jalv path with its gtk3 UI
+        args.ui = True
+    elif not hasattr(args, "ui"):
+        args.ui = False
     if args.jalv:
         ensure_dir()
         return run_jalv(args)
@@ -941,7 +1156,7 @@ def finish(results, args):
         bad.append(f"live cpu {results['live']['cpu']:.0f}% of a core")
     # jalv mode: the plug-in must stay up and keep up.  A DSP load at or over
     # 100 % means it is missing deadlines, i.e. clicking, whatever the UI shows.
-    if results.get("mode") == "jalv":
+    if results.get("mode") in ("jalv", "carla"):
         if results.get("live", {}).get("alive") is False:
             bad.append("a process died during the run")
         dsp = results.get("live", {}).get("dsp_load")
@@ -952,6 +1167,8 @@ def finish(results, args):
             bad.append("the plug-in output is silent")
         if results.get("jalv", {}).get("ui_frozen"):
             bad.append("the editor window froze")
+        if results.get("jalv", {}).get("fills_canvas") is False:
+            bad.append("the editor does not fill the host's canvas")
         if results.get("jalv", {}).get("ui_missing"):
             if results["jalv"].get("ui_unmapped"):
                 bad.append("the editor window was created but never mapped")

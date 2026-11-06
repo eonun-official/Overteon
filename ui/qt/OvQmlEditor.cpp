@@ -298,8 +298,8 @@ static bool ovEmbedNative (QWindow* qwin, quintptr container,
     // allocated: measured in Carla, the host's canvas was 1763x1309 and our
     // editor 1354x1005 — exactly the device/logical ratio, with the scene
     // shrunk into the corner of its own box.
-    const unsigned devW = (unsigned) std::lround (w * ovQtScale());
-    const unsigned devH = (unsigned) std::lround (h * ovQtScale());
+    const unsigned devW = (unsigned) w;      // already device pixels
+    const unsigned devH = (unsigned) h;
 
     XSetWindowBorderWidth (dpy, (::Window) child, 0);
     XReparentWindow (dpy, (::Window) child, (::Window) container, x, y);
@@ -485,8 +485,7 @@ void OvQmlEditor::paint (juce::Graphics& g)
 void OvQmlEditor::resized()
 {
     if (impl && impl->view != nullptr && attached)
-        impl->view->setGeometry (0, 0, ovDeviceToLogical (getWidth()),
-                                 ovDeviceToLogical (getHeight()));
+        syncGeometry();
 }
 
 // ---------------------------------------------------------------------------
@@ -530,20 +529,93 @@ void OvQmlEditor::syncGeometry()
 {
     if (! impl || ! impl->view) return;
 
-    const int w = std::max (64, (int) std::lround (getWidth()  / ovQtScale()));
-    const int h = std::max (64, (int) std::lround (getHeight() / ovQtScale()));
-    impl->view->resize (w, h);
+    // ---- three sizes, and they are all different -------------------------
+    // Measured on the 1.302 display, inside Carla:
+    //
+    //   host canvas / JUCE peer   1354x1005   DEVICE pixels
+    //   Qt window logical         1040x772    LOGICAL pixels
+    //   Qt devicePixelRatio       1.302
+    //
+    // JUCE's peer is already the host's canvas, so that is the truth to fill.
+    // Qt then wants that divided by its own ratio — passing the device size to
+    // resize() made Qt create a surface 1.302x too large, which overflowed the
+    // canvas and left the UI clipped; passing the logical size to
+    // XMoveResizeWindow made the native window 1.302x too small, which left it
+    // in the corner of the canvas.  Both mistakes were made here; this is the
+    // combination that matches.
+    int devW = 0, devH = 0;
 
    #if JUCE_LINUX
     if (auto* dpy = XOpenDisplay (nullptr))
     {
-        XMoveResizeWindow (dpy, (::Window) (quintptr) impl->view->winId(), 0, 0,
-                       (unsigned) std::lround (w * ovQtScale()),
-                       (unsigned) std::lround (h * ovQtScale()));
+        // Walk up from JUCE's peer collecting the chain, then choose:
+        //
+        //   * the SMALLEST window that is at least the design size, if there is
+        //     one — that is the host's canvas, and filling it is what "the
+        //     editor fills its window" means.  In Carla the chain is
+        //     peer 1354x1005 -> 1354x1005 -> frame 1358x1039, and this picks the
+        //     canvas rather than the frame's 4 px of furniture.
+        //   * otherwise the LARGEST one, because some hosts simply give a
+        //     window smaller than the design (jalv hands out 846x694) and the
+        //     editor must still fill that instead of overflowing it.
+        //
+        // Reading only the peer was wrong: it starts at JUCE's 840x624 default
+        // and becomes the canvas only later, so the answer depended on when
+        // this ran.
+        const int needW = juce::roundToInt (OvThemeWidth  * ovQtScale());
+        const int needH = juce::roundToInt (OvThemeHeight * ovQtScale());
+
+        int bestFitW = 0, bestFitH = 0;      // smallest >= need
+        int biggestW = 0, biggestH = 0;      // largest overall
+        int biggestArea = 0;
+
+        ::Window w = (::Window) (quintptr) impl->containerId;
+        for (int i = 0; i < 8 && w != 0; ++i)
+        {
+            XWindowAttributes a {};
+            if (XGetWindowAttributes (dpy, w, &a) == 0) break;
+            const int area = a.width * a.height;
+            if (area > biggestArea) { biggestArea = area; biggestW = a.width; biggestH = a.height; }
+            if (a.width >= needW && a.height >= needH)
+                if (bestFitW == 0 || area < bestFitW * bestFitH)
+                { bestFitW = a.width; bestFitH = a.height; }
+
+            ::Window root, parent, *ch = nullptr; unsigned n = 0;
+            if (XQueryTree (dpy, w, &root, &parent, &ch, &n) == 0) break;
+            if (ch) XFree (ch);
+            if (parent == 0 || parent == root) break;
+            w = parent;
+        }
+
+        if (bestFitW != 0) { devW = bestFitW; devH = bestFitH; }
+        else               { devW = biggestW; devH = biggestH; }
+    }
+   #endif
+
+    if (devW < 64 || devH < 64)
+    {
+        devW = juce::roundToInt (getWidth()  * ovQtScale());
+        devH = juce::roundToInt (getHeight() * ovQtScale());
+    }
+
+    const double dpr = (impl->view->devicePixelRatio() > 0.1)
+                           ? impl->view->devicePixelRatio() : 1.0;
+
+    impl->view->resize (juce::roundToInt (devW / dpr),
+                        juce::roundToInt (devH / dpr));
+
+   #if JUCE_LINUX
+    if (auto* dpy = XOpenDisplay (nullptr))
+    {
+        XMoveResizeWindow (dpy, (::Window) (quintptr) impl->view->winId(),
+                           0, 0, (unsigned) devW, (unsigned) devH);
         XFlush (dpy);
     }
    #endif
 }
+
+
+
 
 void OvQmlEditor::attachToHostWindow()
 {
@@ -605,24 +677,43 @@ void OvQmlEditor::attachToHostWindow()
     //   * the window must be opaque.  With no compositor an unpainted region of
     //     Qt's backing store has alpha 0, and once reparented the host's
     //     background shows through it.
-    const int wantW = std::max (64, (int) std::lround (top->getWidth()  / ovQtScale()));
-    const int wantH = std::max (64, (int) std::lround (top->getHeight() / ovQtScale()));
+    const int embedW = std::max (64, (int) std::lround (top->getWidth()  * ovQtScale()));
+    const int embedH = std::max (64, (int) std::lround (top->getHeight() * ovQtScale()));
+    const double embedDpr = (impl->view->devicePixelRatio() > 0.1)
+                                ? impl->view->devicePixelRatio() : 1.0;
 
     impl->view->setFlag (Qt::FramelessWindowHint, true);
     impl->view->setFlag (Qt::NoDropShadowWindowHint, true);
-    impl->view->resize (wantW, wantH);
 
+    // A window that lives under a FOREIGN parent has no screen of its own, so
+    // Qt assumes dpr 1 and sizes the native window to the logical size.  The
+    // host, meanwhile, sized its canvas with the real scale: measured, the X
+    // window was 1040x772 inside a 1354x1005 canvas.  Attaching the window to
+    // the screen restores the scale Qt should be using, and it then sets the
+    // native size to logical x dpr on its own.
+    if (auto* scr = QGuiApplication::primaryScreen())
+        impl->view->setScreen (scr);
+
+    impl->view->resize ((int) std::lround (embedW / embedDpr),
+                        (int) std::lround (embedH / embedDpr));
+
+    // ovEmbedNative takes DEVICE pixels and does not scale again.
     const bool embedded = ovEmbedNative (impl->view, containerId,
-                                         offX, offY, wantW, wantH);
+                                         offX, offY, embedW, embedH);
     if (dbg) std::fprintf (stderr, "[attach] embed %s -> container %lx as %dx%d\n",
                            embedded ? "ok" : "FAILED",
-                           (unsigned long) containerId, wantW, wantH);
+                           (unsigned long) containerId, embedW, embedH);
     Q_UNUSED (embedded);
 
     // Ask the host to give us a window that matches the desktop scale.  One
     // request only (see fitToHost).
     fitToHost (containerId);
     impl->view->raise();
+
+    // And fill whatever the host actually allocated.  resized() runs before
+    // this point (the component is laid out before its peer exists), so without
+    // this call the view kept the size computed with no container at all.
+    syncGeometry();
 
     attached = true;
     attachedXid = native;
@@ -697,23 +788,25 @@ void OvQmlEditor::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWh
 // ---------------------------------------------------------------------------
 juce::Point<int> OvQmlEditor::targetSize() const
 {
-    // Qt is the only part of this program that knows the desktop scale: JUCE
-    // reports 1.0 on the same screen (measured), because it reads its own
-    // display list and no Xft.dpi.  The QML scene already uses this number for
-    // its own device-pixel work, so taking it from the same place keeps the
-    // editor and the scene consistent.
-    double dpr = 1.0;
-    if (auto* scr = QGuiApplication::primaryScreen())
-        dpr = scr->devicePixelRatio();
+    // ---- ask the HOST in logical pixels -----------------------------------
+    // Two different scales are in play and confusing them is what kept the
+    // editor the wrong size:
+    //
+    //   * the request to the host (ui:resize / setSize) is in LOGICAL pixels,
+    //     and the host multiplies it by the desktop scale to build its canvas.
+    //     Asking for 1354 made a 1763-wide canvas; asking for 1040 makes 1354,
+    //     which is the size we want.
+    //   * the editor's own window must then be that canvas size in DEVICE
+    //     pixels, because the window sits under a foreign parent whose ratio Qt
+    //     reports as 1 — see syncGeometry().
+    //
+    // So: plain design size here, scaled in syncGeometry().
+    int w = OvThemeWidth;
+    int h = OvThemeHeight;
 
-    int w = (int) std::lround (OvThemeWidth  * dpr);
-    int h = (int) std::lround (OvThemeHeight * dpr);
-
-    // Never ask for more than the screen can hold, and never less than a size
-    // that the layout can still be read at.
     if (auto* scr = QGuiApplication::primaryScreen())
     {
-        const QSize avail = scr->availableGeometry().size() * dpr;
+        const QSize avail = scr->availableGeometry().size();
         if (avail.width() > 200 && avail.height() > 200)
         {
             const double k = std::min (1.0, std::min ((double) avail.width()  / w,
@@ -727,6 +820,8 @@ juce::Point<int> OvQmlEditor::targetSize() const
     h = juce::jlimit (341, 4096, h);
     return { w, h };
 }
+
+
 
 void OvQmlEditor::fitToHost (WId containerId)
 {
