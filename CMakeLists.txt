@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 #   * own LV2 URI / bundle id / plug-in code
 #   * own bundle + product name (OnyxTEON.lv2, OnyxTEON.vst3)
 #   * identical parameter IDs, so .hinj presets stay interchangeable.
-project(OnyxTEON VERSION 0.9.14)
+project(OnyxTEON VERSION 0.9.15)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
