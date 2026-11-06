@@ -521,6 +521,15 @@ void OvEqView::paint (QPainter* g)
         cg.scale (dpr, dpr);
         paintContent (&cg, w, h, m_plot.top(), m_plot.bottom(), accent);
     }
+
+    // Snapshot the plot BEFORE the glass goes on.  The seam glass samples this
+    // image, and in the page FrostEngine samples the raw canvases
+    // (grid/spec/curve/overflow), never the composited page — so handing it
+    // m_content after paintFrost() below would blur a picture that already had
+    // this half's control-pit frost painted into it.  That double frost is
+    // what made the seam look coloured compared with the page.
+    m_unfrosted = m_content;
+
     const double msRender = std::chrono::duration<double, std::milli> (
         std::chrono::steady_clock::now() - tRender0).count();
 

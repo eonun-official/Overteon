@@ -72,6 +72,12 @@ public:
     /// other half's.  Null until the view has painted once.
     QImage contentImage() const { return m_content; }
 
+    /// The plot without this half's glass on it.  This is what the seam glass
+    /// samples: the page's FrostEngine reads the raw canvases, so feeding it a
+    /// picture that already contains the control-pit frost would apply the
+    /// glass twice.
+    QImage unfrostedImage() const { return m_unfrosted; }
+
     /// Emitted right after m_content has been re-rendered.  OvSeamFrost listens
     /// to this: without it the seam glass never learns that the plots changed,
     /// so it paints once while m_content is still null and then sits blank
@@ -198,6 +204,7 @@ private:
     int    m_hoverBand = -1;
 
     QImage m_content;        // the plot, rendered off-screen
+    QImage m_unfrosted;      // the plot before paintFrost() touched it
     std::chrono::steady_clock::time_point m_lastMoveTime;
 
     // ---- static background cache ----------------------------------------

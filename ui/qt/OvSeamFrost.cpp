@@ -87,8 +87,12 @@ void OvSeamFrost::paint (QPainter* g)
     if (std::getenv ("ONYXTEON_NOSEAM") != nullptr) return;
     if (m_top == nullptr || m_bottom == nullptr) return;
 
-    const QImage top    = m_top->contentImage();
-    const QImage bottom = m_bottom->contentImage();
+    // unfrostedImage(): the page's FrostEngine samples the raw plot canvases.
+    // Using contentImage() here fed the glass a picture that already had each
+    // half's control-pit frost baked in, so the seam was blurred twice and came
+    // out visibly darker and more saturated than the page.
+    const QImage top    = m_top->unfrostedImage();
+    const QImage bottom = m_bottom->unfrostedImage();
     if (top.isNull() && bottom.isNull()) return;
 
     const double w = width(), h = height();

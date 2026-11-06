@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <chrono>
 #include <complex>
 #include <mutex>
@@ -201,7 +202,20 @@ private:
     /// engine polls first advances the signal and the other sees the result.
     void renderTo (double t) const
     {
-        if (m_generatedUntil < 0.0) { m_generatedUntil = t; return; }
+        // First call, or the clock went backwards (a new --freeze / onyxteon_t
+        // pin): fill the whole ring so there is always a full block to measure.
+        // Returning early on the first call left every sample at zero, which
+        // read as -120 dB — and with the clock pinned (a comparison run) it
+        // never advanced, so the bars stayed at nothing for the whole run.
+        const bool restart = (m_generatedUntil < 0.0) || (t < m_generatedUntil);
+        if (restart)
+        {
+            m_ring.assign (kFft, 0.0f);
+            m_ringPos = 0;
+            m_phase = 0.0;
+            m_lfoPhase = 0.0;
+            m_generatedUntil = t - double (kFft) / sampleRate();
+        }
         if (t <= m_generatedUntil) return;
 
         const double dt = std::min (t - m_generatedUntil, 0.25);   // cap a stall
@@ -273,8 +287,13 @@ private:
     // use.  On a real GPU (1.5 % cpu) "time" advanced ~60x slower than reality
     // and the UI looked frozen; on a software rasteriser (120 % cpu) it ran
     // faster than real time and reported 125 fps.  Same build, same code.
+    /// Time used by meters()/spectrum().  --freeze pins it to 1.0, matching the
+    /// page's ?freeze=1; ONYXTEON_T=<s> pins it anywhere so a comparison can
+    /// pick a moment where the bar is mid-scale.
     static double now()
     {
+        if (const char* pin = std::getenv ("ONYXTEON_T"))
+            return std::atof (pin);
         using clock_type = std::chrono::steady_clock;
         static const auto t0 = clock_type::now();
         return std::chrono::duration<double> (clock_type::now() - t0).count();

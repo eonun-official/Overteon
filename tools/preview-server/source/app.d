@@ -7,7 +7,10 @@
 //    /                landing page with links
 //    /original        the ORIGINAL HTML+CSS, extracted from ~/SupersawOmega.rar
 //                     (the pristine design, no modifications)
-//    /current         the current UI (FrostEngine dual-Kawase blur, ONYX|TEON)
+//    /current         the current UI (ONYX|TEON; same HTML, only the wordmark
+//                     differs — the glass is plain CSS backdrop-filter, as in
+//                     the original, because the blur that matters lives in the
+//                     Qt front end and the page is the reference)
 //    /compare         both side by side in iframes
 //    /raw/original    original index.html, untouched
 //    /raw/current     current index.html, untouched
@@ -201,33 +204,105 @@ string mockBackendScript ()
     },
   };
 
-  // ?freeze=1 pins the meters and spectrum so two renders can be diffed
-  const FROZEN = /[?&]freeze=1/.test(location.search);
+  // The meters and spectrum come from the SAME signal the Qt preview
+  // generates (ui/qt/OvMockSource.h): a 60 Hz square wave whose amplitude is
+  // swept by a 0.25 Hz LFO, at 48 kHz, analysed the same way — peak of the
+  // last block for the bars, Hann-windowed 2048-point FFT for the spectrum.
+  //
+  // This replaced an invented formula.  While the two front ends drew
+  // different data, every comparison between them was meaningless.
+  //
+  // ?freeze=1 pins the clock to 1.000 s and ?t=SECONDS pins it anywhere, so a
+  // Qt capture taken with ONYXTEON_T can be compared against the same instant.
+  const FROZEN  = /[?&]freeze=1/.test(location.search);
+  const mT      = /[?&]t=([0-9.]+)/.exec(location.search);
+  const PINNED  = FROZEN ? 1.0 : (mT ? parseFloat(mT[1]) : null);
 
-  // ---- metering: same shapes the editor expects -------------------------
+  const SR = 48000, BLOCK = 1024, FFTN = 2048;
+  const ring = new Float32Array(FFTN);
+  let ringPos = 0, phase = 0, lfoPhase = 0, generatedUntil = -1;
+
+  function fft (re, im) {
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t;
+                   t = im[i]; im[i] = im[j]; im[j] = t; }
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let cr = 1, ci = 0;
+        for (let k = 0; k < len / 2; k++) {
+          const ur = re[i + k], ui = im[i + k];
+          const vr = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci;
+          const vi = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+          re[i + k] = ur + vr; im[i + k] = ui + vi;
+          re[i + k + len / 2] = ur - vr; im[i + k + len / 2] = ui - vi;
+          const ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+        }
+      }
+    }
+  }
+
+  function renderTo (t) {
+    // First call, or the clock went backwards (?t= / ?freeze=1 changes):
+    // fill the whole ring.  Returning early on the first call left every
+    // sample at zero (-120 dB), and with the clock pinned it never advanced,
+    // so the bars stayed empty for the entire comparison run.
+    if (generatedUntil < 0 || t < generatedUntil) {
+      ring.fill(0); ringPos = 0; phase = 0; lfoPhase = 0;
+      generatedUntil = t - FFTN / SR;
+    }
+    if (t <= generatedUntil) return;
+    const dt = Math.min(t - generatedUntil, 0.25);
+    generatedUntil = t;
+    const n = Math.min(Math.floor(dt * SR), FFTN);
+    for (let i = 0; i < n; i++) {
+      phase += 60 / SR; if (phase >= 1) phase -= 1;
+      lfoPhase += 0.25 / SR; if (lfoPhase >= 1) lfoPhase -= 1;
+      const lfo = 0.5 + 0.5 * Math.sin(2 * Math.PI * lfoPhase);
+      const amp = Math.pow(10, (-42 + 36 * lfo) / 20);
+      ring[ringPos] = amp * (phase < 0.5 ? 1 : -1);
+      ringPos = (ringPos + 1) % FFTN;
+    }
+  }
+
+  function peakDb () {
+    let pk = 0;
+    for (let i = 0; i < BLOCK; i++)
+      pk = Math.max(pk, Math.abs(ring[(ringPos - BLOCK + i + FFTN * 2) % FFTN]));
+    return 20 * Math.log10(Math.max(pk, 1e-6));
+  }
+
+  function spectrumBins () {
+    const re = new Float32Array(FFTN), im = new Float32Array(FFTN);
+    for (let i = 0; i < FFTN; i++) {
+      const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (FFTN - 1));
+      re[i] = ring[(ringPos + i) % FFTN] * w;
+    }
+    fft(re, im);
+    const out = [];
+    for (let i = 0; i < 128; i++) {
+      const fr = 20 * Math.pow(1000, i / 127);
+      const bin = Math.max(0, Math.min(FFTN / 2, Math.floor(fr / SR * FFTN)));
+      const mag = 2 * Math.hypot(re[bin], im[bin]) / FFTN;
+      const db = 20 * Math.log10(Math.max(mag, 1e-7));
+      out.push(Math.max(0, Math.min(1, (db + 85) / 85)));
+    }
+    return out;
+  }
+
   const t0 = performance.now();
   setInterval(() => {
-    const t = FROZEN ? 1.0 : (performance.now() - t0) / 1000;
-    const lvl = (x) => Math.max(-60, Math.min(6, x));
-    // A rise-and-fall envelope (period 6 s) with a little ripple, so the
-    // peak-hold and its 1.1 s hold are visible: the ripple alone would keep
-    // resetting the hold and the peak would just follow the level.
-    const env = 0.5 + 0.5 * Math.sin(t * 2 * Math.PI / 6.0);   // 0..1
-    const inL  = lvl(-34 + 26 * env + 1.5 * Math.sin(t * 4.7));
-    const inR  = lvl(inL - 1.7 + 0.8 * Math.sin(t * 1.3));
-    emit("meter", { il: inL, ir: inR, ol: inL + 0.6, or: inR + 0.6,
-                    hm: -14 + 3 * Math.sin(t * 0.6) });
-
-    const spec = [];
-    for (let i = 0; i < 128; i++) {
-      const x = i / 127;
-      let v = 0.55 * Math.exp(-Math.pow((x - 0.32) / 0.24, 2))
-            + 0.30 * Math.exp(-Math.pow((x - 0.72) / 0.18, 2))
-            + 0.10 * (0.5 + 0.5 * Math.sin(t * 3 + x * 9));
-      v *= 0.92 + 0.08 * Math.sin(t * 5 + x * 40);
-      spec.push(Math.max(0, Math.min(1, v)));
-    }
-    emit("spectrum", spec);
+    const t = (PINNED !== null) ? PINNED : (performance.now() - t0) / 1000;
+    renderTo(t);
+    const pk  = peakDb();
+    const lfo = 0.5 + 0.5 * Math.sin(2 * Math.PI * 0.25 * (t % 4));
+    emit("meter", { il: pk, ir: pk, ol: pk, or: pk, hm: -40 + 40 * lfo });
+    emit("spectrum", spectrumBins());
 
     // ease towards the target so UI changes never jump
     for (const id in P) {
@@ -276,8 +351,8 @@ string landingPage ()
 <ul>
   <li><a href="/original">/original</a> — the original HTML+CSS
       <code>web_fx/index.html</code> from SupersawOmega.rar</li>
-  <li><a href="/current">/current</a> — the current UI
-      <code>(FrostEngine dual-Kawase blur)</code></li>
+  <li><a href="/current">/current</a> — the same page with the ONYX|TEON
+      wordmark <code>(identical rendering)</code></li>
   <li><a href="/compare">/compare</a> — both side by side</li>
   <li><a href="/raw/original">/raw/original</a>,
       <a href="/raw/current">/raw/current</a> — untouched sources</li>
@@ -302,7 +377,7 @@ string comparePage ()
 </style>
 <figure><figcaption class="a">ORIGINAL (from the rar)</figcaption>
   <iframe src="/original"></iframe></figure>
-<figure><figcaption class="b">CURRENT (FrostEngine)</figcaption>
+<figure><figcaption class="b">CURRENT (ONYX|TEON)</figcaption>
   <iframe src="/current"></iframe></figure>
 `;
 }
