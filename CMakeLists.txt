@@ -37,7 +37,7 @@ if(OVERTEON_PREVIEW_ONLY)
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
         ui/qt/OvMeterView.cpp
-        ui/qt/OvSeamFrost.cpp
+        ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
         ui/qt/ov_ui.qrc)
     target_include_directories(overteon-qml-preview PRIVATE ui/qt)
@@ -180,7 +180,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvJuceSource.cpp
         ui/qt/OvEqView.cpp
         ui/qt/OvMeterView.cpp
-        ui/qt/OvSeamFrost.cpp
+        ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
         ui/qt/OvQmlEditor.cpp)
 
@@ -250,7 +250,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
         ui/qt/OvMeterView.cpp
-        ui/qt/OvSeamFrost.cpp
+        ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
         ui/qt/ov_ui.qrc
         ${OVERTEON_SHADER_QRC})
@@ -283,7 +283,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
         ui/qt/OvMeterView.cpp
-        ui/qt/OvSeamFrost.cpp
+        ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp)
     target_include_directories(onyx-blur-test PRIVATE ui/qt)
     target_link_libraries(onyx-blur-test PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)

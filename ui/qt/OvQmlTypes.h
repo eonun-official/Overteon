@@ -44,6 +44,7 @@ namespace OvTiming
 #include "OvEqView.h"
 #include "OvMeterView.h"
 #include "OvSeamFrost.h"
+#include "OvBlurTest.h"
 
 inline void ovRegisterQmlTypes()
 {
@@ -54,4 +55,5 @@ inline void ovRegisterQmlTypes()
     qmlRegisterType<OvEqView>   ("OnyxTEON", 1, 0, "OvEqView");
     qmlRegisterType<OvMeterView>("OnyxTEON", 1, 0, "OvMeterView");
     qmlRegisterType<OvSeamFrost>("OnyxTEON", 1, 0, "OvSeamFrost");
+    qmlRegisterType<OvBlurTest>("OnyxTEON", 1, 0, "OvBlurTest");
 }
