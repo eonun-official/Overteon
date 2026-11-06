@@ -50,6 +50,17 @@ public:
     double outR() const { return m_meters.outR; }
     double harm() const { return m_meters.harm; }
     QVariantList spectrum() const { return m_spectrum; }
+
+    /// The spectrum table itself, for C++ painters, so a plot does not pull the
+    /// source a second time — the taps are single-shot and would return zeros.
+    ///
+    /// The engine is the ONLY consumer of the source: both taps are single-shot
+    /// (reading clears the ready flag), so a painter that pulled the source
+    /// itself in the same frame would get zeros.  OvEqView used to do exactly
+    /// that, which is why the plot's spectrum fill could go blank.
+    const QVariantList& spectrumTable()    const { return m_spectrum; }
+    const QVariantList& inputSpectrumTable() const { return m_inSpectrum; }
+
     QVariantMap  presets() const { return m_presets; }
     QString presetName() const { return m_presetName; }
     int driveMode() const { return m_driveMode; }
@@ -93,7 +104,8 @@ private:
     QVariantMap  m_params;
     int          m_paramRevision = 0;
     OvMeters     m_meters;
-    QVariantList m_spectrum;
+    QVariantList m_spectrum;       // output analyser, 128 bins
+    QVariantList m_inSpectrum;     // input analyser, 128 bins
     QVariantMap  m_presets;
     QString      m_presetName = QStringLiteral ("default");
     int          m_driveMode = 1, m_limiterMode = 2;

@@ -369,6 +369,8 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             R[i] *= ig;
             pl = juce::jmax (pl, std::abs (L[i]));
             pr = juce::jmax (pr, std::abs (R[i]));
+            fftInData[(size_t) fftInIdx] = (float) ((L[i] + R[i]) * 0.5);
+            if (++fftInIdx >= fftSize) { fftInIdx = 0; fftInReady = true; }
         }
         meterInL.store (juce::jmax ((float) pl, meterInL.load() * 0.86f));
         meterInR.store (juce::jmax ((float) pr, meterInR.load() * 0.86f));

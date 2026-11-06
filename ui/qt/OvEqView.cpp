@@ -30,6 +30,7 @@ namespace
 #include <utility>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace
 {
@@ -767,15 +768,30 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     g->drawImage (QRectF (0, 0, w, h), backgroundImage (w, h, top, bottom, accent),
                   QRectF (0, 0, m_bg.width(), m_bg.height()));
 
+    // The 128-bin table, read once here and used twice: the fill below and the
+    // glow bar in the control pit.
+    float spec[128] = {};
+
     OV_MARK ("spec");
     // ---- spectrum (from the engine, 0..1 over 20 Hz..20 kHz)
     //
-    // Rendered into its own small texture by the GPU-side item and blitted
-    // here, so a spectrum-driven repaint is one image copy instead of a full
-    // re-render of the plot.  See OvSpectrum.
+    // Read from the ENGINE'S table, not from the source.  The table is filled
+    // once per poll and the plugin's analyser is single-shot, so pulling the
+    // source here as well left one of the two callers with zeros.  The same
+    // table also drives the glow bar in the control pit below, so the fill and
+    // the bar can never disagree.
     {
-        float spec[128];
-        if (m_engine != nullptr) m_engine->source().spectrum (spec, 128);
+        if (m_engine != nullptr)
+        {
+            // THE TOP SECTION IS THE INPUT TAP, THE BOTTOM ONE THE OUTPUT.
+            // The SC plot sits over the signal entering the processor and the
+            // PQ plot over the signal leaving it, so the two fill curves (and
+            // the two glow bars) are different pictures of the same audio.
+            const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
+                                          : m_engine->spectrumTable();
+            const int n = std::min (128, int (tbl.size()));
+            for (int i = 0; i < n; ++i) spec[i] = float (tbl.at (i).toDouble());
+        }
 
         // The spectrum is 128 FFT bins across a log axis, so neighbouring bins
         // are 20 % apart in x and a straight polyline between them reads as a
@@ -816,6 +832,14 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
         grad.setColorAt (1.0, gc0);
         g->fillPath (sp, grad);
     }
+
+    // ---- glow bar, in the control pit -----------------------------------
+    // Painted into the plot image rather than as a QML item, so the frosted
+    // layer on top of it blooms it — that is the effect.  It has to come
+    // BEFORE the overlay below: the CPU frost is painted inside overlayImage(),
+    // so a bar drawn after it would sit on top of the glass instead of under.
+    OV_MARK ("glowbar");
+    paintGlowBar (g, w, h, accent, spec);
 
     OV_MARK ("curves");
     OV_MARK ("overlay");
@@ -1021,6 +1045,188 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
     // The GPU glass in QML owns this surface now unless the CPU path is forced.
     if (std::getenv ("ONYXTEON_CPUFROST") != nullptr)
         paintFrost (g, m_content, w, h, accent);
+}
+
+// ---------------------------------------------------------------------------
+//  The glow bar.
+//
+//  A horizontal strip of light through each control pit: brightness left to
+//  right is level low frequency to high, so the bar reads as the spectrum the
+//  section above it draws, squeezed into the trapezoid and blooming through the
+//  frosted glass on top.
+//
+//  The top section's bar is the INPUT analyser and the bottom one the OUTPUT —
+//  the same distinction the two spectrum fills already carry — and both come
+//  from the single 128-bin table in OvEngine, so a bar can never show a
+//  different picture from the plot it belongs to.
+// ---------------------------------------------------------------------------
+void OvEqView::paintGlowBar (QPainter* g, double w, double h,
+                             const QColor& accent, const float* spec)
+{
+    if (std::getenv ("ONYXTEON_NOGLOW") != nullptr) return;
+    if (w < 8.0 || h < OvThemeBarHeight) return;
+
+    //   .controlpit{ left:50%; width:640px; height:32px; transform:translateX(-50%) }
+    //   .controlpit.top{top:0}   .controlpit.bottom{bottom:0}
+    const double pitW = std::min (double (OvThemePitWidth), w);
+    const double pitX = (w - pitW) * 0.5;
+    const double barH = OvThemeBarHeight;
+    const double barY = m_headerTop ? 0.0 : h - barH;
+
+    // ---- 32 bands --------------------------------------------------------
+    // The page draws ONE elliptical blob:
+    //   .controlpit.top::before{ opacity: var(--light);
+    //     background: radial-gradient(ellipse 70% 160% at 50% 0%,
+    //                   accent .36 0%, accent .13 38%, accent 0 78%) }
+    // The blob stays — it is the shape — but its brightness and its reach are
+    // modulated per band, so a loud region of the spectrum glows brighter and
+    // climbs further from the lit edge.  That keeps the page's look (a soft
+    // pool of light, not a bar chart) while still showing where the energy is.
+    constexpr int kBands = 32;
+    double band[kBands];
+    for (int b = 0; b < kBands; ++b)
+    {
+        const int i0 = (b * 128) / kBands;
+        const int i1 = std::max (i0 + 1, ((b + 1) * 128) / kBands);
+        double sum = 0.0;
+        for (int i = i0; i < i1; ++i) sum += std::clamp (double (spec[i]), 0.0, 1.0);
+        double l = sum / double (i1 - i0);
+        // Display curve.  The table is (dB + 85) / 85, so a signal 20 dB down
+        // sits at 0.76 and would glow almost as brightly as a full-scale one;
+        // squaring turns that into something that reads as loudness.
+        band[b] = l * l;
+    }
+
+    // One smoothing pass: 32 bands over 640 px is 20 px each, and a single
+    // square-wave harmonic landing in one band should not make a bump.
+    {
+        double tmp[kBands];
+        for (int b = 0; b < kBands; ++b)
+            tmp[b] = 0.25 * band[std::max (0, b - 1)] + 0.5 * band[b]
+                   + 0.25 * band[std::min (kBands - 1, b + 1)];
+        for (int b = 0; b < kBands; ++b) band[b] = tmp[b];
+    }
+
+    // ---- overall loudness vs. spectral shape -----------------------------
+    // Two different things, and both have to show:
+    //   * the whole blob's intensity follows the section's level, so silence
+    //     is dark and a loud passage is bright;
+    //   * the distribution across the 32 bands decides where the blob is
+    //     brighter and how far it reaches from the lit edge.
+    // Normalising the bands against their own peak gives the shape even when
+    // the section is quiet; mixing that with the absolute peak gives the level.
+    double peak = 0.0;
+    for (int b = 0; b < kBands; ++b) peak = std::max (peak, band[b]);
+    const double loud = std::clamp (peak, 0.0, 1.0);
+    if (loud < 0.002) return;                     // nothing playing: no light
+
+    double rel[kBands];
+    for (int b = 0; b < kBands; ++b) rel[b] = band[b] / peak;
+
+    // ---- cache -----------------------------------------------------------
+    // The bar only depends on the 32 band levels and on the geometry, and the
+    // spectrum arrives at ~15 Hz while the plot repaints at up to 120.
+    quint64 key = 1469598103934665603ull;
+    auto mixIn = [&key] (quint64 v) { key = (key ^ v) * 1099511628211ull; };
+    for (int b = 0; b < kBands; ++b) mixIn (quint64 (band[b] * 65535.0 + 0.5));
+    mixIn (quint64 (pitW * 16.0));
+    mixIn (quint64 (barH * 16.0) ^ (m_headerTop ? 0x9e37u : 0u));
+    mixIn (quint64 (accent.rgb()));
+
+    if (key == m_glowKey && ! m_glowBar.isNull())
+    {
+        drawGlowImage (g, pitX, barY, pitW, barH);
+        return;
+    }
+
+    // ---- the blob, per pixel --------------------------------------------
+    // Built at half the bar's size and stretched: the glass blurs it, so 160x8
+    // already carries more detail than can survive, and this runs on every plot
+    // repaint (up to 120 Hz).
+    const int cols = 160, rows = std::max (8, int (barH / 2));
+    if (m_glowBar.width() != cols || m_glowBar.height() != rows)
+        m_glowBar = QImage (cols, rows, QImage::Format_ARGB32_Premultiplied);
+    QImage& bar = m_glowBar;
+    bar.fill (Qt::transparent);
+
+    const QColor acc = accent;
+    for (int y = 0; y < rows; ++y)
+    {
+        auto* line = reinterpret_cast<QRgb*> (bar.scanLine (y));
+        // Distance from the lit edge, 0 at the edge, 1 at the far side.
+        const double yn = (y + 0.5) / double (rows);
+        const double d  = m_headerTop ? yn : (1.0 - yn);
+
+        for (int x = 0; x < cols; ++x)
+        {
+            const double fx = (x + 0.5) / double (cols);
+
+            // Band level at this column.  Smootherstep between the two
+            // neighbouring band centres: f*f*f*(f*(6f-15)+10).  smoothstep
+            // (3f^2-2f^3) is only C1 — its second derivative jumps at every
+            // control point, and that kink survives a 3 px blur as a facet.
+            // smootherstep is C2, so the curve is glassy all the way across.
+            const double bt = fx * (kBands - 1);
+            const int    bi = std::min (kBands - 2, int (bt));
+            const double bf = bt - double (bi);
+            const double bw = bf * bf * bf * (bf * (bf * 6.0 - 15.0) + 10.0);
+            const double rl = rel[bi] + (rel[bi + 1] - rel[bi]) * bw;
+
+            // Per-band brightness: a loud band is near full, a quiet one a
+            // third of that.  A floor is kept so the blob still reads as one
+            // pool of light rather than breaking into separate patches.
+            const double lv = (0.30 + 0.70 * rl) * (0.35 + 0.65 * loud);
+
+            // Vertical reach: a louder band carries further from the edge, so
+            // the silhouette follows the spectrum.  0.55 is the page's ellipse
+            // at --light = 1.
+            const double reach = 0.55 * (0.35 + 0.65 * rl);
+
+            // The elliptical falloff, plus the page's horizontal ellipse
+            // (70% of the width, so the ends of the pit are dimmer).
+            const double hx = std::exp (-std::pow ((fx - 0.5) / 0.42, 2.0));
+            const double a  = lv * hx * std::exp (-std::pow (d / reach, 2.0));
+
+            const double al = std::clamp (a * 0.95, 0.0, 1.0);
+            line[x] = al < 0.004 ? 0u
+                    : qRgba (int (acc.red() * al), int (acc.green() * al),
+                             int (acc.blue() * al), int (255 * al));
+        }
+    }
+
+    m_glowKey = key;
+    drawGlowImage (g, pitX, barY, pitW, barH);
+}
+
+void OvEqView::drawGlowImage (QPainter* g, double pitX, double barY,
+                              double pitW, double barH)
+{
+    // ---- clip to the trapezoid ------------------------------------------
+    //   .controlpit.top::after    polygon(20% 0, 80% 0, 100% 100%, 0 100%)
+    //   .controlpit.bottom::after polygon(0 0, 100% 0, 80% 100%, 20% 100%)
+    QPainterPath clip;
+    if (m_headerTop)
+    {
+        clip.moveTo (pitX + pitW * 0.20, barY);
+        clip.lineTo (pitX + pitW * 0.80, barY);
+        clip.lineTo (pitX + pitW,        barY + barH);
+        clip.lineTo (pitX,               barY + barH);
+    }
+    else
+    {
+        clip.moveTo (pitX,               barY);
+        clip.lineTo (pitX + pitW,        barY);
+        clip.lineTo (pitX + pitW * 0.80, barY + barH);
+        clip.lineTo (pitX + pitW * 0.20, barY + barH);
+    }
+    clip.closeSubpath();
+
+    g->save();
+    g->setClipPath (clip);
+    g->setRenderHint (QPainter::SmoothPixmapTransform, true);
+    g->drawImage (QRectF (pitX, barY, pitW, barH), m_glowBar,
+                  QRectF (0, 0, m_glowBar.width(), m_glowBar.height()));
+    g->restore();
 }
 
 // ---------------------------------------------------------------------------

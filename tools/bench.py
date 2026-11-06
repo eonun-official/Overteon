@@ -393,7 +393,12 @@ def finish(results, args):
         print(f"\nwrote {args.json}")
 
     bad = []
-    if results.get("deterministic", {}).get("changed"):
+    # Same tolerance the style line itself reports with: a handful of pixels at
+    # a tiny delta is antialiasing noise on text edges, not a style change.
+    # Testing `changed` alone made this summary say FAIL on runs whose own
+    # detail line had just printed PASS.
+    det = results.get("deterministic", {})
+    if det.get("changed", 0) > NOISE_PX or det.get("max_delta", 0) > NOISE_D:
         bad.append("non-deterministic render")
     if results.get("vs_reference", {}).get("changed"):
         bad.append("differs from the reference")

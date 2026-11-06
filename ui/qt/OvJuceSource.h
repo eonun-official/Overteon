@@ -42,6 +42,7 @@ public:
 
     OvMeters meters() const override;
     void     spectrum (float* dest, int count) override;
+    void     spectrumIn (float* dest, int count) override;
     double   sampleRate() const override;
 
     int driveModeIndex() const override;
@@ -67,4 +68,11 @@ private:
     juce::dsp::WindowingFunction<float> window
         { 1 << 11, juce::dsp::WindowingFunction<float>::hann };
     std::array<float, (1 << 11) * 2> fftBuf {};
+
+    /// Second analyser, for the input tap.  Its own FFT and window buffer so a
+    /// poll can return both spectra — the two taps are single-shot by design.
+    juce::dsp::FFT fftIn { 11 };
+    std::array<float, (1 << 11) * 2> fftInBuf {};
+    /// Shared body of spectrum()/spectrumIn(); `inTap` picks the buffer.
+    void analyse (float* dest, int count, bool inTap);
 };

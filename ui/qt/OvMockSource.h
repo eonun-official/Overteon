@@ -179,8 +179,24 @@ public:
             const float im = m_fft[(size_t) bin].imag();
             const float mag = 2.0f * std::sqrt (re * re + im * im) / (float) kFft;
             const float db  = 20.0f * std::log10 (std::max (mag, 1e-7f));
-            dst[i] = std::clamp ((db + 85.0f) / 85.0f, 0.0f, 1.0f);
+            float v = std::clamp ((db + 85.0f) / 85.0f, 0.0f, 1.0f);
+
+            // The OUTPUT tap carries what the processor did to the signal.
+            // The preview does not link the DSP, so this stands in for it: a
+            // broadband tilt, as if the Post EQ lifted the top and the
+            // processor's drive thickened the low end.  It only has to be
+            // visibly the same audio and a different picture, which is what the
+            // two glow bars and the two spectrum fills are for.
+            const double f01 = (double) i / std::max (1.0, (double) (n - 1));
+            const double tilt = 1.0 + 0.55 * (f01 - 0.35);
+            v = (float) std::clamp ((double) v * tilt, 0.0, 1.0);
+            dst[i] = v;
         }
+    }
+
+    void spectrumIn (float* dst, int n) override
+    {
+        spectrum (dst, n);
     }
 
     double sampleRate() const override { return 48000.0; }

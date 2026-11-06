@@ -151,6 +151,14 @@ private:
     // ---- painting helpers ------------------------------------------
     void paintContent (QPainter* g, double w, double h,
                        double top, double bottom, const QColor& accent);
+    /// The glow bar in the control pit: per-frequency brightness across the
+    /// trapezoid, low frequencies on the left.  Drawn UNDER the glass, so the
+    /// frosted layer blooms it.
+    void paintGlowBar (QPainter* g, double w, double h,
+                       const QColor& accent, const float* spec);
+    /// Blit the cached glow image through the trapezoid clip.
+    void drawGlowImage (QPainter* g, double pitX, double barY,
+                        double pitW, double barH);
     /// Paint the frosted strip for this half of the EQ.
     void paintFrost (QPainter* g, const QImage& blurred,
                      double w, double h, const QColor& accent);
@@ -221,6 +229,13 @@ private:
 
     QImage  m_frostLayer;   // last composited control-pit glass
     quint64 m_frostKey = 0;
+
+    // The glow bar only changes when the spectrum does (15 Hz) or when the
+    // geometry does, but the plot repaints at up to 120 Hz.  Rebuilding a
+    // 160x8 image with two exp() and a pow() per pixel on every paint measured
+    // 0.15 ms a frame; the key keeps it to once per spectrum update.
+    QImage  m_glowBar;
+    quint64 m_glowKey = 0;
     std::chrono::steady_clock::time_point m_frostBuiltAt {};
     // Everything above the spectrum — the five band curves, the total curve and
     // its fill, the overflow fog and the five nodes.  None of it moves unless a

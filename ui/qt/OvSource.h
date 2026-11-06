@@ -69,7 +69,11 @@ public:
 
     // ---- metering / analysis -------------------------------------------
     virtual OvMeters meters() const = 0;
-    virtual void     spectrum (float* dest, int count) = 0;    // 0..1, log 20 Hz..20 kHz
+    /// 0..1 over a log 20 Hz..20 kHz axis.  TWO analysers:
+    ///   spectrum()    the signal leaving the processor  (the PQ plot)
+    ///   spectrumIn()  the signal entering it            (the SC plot)
+    virtual void     spectrum (float* dest, int count) = 0;
+    virtual void     spectrumIn (float* dest, int count) = 0;
     virtual double   sampleRate() const = 0;
 
     /// 0 = Classic, 1 = Harmonic, 2 = Schranz (drives the section dimming).

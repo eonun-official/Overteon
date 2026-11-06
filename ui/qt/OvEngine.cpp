@@ -117,13 +117,16 @@ void OvEngine::tick()
     // repainted at the full 30 Hz for changes nobody could see.
     if ((++m_tickCount % 2) == 0)
     {
-        float spec[128];
-        m_source->spectrum (spec, 128);
+        float specIn[128], specOut[128];
+        m_source->spectrumIn (specIn, 128);     // SC plot: what enters
+        m_source->spectrum (specOut, 128);      // PQ plot: what leaves
 
+        m_inSpectrum.resize (128);
         bool changed = false;
         for (int i = 0; i < 128; ++i)
         {
-            const double v = (double) spec[i];
+            m_inSpectrum[i] = specIn[i];
+            const double v = (double) specOut[i];
             if (std::abs (m_spectrum.at (i).toDouble() - v) > 0.004)
             {
                 m_spectrum[i] = v;

@@ -160,16 +160,31 @@ OvMeters OvJuceSource::meters() const
 
 void OvJuceSource::spectrum (float* dest, int count)
 {
+    analyse (dest, count, false);      // the output tap: leaves the processor
+}
+
+void OvJuceSource::spectrumIn (float* dest, int count)
+{
+    analyse (dest, count, true);       // the input tap: enters the processor
+}
+
+void OvJuceSource::analyse (float* dest, int count, bool inTap)
+{
     std::fill (dest, dest + count, 0.0f);
-    if (! proc.fftReady.load()) return;
 
-    std::fill (fftBuf.begin(), fftBuf.end(), 0.0f);
-    std::copy (proc.fftData.begin(),
-               proc.fftData.begin() + InjectorProcessor::fftSize, fftBuf.begin());
-    proc.fftReady = false;
+    auto& ready = inTap ? proc.fftInReady : proc.fftReady;
+    if (! ready.load()) return;
 
-    window.multiplyWithWindowingTable (fftBuf.data(), InjectorProcessor::fftSize);
-    fft.performFrequencyOnlyForwardTransform (fftBuf.data());
+    auto&  buf = inTap ? fftInBuf : fftBuf;
+    auto&  tap = inTap ? proc.fftInData : proc.fftData;
+    auto&  f   = inTap ? fftIn : fft;
+
+    std::fill (buf.begin(), buf.end(), 0.0f);
+    std::copy (tap.begin(), tap.begin() + InjectorProcessor::fftSize, buf.begin());
+    ready = false;
+
+    window.multiplyWithWindowingTable (buf.data(), InjectorProcessor::fftSize);
+    f.performFrequencyOnlyForwardTransform (buf.data());
 
     const float fsr = juce::jmax (1.0f, (float) proc.getSampleRate());
     for (int i = 0; i < count; ++i)
@@ -178,7 +193,7 @@ void OvJuceSource::spectrum (float* dest, int count)
         const float fr   = 20.0f * std::pow (1000.0f, frac);
         const int   bin  = juce::jlimit (0, InjectorProcessor::fftSize / 2,
                                          (int) (fr / fsr * (float) InjectorProcessor::fftSize));
-        const float mag  = fftBuf[(size_t) bin] / (float) InjectorProcessor::fftSize * 8.0f;
+        const float mag  = buf[(size_t) bin] / (float) InjectorProcessor::fftSize * 8.0f;
         const float db   = juce::Decibels::gainToDecibels (mag, -90.0f);
         dest[i] = juce::jlimit (0.0f, 1.0f, juce::jmap (db, -85.0f, 0.0f, 0.0f, 1.0f));
     }

@@ -63,6 +63,14 @@ public:
     static constexpr int fftSize  = 1 << fftOrder;
     std::array<float, fftSize> fftData {};
     std::atomic<bool>  fftReady  { false };
+
+    /// INPUT analyser: the signal entering the sidechain EQ, i.e. before any of
+    /// this processor's own work.  The output tap above is filled at the end of
+    /// the chain, so the two together are what the SC plot and the PQ plot
+    /// show.  A second buffer rather than one shared flag, because the editor
+    /// needs both pictures in the same frame.
+    std::array<float, fftSize> fftInData {};
+    std::atomic<bool>  fftInReady { false };
     std::atomic<float> meterInL  { 0.0f }, meterInR  { 0.0f };
     std::atomic<float> meterOutL { 0.0f }, meterOutR { 0.0f };
     std::atomic<float> meterHarm { -100.0f };   // harmonic/dry ratio, dB
@@ -134,6 +142,7 @@ private:
     int lastLimiterMode = 2, lastLimiterOs = 1;
     int lastDmode = 1;
     int fftIdx = 0;
+    int fftInIdx = 0;
     double sr = 48000.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InjectorProcessor)
