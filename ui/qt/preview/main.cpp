@@ -26,7 +26,10 @@
 #include <QQuickItem>
 #include <QQmlContext>
 #include <QScreen>
+#include <QGuiApplication>
 #include <QTimer>
+#include <algorithm>
+#include <cmath>
 #include <QFontDatabase>
 #include <QFont>
 #include <QImage>
@@ -69,6 +72,14 @@ namespace
 
 namespace
 {
+    /// logicalDpi / 96 for the primary screen (1.0 on a plain 96 dpi display).
+    double uiScale()
+    {
+        if (auto* s = QGuiApplication::primaryScreen())
+            return s->logicalDotsPerInch() / 96.0;
+        return 1.0;
+    }
+
    #ifdef Q_OS_LINUX
     /// Does this display provide a vblank / UST counter?
     ///
@@ -170,7 +181,12 @@ int main (int argc, char** argv)
         qputenv ("QSG_RENDER_LOOP", "basic");
 
 
+    // Default window: the design's aspect ratio, sized to the screen so it is
+    // not tiny on a 2560x1600 panel.  --size overrides.  The actual figure is
+    // computed further down, once QApplication exists -- primaryScreen()
+    // returns null before that and the default would be silently ignored.
     int w = 840, h = 624;
+    bool sizeGiven = false;
     QString shot, customQml;
     int shotDelay = 1200;
     bool compat = wine || qEnvironmentVariableIsSet ("ONYXTEON_COMPAT");
@@ -183,7 +199,12 @@ int main (int argc, char** argv)
         {
             const QString s = QString::fromLatin1 (argv[++i]);
             const auto parts = s.split ('x');
-            if (parts.size() == 2) { w = parts[0].toInt(); h = parts[1].toInt(); }
+            if (parts.size() == 2)
+            {
+                w = parts[0].toInt();
+                h = parts[1].toInt();
+                sizeGiven = true;
+            }
         }
         else if (a == "--shot" && i + 1 < argc)
         {
@@ -227,6 +248,23 @@ int main (int argc, char** argv)
         app = std::make_unique<QApplication> (argc, argv);
     }
 
+    // Now the screen is known: fit the design's 1040x772 aspect to it.
+    if (! sizeGiven)
+    {
+        if (auto* scr = QGuiApplication::primaryScreen())
+        {
+            const QRect avail = scr->availableGeometry();
+            const double s = std::min (0.80 * avail.width() / 1040.0,
+                                       0.90 * avail.height() / 772.0);
+            const double use = std::clamp (s, 0.6, 2.5);
+            w = int (std::lround (1040.0 * use));
+            h = int (std::lround (772.0 * use));
+            std::fprintf (stderr, "[preview] screen %dx%d dpr %.3f logicalDpi %.1f, window %dx%d\n",
+                          avail.width(), avail.height(), scr->devicePixelRatio(),
+                          scr->logicalDotsPerInch(), w, h);
+        }
+    }
+
     // Match the browser's text rendering: grayscale antialiasing.  Qt's
     // default subpixel (LCD) antialiasing fringes glyph edges with colour,
     // which the web page never shows.
@@ -256,6 +294,7 @@ int main (int argc, char** argv)
         widget->setResizeMode (QQuickWidget::SizeRootObjectToView);
         widget->setClearColor (QColor (0x16, 0x18, 0x1d));
         widget->rootContext()->setContextProperty ("engine", engine.get());
+        widget->rootContext()->setContextProperty ("ovUiScale", uiScale());
 
         // QQuickWidget renders into an FBO, which needs a GL/RHI context; the
         // software backend has none.  Under wine the OpenGL RHI is already
@@ -304,6 +343,9 @@ int main (int argc, char** argv)
     view.setColor (QColor (0x16, 0x18, 0x1d));
     view.setResizeMode (QQuickView::SizeRootObjectToView);
     view.rootContext()->setContextProperty ("engine", engine.get());
+    // logicalDpi / 96: OvTheme.pt() divides by this so font sizes stay in
+    // logical pixels on a scaled display (see OvTheme.qml).
+    view.rootContext()->setContextProperty ("ovUiScale", uiScale());
 
     view.setSource (sourceUrl);
 

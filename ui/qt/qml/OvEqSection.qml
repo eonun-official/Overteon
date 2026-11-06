@@ -64,7 +64,7 @@ Item {
         }
 
         function onHoverInfo (text, pos) {
-            tip.text = text
+            tipText.text = text              // the label, not the frame
             const p = root.view.mapToItem (root, pos)
             tip.x = Math.max (4, Math.min (root.width - tip.width - 6, p.x + 12))
             tip.y = Math.max (4, p.y - 30)
