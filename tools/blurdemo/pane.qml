@@ -1,94 +1,110 @@
 import QtQuick
+import OnyxTEON 1.0
 
-// ONE image under everything.  On the right half a separate blur layer sits on
-// top of it — the same picture, blurred, clipped to that half.  The seam is
-// therefore the blur appearing over the image, not two copies side by side.
+// 2x2 in ONE image file:
+//   left column   the photo, untouched
+//   right column  the same photo, with a blur layer over its RIGHT HALF only
+//                 top = GPU two-pass,  bottom = CPU OvFrost::dualGaussian
+//
+// Each cell is identical, so the four compare directly.  Only the right half of
+// each right-hand cell carries blur: the seam in the middle of the cell is what
+// makes the blur visible.
+//
+// Every intermediate item is hidden and every visible one has an explicit x/y —
+// a ShaderEffectSource is a single item at a single place, so an unpositioned
+// one lands at 0,0 and paints over the top-left cell.
 Item {
     id: root
-    width: 1040; height: 772
+    width: 1280; height: 960
 
     property string photo: ""
     property real   sigma: 6.0
-    readonly property int halfW: Math.round (width / 2)
+    property point  crop: Qt.point (1200, 700)
+    readonly property int cellW: Math.round (width / 2)     // 640
+    readonly property int cellH: Math.round (height / 2)    // 480
+    readonly property int halfW: Math.round (cellW / 2)     // 320
+    readonly property point cropR: Qt.point (crop.x + halfW, crop.y)
 
-    Rectangle { anchors.fill: parent; color: "#000000" }
+    Rectangle { anchors.fill: parent; color: "#16181d" }
 
-    // ---- the image, whole window, untouched ------------------------------
-    Image {
-        id: base
-        anchors.fill: parent
+    // ---- the four sharp cells, straight from the photo ------------------
+    component Cell: Image {
+        width: root.cellW
+        height: root.cellH
         source: root.photo.length ? "file://" + root.photo : ""
-        sourceClipRect: Qt.rect (1200, 700, root.width, root.height)
+        sourceClipRect: Qt.rect (root.crop.x, root.crop.y, root.cellW, root.cellH)
+        sourceSize: Qt.size (3840, 2160)
+        fillMode: Image.Pad
+        smooth: true
+    }
+
+    Cell { x: 0;               y: 0 }
+    Cell { x: root.cellW;      y: 0 }
+    Cell { x: 0;               y: root.cellH }
+    Cell { x: root.cellW;      y: root.cellH }
+
+    // ===================== TOP-RIGHT: GPU blur over the right half =======
+    Image {
+        id: gpuSrc
+        width: root.cellW; height: root.cellH
+        source: root.photo.length ? "file://" + root.photo : ""
+        sourceClipRect: Qt.rect (root.crop.x, root.crop.y, root.cellW, root.cellH)
         sourceSize: Qt.size (3840, 2160)
         fillMode: Image.Pad
         smooth: true
         visible: false
     }
-
     ShaderEffectSource {
-        id: sharpLayer
-        anchors.fill: parent
-        sourceItem: base
-        live: true
-    }
-
-    // ---- the blur layer: the same image, blurred, over the right half ----
-    // The passes run over the WHOLE image so the right half's pixels stay in
-    // place; the last item clips the result to the right half only.
-    ShaderEffectSource {
-        id: cap
-        anchors.fill: parent
-        sourceItem: base
+        id: gpuCap
+        width: root.cellW; height: root.cellH
+        sourceItem: gpuSrc
         live: true
         visible: false
     }
-
     ShaderEffect {
-        id: passH
-        x: 0; y: 0
-        width: root.width; height: root.height
-        visible: false          // intermediate only
-        property variant src: cap
-        property real stepX: 1.0 / root.width
+        id: gpuH
+        width: root.cellW; height: root.cellH
+        visible: false
+        property variant src: gpuCap
+        property real stepX: 1.0 / root.cellW
         property real stepY: 0.0
         property real sigma: root.sigma
         vertexShader:   "qrc:/shaders/blur.vert.qsb"
         fragmentShader: "qrc:/shaders/blur.frag.qsb"
     }
-
     ShaderEffectSource {
-        id: mid
-        x: 0; y: 0
-        width: root.width; height: root.height
-        sourceItem: passH
+        id: gpuMid
+        width: root.cellW; height: root.cellH
+        sourceItem: gpuH
         live: true
         visible: false
     }
-
     ShaderEffect {
-        id: passV
-        x: 0; y: 0
-        width: root.width; height: root.height
-        visible: false          // drawn through the clipped layer below
-        property variant src: mid
+        id: gpuV
+        width: root.cellW; height: root.cellH
+        visible: false
+        property variant src: gpuMid
         property real stepX: 0.0
-        property real stepY: 1.0 / root.height
+        property real stepY: 1.0 / root.cellH
         property real sigma: root.sigma
         vertexShader:   "qrc:/shaders/blur.vert.qsb"
         fragmentShader: "qrc:/shaders/blur.frag.qsb"
     }
-
-    // ---- the blur layer itself: only the right half shows ----------------
-    // sourceRect is in the SOURCE ITEM's coordinates, and the source effect's
-    // own origin is not the window's: asking for (halfW,0) put the seam at
-    // x≈166 instead of 520.  Map the window-x through the item instead.
+    // visible: the blurred cell's right half, over the top-right cell
     ShaderEffectSource {
-        id: layer
-        x: root.halfW; y: 0
-        width: root.halfW; height: root.height
-        sourceItem: passV
-        sourceRect: Qt.rect (passV.mapFromItem (root, root.halfW, 0).x,
-                             0, root.halfW, root.height)
+        x: root.cellW + root.halfW; y: 0
+        width: root.halfW; height: root.cellH
+        sourceItem: gpuV
+        sourceRect: Qt.rect (root.halfW, 0, root.halfW, root.cellH)
         live: true
+    }
+
+    // ===================== BOTTOM-RIGHT: CPU blur over the right half ====
+    OvBlurTest {
+        x: root.cellW + root.halfW; y: root.cellH
+        width: root.halfW; height: root.cellH
+        file: root.photo
+        sigma: root.sigma
+        cropOrigin: root.cropR
     }
 }

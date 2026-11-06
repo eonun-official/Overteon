@@ -3,33 +3,31 @@ import QtQuick
 // ============================================================================
 //  GPU frosted glass.
 //
-//  The CPU path blurs the backdrop in a QImage: correct, but it is the largest
-//  item in the plot's frame budget (1.0-1.5 ms of CPU per surface per repaint).
-//  Here the same separable Gaussian runs as two fragment passes and costs the
-//  CPU nothing.
+//  The CPU path blurs the backdrop in a QImage, which is 1.0-1.5 ms of CPU per
+//  surface per repaint.  Here the same separable Gaussian runs as two fragment
+//  passes and costs the CPU nothing.
 //
-//  Chain, all on the GPU:
-//     ShaderEffectSource  capture the content underneath at half resolution
-//                         (the glass destroys detail anyway, so the extra
-//                         pixels cannot be seen and this quarters the work)
-//     ShaderEffect  x2    blur.frag horizontally, then vertically — the same
-//                         dual-Gaussian construction the CPU path uses
-//     ShaderEffect        glass.frag: saturate(.85), the .018 veil, the
-//                         trapezoid or ellipse mask, and .controlpit::before
+//      ShaderEffectSource   capture the region under the glass
+//      ShaderEffect  x2     blur.frag horizontally then vertically — the same
+//                           dual-Gaussian construction the CPU path uses
+//      ShaderEffect         glass.frag: saturate(.85), the .018 veil, the
+//                           trapezoid or ellipse mask, the accent glow
 //
-//  Two things Qt 6 requires and does not warn about, both learned the hard way:
+//  Five things Qt 6 requires and does not report, all found by testing:
 //    * a fragment shader needs a PAIRED vertex shader that passes the texcoord
-//      through; with only a fragment shader the UV is undefined and every
-//      texture() returns nothing
-//    * a sampler must be declared with `layout(binding = 0)`, the same binding
-//      as the uniform block — with any other binding the whole effect is
-//      silently skipped
+//      through; on its own the UV is undefined and every texture() is zero
+//    * a sampler must be declared layout(binding = 0), the same binding as the
+//      uniform block; with any other binding the whole effect is skipped
+//    * ShaderEffectSource normalises the WHOLE sourceItem to 0..1, so sourceRect
+//      is required or the glass samples the wrong part of the picture
+//    * sourceRect is in the SOURCE ITEM's coordinates, not this item's
+//    * ShaderEffect wants PREMULTIPLIED alpha
 // ============================================================================
 Item {
     id: root
 
     property Item   source: null
-    property real   sigmaCss: 3.0          // backdrop-filter: blur(3px)
+    property real   sigmaCss: 3.0           // backdrop-filter: blur(3px)
     property real   veil: 0.018
     property bool   ellipse: false          // #hdr::before uses the radial mask
     property bool   trapTop: true
@@ -37,82 +35,84 @@ Item {
     property real   glow: 0.0               // 0..1, already level^2
     property real   saturation: 0.85
 
-    /// The capture is half size, so a CSS sigma of 3 is 1.5 here.
-    readonly property real halfSigma: sigmaCss * 0.5
-    readonly property int  halfW: Math.max (2, Math.round (width  * 0.5))
-    readonly property int  halfH: Math.max (2, Math.round (height * 0.5))
+    readonly property int capW: Math.max (2, Math.round (width))
+    readonly property int capH: Math.max (2, Math.round (height))
 
-    // hideSource so the glass does not capture itself
+    // Where this item sits inside `source`, in the source's own coordinates.
+    readonly property point srcOrigin: root.source
+        ? root.mapToItem (root.source, 0, 0) : Qt.point (0, 0)
+
+    // ---- capture the region under the glass ------------------------------
     ShaderEffectSource {
         id: capture
+        width: root.capW; height: root.capH
         sourceItem: root.source
-        hideSource: false
+        sourceRect: Qt.rect (root.srcOrigin.x, root.srcOrigin.y,
+                             root.capW, root.capH)
         live: true
         recursive: false
         smooth: true
-        width: root.halfW
-        height: root.halfH
+        visible: false
     }
 
-    // ---- horizontal pass ---------------------------------------------------
+    // ---- horizontal pass -------------------------------------------------
     ShaderEffect {
         id: passH
-        width: root.halfW
-        height: root.halfH
-        // NOT visible:false — an invisible item is not rendered, so a
-        // ShaderEffectSource over it captures an empty texture and the whole
-        // chain silently produces nothing.  These passes are drawn first and
-        // are covered by the final composite.
-        visible: true
+        x: 0; y: 0
+        width: root.capW; height: root.capH
+        visible: false                    // intermediate, read by afterH
         property variant src: capture
-        property vector2d texelStep: Qt.vector2d (1.0 / root.halfW, 0.0)
-        property real sigma: root.halfSigma
+        property real stepX: 1.0 / root.capW
+        property real stepY: 0.0
+        property real sigma: root.sigmaCss
         vertexShader:   "qrc:/shaders/blur.vert.qsb"
         fragmentShader: "qrc:/shaders/blur.frag.qsb"
     }
 
     ShaderEffectSource {
         id: afterH
+        width: root.capW; height: root.capH
         sourceItem: passH
         live: true
         smooth: true
-        width: root.halfW
-        height: root.halfH
+        visible: false
     }
 
-    // ---- vertical pass -----------------------------------------------------
+    // ---- vertical pass ---------------------------------------------------
     ShaderEffect {
         id: passV
-        width: root.halfW
-        height: root.halfH
-        visible: true
+        x: 0; y: 0
+        width: root.capW; height: root.capH
+        visible: false
         property variant src: afterH
-        property vector2d texelStep: Qt.vector2d (0.0, 1.0 / root.halfH)
-        property real sigma: root.halfSigma
+        property real stepX: 0.0
+        property real stepY: 1.0 / root.capH
+        property real sigma: root.sigmaCss
         vertexShader:   "qrc:/shaders/blur.vert.qsb"
         fragmentShader: "qrc:/shaders/blur.frag.qsb"
     }
 
     ShaderEffectSource {
         id: blurred
+        width: root.capW; height: root.capH
         sourceItem: passV
         live: true
         smooth: true
-        width: root.halfW
-        height: root.halfH
+        visible: false
     }
 
-    // ---- finish: saturate, veil, shape, glow -------------------------------
+    // ---- finish: saturate, veil, shape, glow -----------------------------
     ShaderEffect {
         anchors.fill: parent
         property variant src: blurred
-        property vector2d sizePx: Qt.vector2d (width, height)
         property real veil: root.veil
         property real glow: root.glow
-        property color glowColor: root.accent
         property real isEllipse: root.ellipse ? 1.0 : 0.0
         property real trapTop: root.trapTop ? 1.0 : 0.0
         property real saturation: root.saturation
+        property real glowR: root.accent.r
+        property real glowG: root.accent.g
+        property real glowB: root.accent.b
         vertexShader:   "qrc:/shaders/glass.vert.qsb"
         fragmentShader: "qrc:/shaders/glass.frag.qsb"
     }

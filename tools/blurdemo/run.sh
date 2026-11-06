@@ -1,17 +1,20 @@
 #!/bin/sh
 # ===========================================================================
-#  Blur demo: one photo, and a blur layer over its right half.
+#  Blur demo: a 2x2 grid in one image file.
 #
 #      ./run.sh [sigma] -g     render, then show it
 #      ./run.sh [sigma] -s     render only, print the numbers
 #
-#  The image is not duplicated: the window holds ONE picture and the blur layer
-#  sits on top of its right half.  The layer is the two separable fragment
-#  passes in shaders/blur.{vert,frag} — the dual-Gaussian construction the
-#  editor's glass uses.
+#  Layout, all four cells the same crop at the same size:
 #
-#  The script reports how much detail each half has, so the layer is proven to
-#  be doing something rather than assumed.
+#      +---------------+---------------+     left column : the photo, untouched
+#      |   original    |  + BLUR (GPU) |     top-right   : GPU two-pass over its
+#      +---------------+---------------+                   RIGHT HALF only
+#      |   original    |  + BLUR (CPU) |     bottom-right: CPU OvFrost::
+#      +---------------+---------------+                   dualGaussian, same
+#
+#  Only the right half of each right-hand cell carries the blur layer, so the
+#  seam down the middle of that cell is what makes it readable.
 # ===========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -28,72 +31,68 @@ for a in "$@"; do
     esac
 done
 
-# A fixed 1:1 display: $DISPLAY on a HiDPI screen gives 1.302x captures and the
-# seam no longer lands where the QML puts it.
+# A fixed 1:1 display: $DISPLAY on a HiDPI screen gives 1.302x captures, and the
+# cell boundaries then do not land on the pixel grid the QML uses.
 DISP=${DISPLAY_TARGET:-:3}
 PHOTO=${PHOTO:-$(ls /home/x_x/BingWallpaper/*.jpg 2>/dev/null | head -1)}
 OUT=${OUT:-/tmp/blurdemo}
+W=1280
+H=960
 
 [ -x "$PREVIEW" ] || { echo "build first: ninja -C $ROOT/build" >&2; exit 1; }
 [ -n "$PHOTO" ]   || { echo "no photo in /home/x_x/BingWallpaper" >&2; exit 1; }
 
 mkdir -p "$OUT"
-SHOT="$OUT/blur.png"
+GRID="$OUT/grid.png"
 
 tmp=$(mktemp /tmp/paneXXXX.qml)
 sed -e "s|property string photo: \"\"|property string photo: \"$PHOTO\"|" \
     -e "s|property real   sigma: 6.0|property real   sigma: $SIGMA|" \
     "$HERE/pane.qml" > "$tmp"
-DISPLAY=$DISP "$PREVIEW" --size 1040x772 --freeze \
-    --qml "$tmp" --shot "$SHOT" --shot-delay 2800 >/dev/null 2>&1
+DISPLAY=$DISP "$PREVIEW" --size "${W}x${H}" --freeze \
+    --qml "$tmp" --shot "$GRID" --shot-delay 3000 >/dev/null 2>&1
 rm -f "$tmp"
-[ -s "$SHOT" ] || { echo "render failed" >&2; exit 1; }
+[ -s "$GRID" ] || { echo "render failed" >&2; exit 1; }
 
-LABELLED="$OUT/labelled.png"
-STATS=$(python3 - "$SHOT" "$LABELLED" "$SIGMA" <<'PY'
+STATS=$(python3 - "$GRID" "$SIGMA" <<'PY'
 import sys
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
-src, out, sigma = sys.argv[1], sys.argv[2], sys.argv[3]
-a = np.asarray(Image.open(src).convert("RGB")).astype(np.float32)
-seam = a.shape[1] // 2
-L, R = a[:, :seam], a[:, seam:]
+a = np.asarray(Image.open(sys.argv[1]).convert("RGB")).astype(np.float32)
+sigma = sys.argv[2]
+ch, cw = a.shape[0] // 2, a.shape[1] // 2
 
-def lap(x):
+def detail(x):
     g = x.mean(axis=2)
     return float((4 * g[1:-1, 1:-1] - g[:-2, 1:-1] - g[2:, 1:-1]
                   - g[1:-1, :-2] - g[1:-1, 2:]).var())
 
-l, r = lap(L), lap(R)
-ratio = ("%.0fx" % (l / r)) if r > 0 else "inf"
-stats = (f"sigma {sigma}   detail left {l:.0f}  right {r:.0f}   "
-         f"blurred {ratio}   {'PASS' if r < l / 10 else 'FAIL'}")
-print(stats)
+cells = {"TL": (0, 0), "TR": (0, cw), "BL": (ch, 0), "BR": (ch, cw)}
+vals = {}
+for n, (y, x) in cells.items():
+    c = a[y:y + ch, x:x + cw]
+    vals[n] = (detail(c[:, :cw // 2]), detail(c[:, cw // 2:]))
 
-pad, head, foot = 12, 26, 30
-W, H = a.shape[1], a.shape[0]
-canvas = Image.new("RGB", (W + pad * 2, H + head + pad + foot), (11, 13, 16))
-dr = ImageDraw.Draw(canvas)
-try:
-    f = ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", 15)
-except OSError:
-    f = ImageFont.load_default()
-
-canvas.paste(Image.fromarray(a.astype(np.uint8)), (pad, head))
-dr.text((pad, 4), "sharp", font=f, fill=(231, 235, 242))
-dr.text((pad + seam, 4), f"blur layer  sigma {sigma}", font=f, fill=(67, 217, 196))
-dr.text((pad, head + H + 6), stats, font=f,
-        fill=(67, 217, 196) if "PASS" in stats else (255, 42, 68))
-dr.line([(pad + seam, head), (pad + seam, head + H)], fill=(60, 68, 82), width=1)
-canvas.save(out)
+# The left column must stay as sharp as the original; each right column cell
+# must be sharp on its left half and heavily reduced on its right half.
+# The bound is relative to the original, because a small sigma cannot flatten a
+# high-contrast photo completely: at sigma 1 the right half still reads ~18
+# against 822, which is 46x less detail and plainly blurred.
+orig = vals["TL"][1]
+ok = (vals["BL"][1] > orig * 0.8                     # left column untouched
+      and vals["TR"][0] > orig * 0.8                 # TR sharp on its left
+      and vals["TR"][1] < orig * 0.2                 # TR blurred on its right
+      and vals["BR"][0] > orig * 0.8                 # BR sharp on its left
+      and vals["BR"][1] < orig * 0.2)                # BR blurred on its right
+print(f"sigma {sigma}   original {vals['TL'][1]:.0f}   "
+      f"GPU blur {vals['TR'][1]:.1f}   CPU blur {vals['BR'][1]:.1f}   "
+      f"{'PASS' if ok else 'FAIL'}")
 PY
 )
 
 echo "$STATS"
-echo "$LABELLED"
+echo "$GRID"
 
 [ "$SHOW" = 1 ] || exit 0
-
-zenity --title="Blur — sigma $SIGMA" --picture \
-       --filename="$LABELLED" --width=1080 --height=900
+python3 "$HERE/compare.py" "$GRID" "$STATS"
