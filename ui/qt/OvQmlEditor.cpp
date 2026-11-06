@@ -345,16 +345,30 @@ void OvQmlEditor::parentHierarchyChanged()
 
 void OvQmlEditor::attachToHostWindow()
 {
-    if (! impl || impl->view == nullptr || attached) return;
+    const bool dbg = std::getenv ("ONYXTEON_ATTACHDEBUG") != nullptr;
+    if (! impl || impl->view == nullptr || attached)
+    {
+        if (dbg) std::fprintf (stderr, "[attach] skip impl=%p view=%p attached=%d\n",
+                               (void*) impl.get(), impl ? (void*) impl->view : nullptr,
+                               (int) attached);
+        return;
+    }
 
     // diagnostic switch: keep the QML view detached so the host's own window
     // handling can be observed on its own
     if (std::getenv ("ONYXTEON_NO_ATTACH") != nullptr) return;
 
     auto* top = getTopLevelComponent();
-    if (top == nullptr || top->getPeer() == nullptr) return;
+    if (top == nullptr || top->getPeer() == nullptr)
+    {
+        if (dbg) std::fprintf (stderr, "[attach] no top=%p peer=%p\n", (void*) top,
+                               top ? (void*) top->getPeer() : nullptr);
+        return;
+    }
 
     void* native = top->getPeer()->getNativeHandle();
+    if (dbg) std::fprintf (stderr, "[attach] top %dx%d native=%p\n",
+                           top->getWidth(), top->getHeight(), native);
     if (native == nullptr) return;
 
     WId containerId = (WId) (quintptr) native;
@@ -377,6 +391,9 @@ void OvQmlEditor::attachToHostWindow()
     fitToHost (containerId);
     impl->view->show();
     impl->view->raise();
+    if (dbg) std::fprintf (stderr, "[attach] container %lx geom %dx%d shown\n",
+                           (unsigned long) containerId,
+                           impl->view->width(), impl->view->height());
 
    #if JUCE_LINUX
     // Empty input shape: pointer events pass through to the JUCE window
@@ -494,8 +511,12 @@ void OvQmlEditor::timerCallback()
 
     if (! attached)
     {
-        if (attachAttempts < 600) ++attachAttempts;
-        attachToHostWindow();
+        ++attachAttempts;
+        const auto now = std::chrono::steady_clock::now();
+        if (attachDeadline == std::chrono::steady_clock::time_point())
+            attachDeadline = now + std::chrono::seconds (60);
+        if (now < attachDeadline)
+            attachToHostWindow();
     }
     else if (attached)
     {

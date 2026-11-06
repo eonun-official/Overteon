@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 // ============================================================
 //  OnyxTEON Qt/QML UI — JUCE editor that hosts the QML front end.
 //
@@ -46,6 +47,13 @@ private:
     std::unique_ptr<Impl> impl;
     InjectorProcessor& proc;
     int   attachAttempts = 0;
+    /// When the attach retries give up.  A COUNT was wrong: at 120 Hz the 600
+    /// attempts were spent in five seconds, so a host that handed us its window
+    /// slightly later than that — jalv.gtk3 does, it wraps the widget in a
+    /// GtkSocket and maps it afterwards — never got an editor at all, for the
+    /// rest of the session.  That is the "the plug-in UI sometimes just does not
+    /// appear in jalv" symptom.  Time is the honest budget.
+    std::chrono::steady_clock::time_point attachDeadline {};
     int   ticksSinceAttach = 0;
     bool  attached = false;
     void* attachedXid = nullptr;
