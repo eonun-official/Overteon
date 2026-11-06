@@ -243,6 +243,27 @@ struct OvQmlEditor::Impl
     bool          failed = false;
 };
 
+// A QWindow that is parented to a FOREIGN window is sized in Qt LOGICAL
+// pixels, while JUCE's peer and every XGetWindowAttributes() report DEVICE
+// pixels.  Passing device pixels to setGeometry() made Qt apply the desktop
+// scale a second time: a 1354x1005 editor became 1763x1309 on a 1.302 display,
+// which is both wrong and large enough to push the window out of the host's
+// container (X then reported IsUnviewable and nothing was ever drawn).
+static inline double ovQtScale()
+{
+    if (auto* scr = QGuiApplication::primaryScreen())
+    {
+        const double s = scr->devicePixelRatio();
+        if (s > 0.1) return s;
+    }
+    return 1.0;
+}
+
+static inline int ovDeviceToLogical (int v)
+{
+    return (int) std::lround (v / ovQtScale());
+}
+
 OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
     : juce::AudioProcessorEditor (p), proc (p)
 {
@@ -335,7 +356,8 @@ void OvQmlEditor::paint (juce::Graphics& g)
 void OvQmlEditor::resized()
 {
     if (impl && impl->view != nullptr && attached)
-        impl->view->setGeometry (0, 0, getWidth(), getHeight());
+        impl->view->setGeometry (0, 0, ovDeviceToLogical (getWidth()),
+                                 ovDeviceToLogical (getHeight()));
 }
 
 void OvQmlEditor::parentHierarchyChanged()
@@ -383,7 +405,9 @@ void OvQmlEditor::attachToHostWindow()
     if (impl->container == nullptr) return;
 
     impl->view->setParent (impl->container);
-    impl->view->setGeometry (offX, offY, top->getWidth(), top->getHeight());
+    // JUCE's top->getWidth() is device pixels; Qt wants logical.  See ovQtScale.
+    impl->view->setGeometry (offX, offY, ovDeviceToLogical (top->getWidth()),
+                             ovDeviceToLogical (top->getHeight()));
 
     // The editor must never be larger than the area the host gives us: jalv
     // hands out a widget window that is smaller than the 840x624 default, so
@@ -461,36 +485,70 @@ void OvQmlEditor::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWh
     forwardWheel (e, w);
 }
 
+// ---------------------------------------------------------------------------
+//  Host window sizing.
+//
+//  The design is 1040x772 CSS pixels, and a CSS pixel is a LOGICAL pixel, so
+//  on a 1.302 display the editor has to be 1354x1005 DEVICE pixels.  The old
+//  version did the opposite: it measured the host's container in device pixels
+//  and asked for min(container/design), i.e. it could only ever shrink, and it
+//  never grew with the desktop scale — "the window does not get bigger when
+//  Overteon follows the system DPI".
+//
+//  Worse, asking the host for a size makes the host replace our peer window,
+//  which the timer reads as "new container" and answers with detach+attach.
+//  Shrinking every tick therefore also flashed every tick, and the two bugs
+//  fed each other.  So the target is now computed from the DESKTOP SCALE alone
+//  — never from the container — and requested once.  The container then simply
+//  follows the host window, and nothing re-enters.
+// ---------------------------------------------------------------------------
+juce::Point<int> OvQmlEditor::targetSize() const
+{
+    // Qt is the only part of this program that knows the desktop scale: JUCE
+    // reports 1.0 on the same screen (measured), because it reads its own
+    // display list and no Xft.dpi.  The QML scene already uses this number for
+    // its own device-pixel work, so taking it from the same place keeps the
+    // editor and the scene consistent.
+    double dpr = 1.0;
+    if (auto* scr = QGuiApplication::primaryScreen())
+        dpr = scr->devicePixelRatio();
+
+    int w = (int) std::lround (OvThemeWidth  * dpr);
+    int h = (int) std::lround (OvThemeHeight * dpr);
+
+    // Never ask for more than the screen can hold, and never less than a size
+    // that the layout can still be read at.
+    if (auto* scr = QGuiApplication::primaryScreen())
+    {
+        const QSize avail = scr->availableGeometry().size() * dpr;
+        if (avail.width() > 200 && avail.height() > 200)
+        {
+            const double k = std::min (1.0, std::min ((double) avail.width()  / w,
+                                                      (double) avail.height() / h));
+            w = (int) std::lround (w * k);
+            h = (int) std::lround (h * k);
+        }
+    }
+
+    w = juce::jlimit (460, 4096, w);
+    h = juce::jlimit (341, 4096, h);
+    return { w, h };
+}
+
 void OvQmlEditor::fitToHost (WId containerId)
 {
-   #if JUCE_LINUX
-    static Display* dpy = XOpenDisplay (nullptr);
-    if (dpy == nullptr) return;
+    juce::ignoreUnused (containerId);
 
-    XWindowAttributes attrs {};
-    if (XGetWindowAttributes (dpy, (::Window) containerId, &attrs) == 0) return;
+    const auto want = targetSize();
 
-    int cw = attrs.width, ch = attrs.height;
-    if (cw < 64 || ch < 64) return;
-
-    // keep the design aspect ratio inside the host's area
-    const double s = std::min ((double) cw / (double) OvThemeWidth,
-                               (double) ch / (double) OvThemeHeight);
-    int w = (int) std::lround (OvThemeWidth  * s);
-    int h = (int) std::lround (OvThemeHeight * s);
-
-    w = juce::jlimit (460, 2080, w);
-    h = juce::jlimit (341, 1544, h);
-
-    if (std::abs (w - getWidth()) <= 2 && std::abs (h - getHeight()) <= 2)
+    if (std::abs (want.x - getWidth()) <= 2 && std::abs (want.y - getHeight()) <= 2)
         return;
 
-    // Report the real (scaled) size to the host.  JUCE's LV2 wrapper turns this
-    // into a ui:resize request, so jalv / any host shrinks its window to match.
-    setSize (w, h);
-   #else
-    juce::ignoreUnused (containerId);
-   #endif
+    // ONE request.  If the host refuses, its container stays where it is and we
+    // simply fill that; asking again every tick is what caused the flashing.
+    if (want == lastRequested) return;
+    lastRequested = want;
+    setSize (want.x, want.y);
 }
 
 void OvQmlEditor::detach()
@@ -591,12 +649,63 @@ void OvQmlEditor::timerCallback()
             const int w = top->getPeer()->getBounds().getWidth();
             const int h = top->getPeer()->getBounds().getHeight();
             if (impl->view->width() != w || impl->view->height() != h)
-                impl->view->setGeometry (0, 0, w, h);
+                impl->view->setGeometry (0, 0, ovDeviceToLogical (w),
+                                         ovDeviceToLogical (h));
         }
     }
 
-    // Qt has no event loop of its own inside the plugin: drive it from the
-    // JUCE timer, which the LV2 idle callback already pumps.
+    // Qt has no event loop of its own inside the plugin: it is driven from the
+    // JUCE timer, which the host pumps through the LV2 idle interface.
+    //
+    // The host decides how often that happens, and it is NOT the rate we ask
+    // for.  jalv idles at its own update rate — 15 Hz measured — so a fixed
+    // 4 ms of processEvents per call gave Qt 15 x 4 = 60 ms out of every
+    // second: 6 % of the time.  Qt's timers then fire in bursts, the meters
+    // and the spectrum appear and disappear, and the scene renders a few
+    // irregular frames.  That is the "flickering and very laggy" report.
+    //
+    // So the budget is a FRACTION OF THE TIME THAT ACTUALLY ELAPSED since the
+    // last call.  Half of it goes to Qt, whatever cadence the host uses: 15 Hz
+    // gives ~33 ms per second each way, a 120 Hz pump gives the same share of a
+    // much smaller slice.  The cap stops a long stall (a resize, a first paint)
+    // from locking the audio thread out of the message queue.
     if (QCoreApplication::instance() != nullptr)
-        QCoreApplication::processEvents (QEventLoop::AllEvents, 4);
+    {
+        using clk = std::chrono::steady_clock;
+        static auto last = clk::now();
+        const auto now = clk::now();
+        const double elapsedMs = std::chrono::duration<double, std::milli> (now - last).count();
+        last = now;
+
+        // A/B switch while bisecting the flashing: ONYXTEON_PUMP=<ms> forces a
+        // fixed budget, the default is the adaptive fraction.
+        const int budget = std::getenv ("ONYXTEON_PUMP")
+            ? std::atoi (std::getenv ("ONYXTEON_PUMP"))
+            : (int) juce::jlimit (4.0, 20.0, elapsedMs * 0.5);
+        QCoreApplication::processEvents (QEventLoop::AllEvents, budget);
+
+        // Qt applies the host's UnmapNotify to our QWindow, so a longer pump
+        // ends with the editor hidden: measured, the window sat at Map State
+        // IsUnMapped while `view->isVisible()` still said true, and nothing was
+        // ever drawn.  Mapping it again here, after the events are drained, is
+        // the only place that wins the race — the earlier attempt in the timer
+        // body ran before Qt had seen the unmap.
+       #if JUCE_LINUX
+        if (attached && impl->view != nullptr && impl->view->isVisible())
+        {
+            WId own = (WId) (quintptr) impl->view->winId();
+            if (own != 0)
+            {
+                static Display* dpy = XOpenDisplay (nullptr);
+                XWindowAttributes a {};
+                if (dpy != nullptr && XGetWindowAttributes (dpy, (::Window) own, &a) != 0
+                    && a.map_state == IsUnmapped)
+                {
+                    XMapWindow (dpy, (::Window) own);
+                    XFlush (dpy);
+                }
+            }
+        }
+       #endif
+    }
 }

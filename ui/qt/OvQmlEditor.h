@@ -46,6 +46,11 @@ private:
     class Impl;
     std::unique_ptr<Impl> impl;
     InjectorProcessor& proc;
+    /// The size we have already asked the host for.  Guards against asking on
+    /// every tick, which makes the host replace our peer window and flash.
+    juce::Point<int> lastRequested { 0, 0 };
+    /// Design size x desktop scale, clamped to the screen.
+    juce::Point<int> targetSize() const;
     int   attachAttempts = 0;
     /// When the attach retries give up.  A COUNT was wrong: at 120 Hz the 600
     /// attempts were spent in five seconds, so a host that handed us its window
@@ -59,6 +64,8 @@ private:
     void* attachedXid = nullptr;
 
     // the QML design grid, from web_fx/index.html (#wrap is 1040x772)
+    /// The design size in CSS (logical) pixels.  The real editor size is this
+    /// times the desktop scale; see targetSize().
     static constexpr int OvThemeWidth  = 1040;
     static constexpr int OvThemeHeight = 772;
 
