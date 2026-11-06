@@ -273,6 +273,18 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
         impl->view->rootContext()->setContextProperty ("ovUiScale", scale);
         impl->view->rootContext()->setContextProperty (
             "ovCpuFrost", qEnvironmentVariableIsSet ("ONYXTEON_CPUFROST"));
+        impl->view->rootContext()->setContextProperty (
+            "ovNoFrost", qEnvironmentVariableIsSet ("ONYXTEON_NOFROST"));
+        impl->view->rootContext()->setContextProperty (
+            "ovGlassSigma",
+            qEnvironmentVariable ("ONYXTEON_GLASSSIGMA", "1.0").toDouble());
+        // The glass chain renders at device resolution; it needs the ratio.
+        {
+            QScreen* scr = impl->view->screen();
+            if (! scr) scr = QGuiApplication::primaryScreen();
+            impl->view->rootContext()->setContextProperty (
+                "ovDpr", scr ? scr->devicePixelRatio() : 1.0);
+        }
         impl->view->setResizeMode (QQuickView::SizeRootObjectToView);
         impl->view->setColor (QColor (0x16, 0x18, 0x1d));
         impl->view->setSource (QUrl (QStringLiteral ("qrc:/qml/main.qml")));

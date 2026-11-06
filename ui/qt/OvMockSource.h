@@ -25,6 +25,11 @@ public:
     // Set from the command line: freezes meters/spectrum so screenshot diffs
     // only show the effect of the interaction under test.
     static bool frozen;
+    /// ONYXTEON_NOSIGNAL: generate silence, so every meter and every spectrum
+    /// bar is empty.  The bars are drawn on top of the plots by the same
+    /// canvas the glass samples, so with the mock running there is no region
+    /// of the plot where the glass can be looked at on its own.
+    static bool silent;
 
     OvMockSource() { buildTable(); }
 
@@ -208,6 +213,7 @@ private:
     mutable double                        m_lfoPhase = 0.0;
     mutable double                        m_lfo = 0.5;
     mutable double                        m_generatedUntil = -1.0;
+    mutable bool                          m_wasSilent = false;
     mutable std::vector<std::complex<float>> m_fft = std::vector<std::complex<float>> (kFft);
 
     /// Generate every sample between the last call and `t` into the ring
@@ -220,7 +226,12 @@ private:
         // Returning early on the first call left every sample at zero, which
         // read as -120 dB — and with the clock pinned (a comparison run) it
         // never advanced, so the bars stayed at nothing for the whole run.
-        const bool restart = (m_generatedUntil < 0.0) || (t < m_generatedUntil);
+        // A change of `silent` must also restart: with the clock pinned
+        // (--freeze) renderTo returns early on every call, so a ring filled
+        // before the flag was set keeps its old samples forever and
+        // ONYXTEON_NOSIGNAL appeared to do nothing.
+        bool restart = (m_generatedUntil < 0.0) || (t < m_generatedUntil);
+        if (silent != m_wasSilent) { m_wasSilent = silent; restart = true; }
         if (restart)
         {
             m_ring.assign (kFft, 0.0f);
@@ -252,7 +263,7 @@ private:
             const double db   = -42.0 + 36.0 * m_lfo;
             const double amp  = std::pow (10.0, db / 20.0);
             const double sq   = m_phase < 0.5 ? 1.0 : -1.0;    // 50 % duty square
-            m_ring[(size_t) m_ringPos] = (float) (amp * sq);
+            m_ring[(size_t) m_ringPos] = silent ? 0.0f : (float) (amp * sq);
             m_ringPos = (m_ringPos + 1) % kFft;
         }
     }
@@ -430,3 +441,4 @@ private:
 };
 
 inline bool OvMockSource::frozen = false;
+inline bool OvMockSource::silent = false;

@@ -22,11 +22,48 @@ layout(std140, binding = 0) uniform buf {
     float glowG;
     float glowB;
 };
-layout(binding = 0) uniform sampler2D src;
+layout(binding = 1) uniform sampler2D src;
 
 void main()
 {
+    // The paint order below is the page's, and it matters:
+    //
+    //   .controlpit::before   the accent glow   <- BEHIND
+    //   .controlpit::after    backdrop-filter + rgba(255,255,255,.018)
+    //
+    // ::before is a sibling painted first, so the glow is part of the BACKDROP
+    // that ::after filters: it gets blurred, then saturated towards grey, then
+    // veiled by the 1.8 % white.  Mixing the accent in at the very end instead
+    // (which is what this did) left the glow un-veiled and fully saturated, and
+    // the pod read as a coloured wash sitting over the plot rather than a
+    // frosted version of it.  That is the "glass has colour" complaint.
     vec4 c = texture (src, vTex);
+
+    // ---- accent glow, added to the backdrop before filtering -------------
+    if (glow > 0.0005)
+    {
+        // radial-gradient(ellipse 70% 160% at 50% 0%/100%, accent .36 0%,
+        //                 accent .13 38%, accent 0 78%)
+        // The stops are LINEAR between colour stops: 0 -> .36, 38 % -> .13,
+        // 78 % -> 0.  A smoothstep ramp is not that curve.
+        vec2  centre = vec2 (0.5, trapTop > 0.5 ? 0.0 : 1.0);
+        vec2  d2 = (vTex - centre) / vec2 (0.70, 1.60);
+        float r  = length (d2);
+        float a;
+        if (r <= 0.38)      a = mix (0.36, 0.13, r / 0.38);
+        else if (r <= 0.78) a = mix (0.13, 0.00, (r - 0.38) / 0.40);
+        else                a = 0.0;
+        // Measured, not guessed.  The CSS alpha is .36 at the centre, but the
+        // pod does not render anything like that on the page: with --light at
+        // 0.385 the page's pod is only ~4 luma brighter in its bottom centre
+        // than in its top, while a straight .36 * 0.385 mix of the accent adds
+        // ~21.  Reproducing the CSS number dotted the glass with colour and made
+        // it read as a slab lying over the plot.  The factor below is the ratio
+        // between the two, taken from that measurement.
+        const float kGlowMatch = 0.20;
+        a *= glow * kGlowMatch;          // the layer opacity: var(--light)
+        c.rgb = mix (c.rgb, vec3 (glowR, glowG, glowB), clamp (a, 0.0, 1.0));
+    }
 
     // ---- saturate(.85) around luminance --------------------------------
     float l = dot (c.rgb, vec3 (0.2126, 0.7152, 0.0722));
@@ -53,27 +90,6 @@ void main()
         float lo = mix (0.20, 0.0, t);
         float hi = mix (0.80, 1.0, t);
         inside = step (lo, vTex.x) * step (vTex.x, hi);
-    }
-
-    // ---- .controlpit::before accent glow -------------------------------
-    //   radial-gradient(ellipse 70% 160% at 50% 0%,
-    //                   accent .36 0%, accent .13 38%, accent 0 78%)
-    if (glow > 0.0005)
-    {
-        // The gradient's stops are LINEAR between colour stops:
-        //     0 % -> .36,  38 % -> .13,  78 % -> 0
-        // A smoothstep ramp is not that curve — it held the glow much brighter
-        // through the middle of the bar, which showed as a pink wash over the
-        // controls where the CPU path had almost none.
-        vec2  centre = vec2 (0.5, trapTop > 0.5 ? 0.0 : 1.0);
-        vec2  d2 = (vTex - centre) / vec2 (0.70, 1.60);
-        float r  = length (d2);
-        float a;
-        if (r <= 0.38)      a = mix (0.36, 0.13, r / 0.38);
-        else if (r <= 0.78) a = mix (0.13, 0.00, (r - 0.38) / 0.40);
-        else                a = 0.0;
-        a *= glow;                       // the layer opacity: var(--light)
-        c.rgb = mix (c.rgb, vec3 (glowR, glowG, glowB), clamp (a, 0.0, 1.0));
     }
 
     // Qt's ShaderEffect takes PREMULTIPLIED alpha: with a straight alpha the

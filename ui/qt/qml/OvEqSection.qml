@@ -90,7 +90,12 @@ Item {
         // into the plot's QImage on every repaint (1.0-1.5 ms); here it is four
         // fragment passes and costs the CPU nothing.
         OvGpuGlass {
+            dbgName: root.prefix + "-pod"
+            // ONYXTEON_NOFROST must switch this one off too: the reference
+            // capture has to be free of glass, or a comparison against it
+            // silently hides whatever this surface draws.
             visible: ! root.cpuFrost
+                     && ! ((typeof ovNoFrost !== "undefined") && ovNoFrost)
             x: (parent.width - bar.pitW) / 2
             y: 0
             width: bar.pitW

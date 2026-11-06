@@ -323,6 +323,10 @@ int main (int argc, char** argv)
         {
             OvMockSource::frozen = true;
         }
+        else if (a == "--nosignal")
+        {
+            OvMockSource::silent = true;
+        }
         else if (a == "--set" && i + 1 < argc)
         {
             presets << QString::fromLatin1 (argv[++i]);
@@ -443,9 +447,25 @@ int main (int argc, char** argv)
     // logicalDpi / 96: OvTheme.pt() divides by this so font sizes stay in
     // logical pixels on a scaled display (see OvTheme.qml).
     view.rootContext()->setContextProperty ("ovUiScale", uiScale());
+    // ONYXTEON_NOSIGNAL=1 makes the mock generate silence, so nothing is drawn
+    // over the plots and the glass can be measured on a clean background.
+    if (qEnvironmentVariableIsSet ("ONYXTEON_NOSIGNAL"))
+        OvMockSource::silent = true;
+
     // ONYXTEON_CPUFROST=1 forces the QImage glass instead of the GPU shaders.
     view.rootContext()->setContextProperty (
         "ovCpuFrost", qEnvironmentVariableIsSet ("ONYXTEON_CPUFROST"));
+    view.rootContext()->setContextProperty (
+        "ovNoFrost", qEnvironmentVariableIsSet ("ONYXTEON_NOFROST"));
+    view.rootContext()->setContextProperty (
+        "ovGlassSigma", qEnvironmentVariable("ONYXTEON_GLASSSIGMA", "1.0").toDouble());
+    // Logical-to-device ratio the QML glass chain must render at.  Taken from
+    // the screen the window opens on; 1.0 when unknown.
+    {
+        QScreen* scr = QGuiApplication::primaryScreen();
+        view.rootContext()->setContextProperty (
+            "ovDpr", scr ? scr->devicePixelRatio() : 1.0);
+    }
     view.rootContext()->setContextProperty (
         "ovGlassDebug", qEnvironmentVariableIsSet ("ONYXTEON_GLASSDEBUG"));
     // labelled window-coordinate grid, for reading positions off a screenshot
@@ -520,6 +540,15 @@ int main (int argc, char** argv)
     {
         QTimer::singleShot (900, [&] {
             OvEqView* eqView = nullptr;
+            for (auto* g : view.rootObject()->findChildren<QQuickItem*>())
+                if (g->objectName().startsWith (QLatin1String ("glass-")))
+                {
+                    const QVariant o = g->property ("srcOrigin");
+                    std::fprintf (stderr, "[glass] %-8s item xy=(%g,%g) %gx%g  srcOrigin=(%g,%g)\n",
+                                  qPrintable (g->objectName()),
+                                  g->x(), g->y(), g->width(), g->height(),
+                                  o.toPointF().x(), o.toPointF().y());
+                }
             for (auto* v : view.rootObject()->findChildren<OvEqView*>())
                 if (v->prefix() == QStringLiteral ("sc")) eqView = v;
             if (eqView == nullptr) { std::fprintf (stderr, "[drag2] no view\n"); app->quit(); return; }
@@ -576,6 +605,18 @@ int main (int argc, char** argv)
         });
     }
 
+    if (std::getenv ("ONYXTEON_METERS") != nullptr)
+    {
+        auto* t = new QTimer (app.get());
+        QObject::connect (t, &QTimer::timeout, [&] {
+            std::fprintf (stderr, "[meters] inL %.1f outL %.1f  glowIn %.3f glowOut %.3f\n",
+                          engine->inL(), engine->outL(),
+                          std::max (0.0, std::min (1.0, (engine->inL() + 60) / 60)),
+                          std::max (0.0, std::min (1.0, (engine->outL() + 60) / 60)));
+        });
+        t->start (500);
+    }
+
     if (std::getenv ("ONYXTEON_DUMP") != nullptr)
     {
         QTimer::singleShot (1500, [&view] {
@@ -584,6 +625,15 @@ int main (int argc, char** argv)
                           r ? r->metaObject()->className() : "null",
                           r ? r->property ("width").toDouble() : 0.0,
                           r ? r->property ("height").toDouble() : 0.0);
+            for (auto* g : view.rootObject()->findChildren<QQuickItem*>())
+                if (g->objectName().startsWith (QLatin1String ("glass-")))
+                {
+                    const QVariant o = g->property ("srcOrigin");
+                    std::fprintf (stderr, "[glass] %-8s item xy=(%g,%g) %gx%g  srcOrigin=(%g,%g)\n",
+                                  qPrintable (g->objectName()),
+                                  g->x(), g->y(), g->width(), g->height(),
+                                  o.toPointF().x(), o.toPointF().y());
+                }
             for (auto* v : view.rootObject()->findChildren<OvEqView*>())
                 std::fprintf (stderr, "[dump] view %p prefix=%s %gx%g at (%g,%g) "
                               "visible=%d parent=%s\n", (void*) v,

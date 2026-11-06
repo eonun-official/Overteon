@@ -66,9 +66,8 @@ Item {
         width: root.cellW; height: root.cellH
         visible: false
         property variant src: gpuCap
-        property real stepX: 1.0 / root.cellW
-        property real stepY: 0.0
         property real sigma: root.sigma
+        property real axis: 0.0
         vertexShader:   "qrc:/shaders/blur.vert.qsb"
         fragmentShader: "qrc:/shaders/blur.frag.qsb"
     }
@@ -84,9 +83,8 @@ Item {
         width: root.cellW; height: root.cellH
         visible: false
         property variant src: gpuMid
-        property real stepX: 0.0
-        property real stepY: 1.0 / root.cellH
         property real sigma: root.sigma
+        property real axis: 1.0
         vertexShader:   "qrc:/shaders/blur.vert.qsb"
         fragmentShader: "qrc:/shaders/blur.frag.qsb"
     }

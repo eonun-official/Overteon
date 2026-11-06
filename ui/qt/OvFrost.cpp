@@ -247,7 +247,14 @@ QImage composite (const QImage& capture, double w, double h, double dpr,
         g.translate (cx, cy);
         g.scale (rx, ry);                     // unit circle -> the CSS ellipse
         QRadialGradient gr (QPointF (0, 0), 1.0);
-        const double a = p.light * 0.36;      // light is already squared
+        // The same 0.20 the GPU shader uses, for the same reason: the CSS alpha
+        // is .36 but the page's control pit is only ~4 luma brighter at its
+        // glow centre than at its edge with --light at 0.385, where a straight
+        // .36 mix would add ~21.  Painting the CSS number dotted the glass with
+        // colour, so the glass read as a slab over the plot.  Measured against
+        // chromium rendering the same page; see the note in glass.frag.
+        const double kGlowMatch = 0.20;
+        const double a = p.light * 0.36 * kGlowMatch;   // light is already squared
         QColor c0 = p.accent; c0.setAlphaF (std::clamp (a, 0.0, 1.0));
         QColor c1 = p.accent; c1.setAlphaF (std::clamp (a * (0.13 / 0.36), 0.0, 1.0));
         QColor c2 = p.accent; c2.setAlphaF (0.0);
