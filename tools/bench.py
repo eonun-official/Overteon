@@ -304,6 +304,11 @@ def main():
         busiest = thread_cpu(inst.pid, 2.0)
         results["live"] = {"cpu": cpu, "busiest_thread": busiest}
 
+        cores = os.cpu_count() or 1
+        print(f"  cpu            {cpu:6.1f} % of one core "
+              f"({cpu / cores:.1f} % of the machine, {cores} cores)")
+        print(f"  busiest thread {busiest:6.1f} % of one core")
+
         act = frame_activity(args.display, pid=inst.pid)
         results["live"]["frame_changes"] = act
         if act is None:
@@ -312,10 +317,6 @@ def main():
             frozen = all(v == 0 for v in act)
             if frozen:
                 results["live"]["frozen"] = True
-            cores = os.cpu_count() or 1
-        print(f"  cpu            {cpu:6.1f} % of one core "
-              f"({cpu / cores:.1f} % of the machine, {cores} cores)")
-        print(f"  busiest thread {busiest:6.1f} % of one core")
             print(f"  frame changes  {act}  {'<-- FROZEN' if frozen else ''}")
 
         fps = [float(m) for m in re.findall(r"\[fps\] window ([\d.]+)", inst.log_text())]

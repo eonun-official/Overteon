@@ -60,12 +60,11 @@ Item {
                 id: plotLayer
                 anchors.fill: parent
 
-                // Keep the plots in their own texture so the meter's 62 Hz
-                // updates do not force them to be re-uploaded (they update at
-                // 30 Hz).  Measured cost of not doing this: ~25 % of a core.
-                layer.enabled: true
-                layer.smooth: false
-                layer.mipmap: false
+                // Do NOT set layer.enabled here.  A layered item renders its
+                // children into an off-screen texture, and Qt then does not
+                // deliver mouse events to those children — the EQ nodes
+                // became impossible to grab.  It also made no measurable
+                // difference to the frame cost.
 
                 OvEqView {
                     id: scView
