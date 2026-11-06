@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 
@@ -150,8 +151,39 @@ void OvSeamFrost::paint (QPainter* g)
     p.saturate = 0.85;
     p.veil     = 0.018;
 
+    // Rebuilding this costs a half-res capture plus a full Gaussian over a
+    // 716x89 buffer, and the two plots repaint at up to 120 Hz — so without a
+    // cache the seam was re-blurred ~35 times a second for a picture that had
+    // barely changed, and that alone was most of the CPU.
+    //
+    // The key is a checksum of the capture; identical content reuses the last
+    // result.  Sampled every 3rd pixel: the content is blurred anyway, so a
+    // finer key would only cause needless rebuilds.
+    quint64 sum = 0, mix = 1469598103934665603ull;
+    for (int y = 0; y < capture.height(); y += 3)
+    {
+        const auto* line = reinterpret_cast<const QRgb*> (capture.constScanLine (y));
+        for (int x = 0; x < capture.width(); x += 3)
+        {
+            sum += line[x];
+            mix = (mix ^ line[x]) * 1099511628211ull;
+        }
+    }
+    const quint64 key = sum ^ mix ^ (quint64 (w) << 48) ^ (quint64 (h) << 32)
+                        ^ quint64 (dpr * 100);
+
+    if (key == m_cacheKey && ! m_cache.isNull() && m_cache.size() == QSize (int (std::lround (w * dpr)), int (std::lround (h * dpr))))
+    {
+        g->setRenderHint (QPainter::SmoothPixmapTransform, true);
+        g->drawImage (QRectF (0, 0, w, h), m_cache,
+                      QRectF (0, 0, m_cache.width(), m_cache.height()));
+        return;
+    }
+
     const QImage out = OvFrost::composite (capture, w, h, dpr, p);
     if (out.isNull()) return;
+    m_cacheKey = key;
+    m_cache = out;
 
     if (std::getenv ("ONYXTEON_FROSTDEBUG") != nullptr)
         std::fprintf (stderr, "[seam] %gx%g capture=%dx%d dpr=%.2f top=%dx%d bottom=%dx%d\n",

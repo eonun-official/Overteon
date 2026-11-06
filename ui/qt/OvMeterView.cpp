@@ -1,4 +1,5 @@
 #include "OvMeterView.h"
+#include <QQuickWindow>
 #include "OvFrost.h"
 #include "OvEngine.h"
 #include "OvQmlTypes.h"
@@ -353,12 +354,18 @@ void OvMeterView::paint (QPainter* g)
     //  at its own bounds — the SVG uses overflow:visible for the same reason.
     if (std::getenv ("ONYXTEON_NOGLOW") == nullptr)
     {
-        constexpr double gscale = 1.0;
+        // Half device resolution for the halo.  A halo is only ever seen
+        // through a 3 px Gaussian, so the extra pixels cannot be resolved;
+        // at full logical resolution the blur of a 550x157 buffer with a
+        // radius-12 kernel cost 9.4 ms a paint — three times the whole EQ plot.
+        // Half of DEVICE keeps it crisp when the compositor upscales on HiDPI.
+        const double dprV = window() != nullptr ? window()->devicePixelRatio() : 1.0;
+        const double gscale = dprV * 0.5;
         constexpr double kBleed = 24.0;
         const int iw = std::max (1, int (std::lround (width() * gscale)));
         const int ih = std::max (1, int (std::lround ((64.0 * sx + 2 * kBleed) * gscale)));
 
-        const auto qk = [] (double v) { return quint64 (std::clamp (v, 0.0, 1.0) * 511.0); };
+        const auto qk = [] (double v) { return quint64 (std::clamp (v, 0.0, 1.0) * 127.0); };
         const quint64 key = qk (m_outL.peak)
                           | (qk (m_outR.peak) << 9)
                           | (qk (m_inL.peak)  << 18)
@@ -383,8 +390,16 @@ void OvMeterView::paint (QPainter* g)
             blurred = OvFrost::dualGaussian (layer, sigma);
         };
 
-        if (m_glowKey != key || m_barsBlur.size() != QSize (iw, ih))
+        // Rebuilding both halos is the most expensive thing in the pod, and the
+        // level moves every poll.  The design transitions --light over 0.1 s, so
+        // a halo refreshed at 30 Hz is indistinguishable from one refreshed at
+        // 120 — and it costs a quarter as much.
+        const auto nowT = std::chrono::steady_clock::now();
+        const bool due = (nowT - m_glowBuiltAt)
+                             > std::chrono::milliseconds (33);
+        if ((m_glowKey != key && due) || m_barsBlur.size() != QSize (iw, ih))
         {
+            m_glowBuiltAt = nowT;
             m_glowKey = key;
             build (m_barsLayer, m_barsBlur, GlowBars, 1.7);
 

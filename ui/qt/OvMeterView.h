@@ -87,4 +87,5 @@ private:
     // re-running a separable Gaussian over the whole pod every frame cost
     // ~15 fps.
     quint64 m_glowKey = 0;
+    std::chrono::steady_clock::time_point m_glowBuiltAt {};
 };

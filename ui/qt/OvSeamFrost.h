@@ -47,4 +47,6 @@ private:
     OvEqView* m_top = nullptr;
     OvEqView* m_bottom = nullptr;
     bool m_scheduled = false;
+    QImage  m_cache;        // last composited glass
+    quint64 m_cacheKey = 0;
 };

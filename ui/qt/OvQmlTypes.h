@@ -25,7 +25,10 @@ namespace OvTiming
     // to allow a different rate.
     constexpr int kPlotHz   = kFrameHz;
     constexpr int kPlotMs   = kFrameMs;
-    constexpr int kMeterHz  = kFrameHz;
+    // The meter pod is a 550x73 surface with four strokes and a ring; its own
+    // paint costs 2 ms and its data arrives at 60 Hz, so 120 repaints a second
+    // bought nothing but CPU.  The WINDOW still presents at kFrameHz.
+    constexpr int kMeterHz  = 60;
     constexpr int kPollHz   = kFrameHz;
     constexpr int kPollMs   = kFrameMs;
 }

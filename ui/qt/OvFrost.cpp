@@ -282,9 +282,20 @@ QImage composite (const QImage& capture, double w, double h, double dpr,
     if (p.shape == Shape::Ellipse)
     {
         g.setCompositionMode (QPainter::CompositionMode_DestinationIn);
+        // NO explicit size in the CSS, so the gradient's ending shape is
+        // farthest-corner: an ellipse of the box's aspect ratio that passes
+        // through a corner.  For a box of half-size (w/2, h/2) that is
+        //     rx = w/2 * sqrt(2),  ry = h/2 * sqrt(2)
+        //     test: (w/2/rx)^2 + (h/2/ry)^2 = 1/2 + 1/2 = 1
+        //
+        // Using (w/2, h/2) directly made the fade finish 29 % too early: at the
+        // strip's top and bottom edge the mask was already at 100 % transparent
+        // instead of about 22 % opaque, so the glass shrank to a small blob in
+        // the middle and the surface looked like it was not there at all.
+        const double kCorner = std::sqrt (2.0);
         g.save();
         g.translate (w / 2.0, h / 2.0);
-        g.scale (w / 2.0, h / 2.0);
+        g.scale (w / 2.0 * kCorner, h / 2.0 * kCorner);
         QRadialGradient m (QPointF (0, 0), 1.0);
         m.setColorAt (0.00, QColor (0, 0, 0, 255));
         m.setColorAt (0.45, QColor (0, 0, 0, 255));
