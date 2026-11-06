@@ -107,17 +107,24 @@ OvMeterView::OvMeterView (QQuickItem* parent) : QQuickPaintedItem (parent)
     for (Channel* c : { &m_outL, &m_outR, &m_inL, &m_inR })
         c->poly = flatten (c->path);
 
-    m_timer.setInterval (1000 / OvTiming::kMeterHz);
-    connect (&m_timer, &QTimer::timeout, this, [this] {
-        // advance by the real elapsed time, not a fixed 33 ms: the hold timer
-        // is in seconds and a dropped frame must not slow the peak fall-down
+    // ---- repaint when DATA arrives, not on a private clock ----------------
+    // This used to advance on its own 30 Hz timer.  The analyser, however, is
+    // polled by the HOST: measured 11.8 Hz in jalv, so each measurement was
+    // drawn for two or three consecutive frames and then cut to the next one.
+    // The meter looked stuck and then jumped — the "even the VU meter is
+    // laggy" report — and no amount of smoothing hides a 1:3 mismatch between
+    // the data rate and the paint rate.
+    //
+    // The honest arrangement is one paint per measurement: OvEngine emits
+    // metersChanged when (and only when) the numbers moved, and this repaints
+    // then.  The elapsed time is still passed through so the peak-hold fall is
+    // seconds-based; it simply steps at the data rate instead of pretending to
+    // run faster than the data exists.
+    connect (this, &OvMeterView::advanceRequested, this, [this] {
         const auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double> (now - m_last).count();
         m_last = now;
         dt = std::min (dt, 0.1);          // design clamps dt at .1 s too
-        // Only repaint if a rendered value actually moved: at 120 Hz the
-        // unconditional update() re-stroked four trimmed paths and the ring
-        // for no visible change (and starved the event loop under wine).
         const quint64 before = stateKey();
         advance (dt);
         if (stateKey() != before)
@@ -130,7 +137,18 @@ OvMeterView::OvMeterView (QQuickItem* parent) : QQuickPaintedItem (parent)
 void OvMeterView::setEngine (OvEngine* e)
 {
     if (e == m_engine) return;
+
+    if (m_engine != nullptr)
+        disconnect (m_engine, nullptr, this, nullptr);
+
     m_engine = e;
+
+    // One repaint per measurement (see the note in the constructor).
+    if (m_engine != nullptr)
+        connect (m_engine, &OvEngine::metersChanged, this,
+                 [this] { emit advanceRequested(); },
+                 Qt::QueuedConnection);
+
     emit engineChanged();
     update();
 }
@@ -164,7 +182,18 @@ void OvMeterView::advance (double dt)
     for (const auto& t : list)
     {
         const double level = levelToFraction (t.db);
-        t.ch->level = level;
+
+        // Ballistics on the bar itself.  The analyser is polled by the HOST and
+        // in a plug-in that is slow — measured 11.8 Hz in jalv — while this
+        // runs at kMeterHz.  Assigning the raw value made every bar stand still
+        // for several frames and then jump, which reads as "even the VU meter
+        // is stuck".  A short release moves the bar towards the measurement
+        // across frames instead.  Rises are instant so transients still show.
+        {
+            const double shown = t.ch->level;
+            t.ch->level = level > shown ? level
+                                        : shown + (level - shown) * std::min (1.0, dt / 0.045);
+        }
 
         if (level >= t.ch->peak)
         {

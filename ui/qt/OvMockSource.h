@@ -148,7 +148,23 @@ public:
         return m;
     }
 
-    void spectrum (float* dst, int n) override
+    bool spectrum (float* dst, int n) override
+    {
+        return computeSpectrum (dst, n, true);      // output: after the EQ
+    }
+
+    bool spectrumIn (float* dst, int n) override
+    {
+        return computeSpectrum (dst, n, false);     // input: as generated
+    }
+
+    /// `applyPostEq` selects which of the two pictures this is.  Both come from
+    /// ONE FFT of ONE signal — that is the point, they are the same audio seen
+    /// before and after the processor — so the shared work is done here and
+    /// only the tilt is conditional.  Before this the two entry points both
+    /// called the same body and returned identical arrays, which made the two
+    /// spectrum fills and the two glow bars show the same picture.
+    bool computeSpectrum (float* dst, int n, bool applyPostEq)
     {
         renderTo (frozen ? 1.0 : now());
 
@@ -187,16 +203,15 @@ public:
             // processor's drive thickened the low end.  It only has to be
             // visibly the same audio and a different picture, which is what the
             // two glow bars and the two spectrum fills are for.
-            const double f01 = (double) i / std::max (1.0, (double) (n - 1));
-            const double tilt = 1.0 + 0.55 * (f01 - 0.35);
-            v = (float) std::clamp ((double) v * tilt, 0.0, 1.0);
+            if (applyPostEq)
+            {
+                const double f01 = (double) i / std::max (1.0, (double) (n - 1));
+                const double tilt = 1.0 + 0.55 * (f01 - 0.35);
+                v = (float) std::clamp ((double) v * tilt, 0.0, 1.0);
+            }
             dst[i] = v;
         }
-    }
-
-    void spectrumIn (float* dst, int n) override
-    {
-        spectrum (dst, n);
+        return true;      // the mock computes a fresh FFT on every call
     }
 
     double sampleRate() const override { return 48000.0; }

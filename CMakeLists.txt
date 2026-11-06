@@ -188,8 +188,12 @@ if(OVERTEON_QT_UI)
 
     target_compile_definitions(HarmonicInjector PUBLIC OVERTEON_QT_UI=1)
 
+    # QQuickRenderControl renders the scene into a texture we own instead of
+    # onto a window of Qt's own.  That is what lets the editor live inside a
+    # JUCE Component on every platform: no reparenting, so no window the host
+    # can unmap behind our back.
     target_link_libraries(HarmonicInjector PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::OpenGL)
 
     # OvQmlEditor walks and maps the host's X window chain itself
     if(UNIX AND NOT APPLE)

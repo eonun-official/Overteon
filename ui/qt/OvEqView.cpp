@@ -160,10 +160,26 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickPaintedItem (parent)
     // it happens (that path calls update() directly), so nothing the user does
     // is limited — only the analyser display, at 60 Hz, which is where the eye
     // stops being able to tell.
+    // Repaint when the SPECTRUM arrives, at the rate it actually arrives.
+    //
+    // This used to be a private timer that compared stamps; the stamps are set
+    // by OvEngine::spectrumChanged, which the HOST triggers at its own rate —
+    // 11.8 Hz measured in jalv.  A private timer running faster than that
+    // simply repainted the same picture: wasted frames, and because the extra
+    // frames carried stale data the fill appeared to stutter and then jump.
+    //
+    // The spectrumChanged connection below now calls update() directly.  The
+    // plot's own drag path already repaints in the frame it happens, so nothing
+    // the user does is limited by this.
+    //
+    // Kept as well as the direct update() in spectrumChanged: the direct call
+    // covers the common case, and this covers a changed stamp that arrived
+    // while the item was not visible.  Removing it made the plots stop
+    // repainting altogether, because spectrumChanged only fires when the data
+    // moved more than one pixel and that gate swallows most updates.
     m_repaint.setInterval (OvTiming::kPlotMs);
     connect (&m_repaint, &QTimer::timeout, this, [this] {
-        const bool spectrumMoved = (m_spectrumStamp != m_lastSpectrumStamp);
-        if (spectrumMoved)
+        if (m_spectrumStamp != m_lastSpectrumStamp)
         {
             m_lastSpectrumStamp = m_spectrumStamp;
             m_dirty = true;
@@ -193,7 +209,15 @@ void OvEqView::setEngine (OvEngine* e)
             if (m_prefix == QStringLiteral ("sc") ? scMoved : pqMoved)
                 update();
         });
-        connect (m_engine, &OvEngine::spectrumChanged, this, [this] { ++m_spectrumStamp; });
+        // One repaint per new FFT, in the frame it arrives.  Previously this
+        // only bumped a stamp and a private timer decided when to paint, which
+        // decoupled the paint rate from the data rate — the source of the
+        // stutter.  requestUpdate keeps Qt from batching it into a later frame.
+        connect (m_engine, &OvEngine::spectrumChanged, this, [this] {
+            ++m_spectrumStamp;
+            m_lastSpectrumStamp = m_spectrumStamp;
+            update();
+        });
         // Deliberately NOT connected to metersChanged: the meter only drives
         // the accent glow, and repainting the whole plot (full re-render plus
         // the blur) at the meter rate cost more than the glow is worth.  The
@@ -771,6 +795,54 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     // The 128-bin table, read once here and used twice: the fill below and the
     // glow bar in the control pit.
     float spec[128] = {};
+    float specRaw[128] = {};      // exactly what the analyser said
+
+    // ---- ballistics ------------------------------------------------------
+    // The host polls the analyser at ~12 Hz (measured 11.8 in jalv) while this
+    // paints at up to 60, so raw bins would be held for five frames and then
+    // cut to an unrelated picture.  Each bin therefore gets an instant attack
+    // and an exponential release towards the newest value; the time constant is
+    // short enough that a real drop is visible within ~100 ms and long enough
+    // that the motion spans frames instead of jumping between them.
+    //
+    // This is presentation only: `spec` above is what the analyser said.
+    {
+        using clk = std::chrono::steady_clock;
+        const auto now = clk::now();
+        double dt = 0.016;
+        if (m_specShownAt != clk::time_point())
+            dt = std::clamp (std::chrono::duration<double> (now - m_specShownAt).count(),
+                             0.001, 0.20);
+        m_specShownAt = now;
+
+        const double tau    = 0.085;                  // seconds
+        const double decay  = std::exp (-dt / tau);
+        const double rising = 1.0;                    // instant attack
+
+        float raw[128] = {};
+        if (m_engine != nullptr)
+        {
+            const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
+                                          : m_engine->spectrumTable();
+            const int n = std::min (128, int (tbl.size()));
+            for (int i = 0; i < n; ++i)
+            {
+                raw[i] = float (tbl.at (i).toDouble());
+                specRaw[i] = raw[i];
+            }
+        }
+
+        for (int i = 0; i < 128; ++i)
+        {
+            const double shown = m_specShown[i] * decay;
+            const double target = raw[i];
+            // attack when the analyser is above what is displayed, release otherwise
+            m_specShown[i] = float (target > shown
+                                        ? shown + (target - shown) * rising
+                                        : shown);
+            spec[i] = m_specShown[i];
+        }
+    }
 
     OV_MARK ("spec");
     // ---- spectrum (from the engine, 0..1 over 20 Hz..20 kHz)
@@ -781,17 +853,9 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     // table also drives the glow bar in the control pit below, so the fill and
     // the bar can never disagree.
     {
-        if (m_engine != nullptr)
-        {
-            // THE TOP SECTION IS THE INPUT TAP, THE BOTTOM ONE THE OUTPUT.
-            // The SC plot sits over the signal entering the processor and the
-            // PQ plot over the signal leaving it, so the two fill curves (and
-            // the two glow bars) are different pictures of the same audio.
-            const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
-                                          : m_engine->spectrumTable();
-            const int n = std::min (128, int (tbl.size()));
-            for (int i = 0; i < n; ++i) spec[i] = float (tbl.at (i).toDouble());
-        }
+        // (the raw read and the ballistics are both above; `spec` is what to
+        // draw, and it came from the tap this section owns — the top section is
+        // the INPUT and the bottom one the OUTPUT)
 
         // The spectrum is 128 FFT bins across a log axis, so neighbouring bins
         // are 20 % apart in x and a straight polyline between them reads as a
@@ -839,7 +903,12 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     // BEFORE the overlay below: the CPU frost is painted inside overlayImage(),
     // so a bar drawn after it would sit on top of the glass instead of under.
     OV_MARK ("glowbar");
-    paintGlowBar (g, w, h, accent, spec);
+    // RAW, not smoothed.  The bar is drawn under a 3 px Gaussian so the extra
+    // per-frame motion of the smoothed array is invisible, but feeding it the
+    // smoothed values made the bar's cache key change on every repaint: the
+    // cache never hit and two 160x8 images were rebuilt with exp()/pow() per
+    // pixel at 150 fps.  That cost 40 % of a core in the preview app.
+    paintGlowBar (g, w, h, accent, specRaw);
 
     OV_MARK ("curves");
     OV_MARK ("overlay");

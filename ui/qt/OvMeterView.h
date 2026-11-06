@@ -35,6 +35,10 @@ public:
 signals:
     void engineChanged();
 
+    /// Emitted when a fresh measurement has arrived; the view advances and
+    /// repaints once for it.
+    void advanceRequested();
+
 private:
     void advance (double dtSeconds);
 

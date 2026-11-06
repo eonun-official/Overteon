@@ -46,6 +46,31 @@ OvParam* OvEngine::typedParam (const QString& id) const
 
 void OvEngine::tick()
 {
+    // ---- the parameter scan is rate limited, the METERING IS NOT --------
+    // The QTimer runs at kPollMs (8 ms) on the assumption of an event loop that
+    // fires that often.  Inside a plug-in the loop is pumped by the host's idle
+    // callback: jalv delivers that at roughly 15 Hz with a 3.4x spread, and when
+    // processEvents() finally runs Qt dispatches EVERY expired timer at once,
+    // so one pump produced a burst of 8-15 ticks.
+    //
+    // For PARAMETERS a burst is harmless (the same value is read again) but it
+    // wasted work and repainted both plots, so that scan is gated on wall-clock
+    // time.  The METERS and the SPECTRUM are different: they are instantaneous
+    // snapshots of a moving signal, and they must be read on every call.  Gating
+    // them is what made the VU meter and the analyser stop responding — there
+    // was only one read per host heartbeat, and the drawing then showed a single
+    // stale value held for the whole gap.
+    using clk = std::chrono::steady_clock;
+    static auto lastParamScan = clk::time_point();
+    const auto nowT = clk::now();
+    bool scanParams = true;
+    if (lastParamScan != clk::time_point())
+    {
+        const auto since = std::chrono::duration_cast<std::chrono::milliseconds> (nowT - lastParamScan);
+        scanParams = since.count() >= OvTiming::kPollMs;
+    }
+    if (scanParams) lastParamScan = nowT;
+
     // A parameter "changed" only matters to the UI when it moved by more than
     // the pixel resolution of a control.  Comparing exact doubles made every
     // float wobble (host automation, the mock's drift) count as a change, and
@@ -58,6 +83,7 @@ void OvEngine::tick()
     bool anySc = false, anyPq = false, anyOther = false;
     for (auto* p : m_paramList)
     {
+        if (! scanParams) break;        // parameters: rate limited (see above)
         const auto before = p->norm();
         p->poll();
         if (std::abs (p->norm() - before) <= 1.0 / 4096.0) continue;
@@ -117,22 +143,34 @@ void OvEngine::tick()
     // repainted at the full 30 Hz for changes nobody could see.
     if ((++m_tickCount % 2) == 0)
     {
+        // Each tap is asked separately and each may have nothing new: a
+        // 2048-point FFT at 48 kHz completes every 43 ms while a host can poll
+        // at 15 Hz, so most polls find the buffer already consumed.  A tap that
+        // reports no data leaves its table alone — writing zeros there made the
+        // spectrum disappear and return, and every bounce tripped the change
+        // threshold below, which repainted both plots each time.
         float specIn[128], specOut[128];
-        m_source->spectrumIn (specIn, 128);     // SC plot: what enters
-        m_source->spectrum (specOut, 128);      // PQ plot: what leaves
+        const bool haveIn  = m_source->spectrumIn (specIn, 128);   // SC: enters
+        const bool haveOut = m_source->spectrum (specOut, 128);    // PQ: leaves
 
-        m_inSpectrum.resize (128);
+        if (m_inSpectrum.size() != 128)
+            m_inSpectrum = QVariantList (128, 0.0);
+
         bool changed = false;
-        for (int i = 0; i < 128; ++i)
-        {
-            m_inSpectrum[i] = specIn[i];
-            const double v = (double) specOut[i];
-            if (std::abs (m_spectrum.at (i).toDouble() - v) > 0.004)
+        if (haveIn)
+            for (int i = 0; i < 128; ++i)
+                m_inSpectrum[i] = (double) specIn[i];
+
+        if (haveOut)
+            for (int i = 0; i < 128; ++i)
             {
-                m_spectrum[i] = v;
-                changed = true;
+                const double v = (double) specOut[i];
+                if (std::abs (m_spectrum.at (i).toDouble() - v) > 0.004)
+                {
+                    m_spectrum[i] = v;
+                    changed = true;
+                }
             }
-        }
         if (changed)
             emit spectrumChanged();
     }

@@ -16,7 +16,8 @@
 class InjectorProcessor;
 
 class OvQmlEditor : public juce::AudioProcessorEditor,
-                    private juce::Timer
+                    private juce::Timer,
+                    private juce::ComponentMovementWatcher
 {
 public:
     explicit OvQmlEditor (InjectorProcessor&);
@@ -24,7 +25,16 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    void parentHierarchyChanged() override;
+
+    // ---- ComponentMovementWatcher ---------------------------------------
+    // This is how JUCE's own NSViewComponent / HWNDComponent keep an embedded
+    // foreign window in step with its component, and it is the piece I was
+    // missing.  JUCE already knows when a component moves, is resized, changes
+    // peer or changes visibility; polling for geometry on a timer and driving
+    // Qt's painting from it was both unnecessary and harmful.
+    void componentMovedOrResized (bool wasMoved, bool wasResized) override;
+    void componentPeerChanged() override;
+    void componentVisibilityChanged() override;
 
     // Qt does not dispatch X input for a foreign-parented window reliably, so
     // the Qt window is made input-transparent (empty X input shape) and JUCE
@@ -38,6 +48,8 @@ public:
 private:
     void timerCallback() override;
     void attachToHostWindow();
+    /// Move/resize the embedded Qt window to follow this component.
+    void syncGeometry();
     void detach();
     void fitToHost (WId containerId);
     void forwardMouse (const juce::MouseEvent&, int qtType);

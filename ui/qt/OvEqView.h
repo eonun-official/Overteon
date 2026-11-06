@@ -261,4 +261,21 @@ private:
     bool   m_dirty = true;      // repaint requested since the last frame
     double m_pendingGlow = -1000.0;
     quint64 m_spectrumStamp = 0, m_lastSpectrumStamp = 0;
+
+    /// Ballistics for the spectrum fill and the glow bar.
+    ///
+    /// The analyser is polled by the HOST, and in a plug-in that is slow:
+    /// measured 11.8 Hz in jalv, so a new FFT arrives every ~85 ms while the
+    /// scene renders at 60 fps.  Drawing the raw bins means each value is held
+    /// for five frames and then snaps to an unrelated one — consecutive frames
+    /// have nothing to do with each other, which is exactly how it was
+    /// reported.
+    ///
+    /// So the bins are smoothed HERE, where frames happen: instant attack, and
+    /// a release that decays towards the newest value with a time constant, so
+    /// a jump is a movement across several frames instead of a cut.  This is
+    /// what every hardware analyser does; the data is unchanged, only its
+    /// presentation.
+    float  m_specShown[128] = {};
+    std::chrono::steady_clock::time_point m_specShownAt {};
 };

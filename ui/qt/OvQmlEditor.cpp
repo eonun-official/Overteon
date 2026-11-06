@@ -49,9 +49,23 @@ namespace
             return ok;
         }
 
-        // Our own event loop never runs (the host owns the thread), so pump
-        // with processEvents(); the basic render loop is the safe pairing.
-        qputenv ("QSG_RENDER_LOOP", "basic");
+        // Render loop choice matters more than anything else here.
+        //
+        //   basic     renders ONLY inside processEvents() on this thread, so the
+        //             frame rate is whatever rate the host happens to call the
+        //             idle callback at — measured 9 to 32 Hz in jalv, i.e. the
+        //             "fps is random" report.  No amount of pacing inside the
+        //             callback can fix that: one callback can only paint once.
+        //   threaded  gives Qt its own render thread with its own vsync clock.
+        //             Rendering then proceeds independently of how often the
+        //             host pumps us, and processEvents() only has to keep the
+        //             GUI thread's properties and timers moving.
+        //
+        // The comment that used to be here said basic was "the safe pairing"
+        // because the host owns the thread.  That is true for correctness of
+        // the GUI thread, but it is exactly what makes the frame rate hostage
+        // to the host's heartbeat.  Overridable for A/B measurement.
+        qputenv ("QSG_RENDER_LOOP", qEnvironmentVariable ("ONYXTEON_RENDERLOOP", "threaded").toLatin1());
         qputenv ("QT_QUICK_BACKEND", "opengl");
         QQuickWindow::setGraphicsApi (QSGRendererInterface::OpenGL);
 
@@ -249,6 +263,108 @@ struct OvQmlEditor::Impl
 // scale a second time: a 1354x1005 editor became 1763x1309 on a 1.302 display,
 // which is both wrong and large enough to push the window out of the host's
 // container (X then reported IsUnviewable and nothing was ever drawn).
+
+// ---------------------------------------------------------------------------
+//  ovEmbedNative — make a QWindow a CHILD of a foreign native window.
+//
+//  Returns true when the window is now owned by the OS as a child, in which
+//  case Qt no longer takes part in mapping it and cannot hide it behind our
+//  back.  This is the whole point: see the long note at the call site.
+//
+//  `container` is the native handle JUCE's peer reports (X Window on Linux,
+//  HWND on Windows, NSView* on macOS) and `qwin->winId()` is the matching
+//  handle for the Qt window on the same platform.
+// ---------------------------------------------------------------------------
+static inline double ovQtScale();   // defined below, needed here
+
+static bool ovEmbedNative (QWindow* qwin, quintptr container,
+                           int x, int y, int w, int h)
+{
+    if (qwin == nullptr || container == 0) return false;
+
+    // The native handle must exist before it can be reparented.  winId()
+    // creates it without mapping the window on X11; on Windows and macOS it
+    // creates the platform window too, which is what we want to move.
+    const quintptr child = (quintptr) qwin->winId();
+    if (child == 0) return false;
+
+   #if JUCE_LINUX
+    auto* dpy = XOpenDisplay (nullptr);
+    if (dpy == nullptr) return false;
+
+    // `w`/`h` arrive in Qt LOGICAL pixels because that is what a QWindow is
+    // sized in, but XMoveResizeWindow speaks DEVICE pixels.  Passing the
+    // logical size made the embedded window 1/1.302 of the space the host
+    // allocated: measured in Carla, the host's canvas was 1763x1309 and our
+    // editor 1354x1005 — exactly the device/logical ratio, with the scene
+    // shrunk into the corner of its own box.
+    const unsigned devW = (unsigned) std::lround (w * ovQtScale());
+    const unsigned devH = (unsigned) std::lround (h * ovQtScale());
+
+    XSetWindowBorderWidth (dpy, (::Window) child, 0);
+    XReparentWindow (dpy, (::Window) child, (::Window) container, x, y);
+    XMoveResizeWindow (dpy, (::Window) child, x, y, devW, devH);
+    XFlush (dpy);
+    XSync (dpy, False);
+
+    // The reparent is in place; now let Qt build its backing store and paint.
+    qwin->show();
+    qwin->requestUpdate();
+    if (QCoreApplication::instance() != nullptr)
+    {
+        QCoreApplication::processEvents (QEventLoop::AllEvents, 10);
+        QCoreApplication::processEvents (QEventLoop::AllEvents, 10);
+    }
+
+    XMapRaised (dpy, (::Window) child);
+    XSetInputFocus (dpy, (::Window) child, RevertToParent, CurrentTime);
+    XFlush (dpy);
+    XSync (dpy, False);
+    return true;
+
+   #elif JUCE_WINDOWS
+    // Qt's winId() is an HWND here, and the host's is the top-level HWND from
+    // JUCE's peer, so SetParent is the direct equivalent of XReparentWindow.
+    ::SetParent ((HWND) child, (HWND) container);
+    ::SetWindowPos ((HWND) child, HWND_TOP, x, y, w, h,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+    qwin->show();
+    qwin->requestUpdate();
+    if (QCoreApplication::instance() != nullptr)
+        QCoreApplication::processEvents (QEventLoop::AllEvents, 10);
+    return true;
+
+   #elif JUCE_MAC
+    // Qt's winId() is an NSView*, and JUCE's peer handle is the host's NSView.
+    // Adding the subview is the same relationship as a reparent.
+    NSView* hostView = (NSView*) container;
+    NSView* qtView   = (NSView*) child;
+    if (hostView == nil || qtView == nil) return false;
+
+    [qtView removeFromSuperview];
+    [hostView addSubview: qtView];
+
+    // Qt's coordinate system for an NSView is bottom-left; the host view is the
+    // full editor, so flipping the y puts us at the top-left corner.
+    const CGFloat hostH = hostView.bounds.size.height;
+    [qtView setFrame: NSMakeRect ((CGFloat) x, hostH - (CGFloat) y - (CGFloat) h,
+                                  (CGFloat) w, (CGFloat) h)];
+    [qtView setAutoresizingMask: NSViewNotSizable];
+
+    qwin->show();
+    qwin->requestUpdate();
+    if (QCoreApplication::instance() != nullptr)
+        QCoreApplication::processEvents (QEventLoop::AllEvents, 10);
+    return true;
+
+   #else
+    juce::ignoreUnused (x, y, w, h);
+    qwin->show();
+    return false;
+   #endif
+}
+
 static inline double ovQtScale()
 {
     if (auto* scr = QGuiApplication::primaryScreen())
@@ -265,7 +381,9 @@ static inline int ovDeviceToLogical (int v)
 }
 
 OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
-    : juce::AudioProcessorEditor (p), proc (p)
+    : juce::AudioProcessorEditor (p),
+      juce::ComponentMovementWatcher (this),   // watches THIS component
+      proc (p)
 {
     impl = std::make_unique<Impl>();
     setOpaque (true);
@@ -286,6 +404,14 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
             };
 
         impl->view = new QQuickView();
+
+        // A QQuickView is a top-level window by default.  It must NOT be
+        // translucent: once it is reparented into the host's window, any region
+        // Qt has not painted has alpha 0 and the host's background shows
+        // through — which reads as the editor flashing and half drawn.
+        impl->view->setFlag (Qt::FramelessWindowHint, true);
+        impl->view->setFlag (Qt::NoDropShadowWindowHint, true);
+        impl->view->setFlags (impl->view->flags() | Qt::MSWindowsOwnDC);
 
         // logicalDpi / 96, so OvTheme.pt() keeps font sizes in logical pixels
         double scale = 1.0;
@@ -326,7 +452,10 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
         impl->failed = true;
     }
 
-    startTimerHz (OvTiming::kFrameHz);
+    // The host's idle callback is what actually pumps this timer, and jalv
+    // idles at ~15 Hz.  Asking for 120 only fills a backlog we can never drain;
+    // 60 is the rate the scene is designed for and the most any host delivers.
+    startTimerHz (60);
 }
 
 OvQmlEditor::~OvQmlEditor()
@@ -360,9 +489,60 @@ void OvQmlEditor::resized()
                                  ovDeviceToLogical (getHeight()));
 }
 
-void OvQmlEditor::parentHierarchyChanged()
+// ---------------------------------------------------------------------------
+//  ComponentMovementWatcher — keep the embedded Qt window where JUCE says the
+//  component is.  Nothing here paints: Qt's render thread does that on its own
+//  clock.  These three callbacks replace both the old parentHierarchyChanged()
+//  hook and the per-tick geometry polling, which is exactly what JUCE's own
+//  NSViewComponent / HWNDComponent do for a foreign window.
+// ---------------------------------------------------------------------------
+void OvQmlEditor::componentMovedOrResized (bool wasMoved, bool wasResized)
 {
-    attachToHostWindow();
+    if (wasResized) resized();
+    else if (wasMoved && impl && impl->view && attached) syncGeometry();
+}
+
+void OvQmlEditor::componentPeerChanged()
+{
+    // The host replaced our window (shown/hidden, or jalv.gtk3 re-wrapping the
+    // GtkSocket).  Detach and re-embed against the new handle.
+    if (attached)
+    {
+        detach();
+        attachToHostWindow();
+    }
+}
+
+void OvQmlEditor::componentVisibilityChanged()
+{
+    if (! isShowing())
+    {
+        if (impl && impl->view) impl->view->hide();
+    }
+    else if (attached && impl && impl->view)
+    {
+        impl->view->show();
+        impl->view->requestUpdate();
+    }
+}
+
+void OvQmlEditor::syncGeometry()
+{
+    if (! impl || ! impl->view) return;
+
+    const int w = std::max (64, (int) std::lround (getWidth()  / ovQtScale()));
+    const int h = std::max (64, (int) std::lround (getHeight() / ovQtScale()));
+    impl->view->resize (w, h);
+
+   #if JUCE_LINUX
+    if (auto* dpy = XOpenDisplay (nullptr))
+    {
+        XMoveResizeWindow (dpy, (::Window) (quintptr) impl->view->winId(), 0, 0,
+                       (unsigned) std::lround (w * ovQtScale()),
+                       (unsigned) std::lround (h * ovQtScale()));
+        XFlush (dpy);
+    }
+   #endif
 }
 
 void OvQmlEditor::attachToHostWindow()
@@ -401,35 +581,48 @@ void OvQmlEditor::attachToHostWindow()
    #endif
 
     impl->containerId = (void*) containerId;
-    impl->container = QWindow::fromWinId (containerId);
-    if (impl->container == nullptr) return;
 
-    impl->view->setParent (impl->container);
-    // JUCE's top->getWidth() is device pixels; Qt wants logical.  See ovQtScale.
-    impl->view->setGeometry (offX, offY, ovDeviceToLogical (top->getWidth()),
-                             ovDeviceToLogical (top->getHeight()));
+    // ---- embed the Qt window into the host's native window --------------
+    // Done per platform, and deliberately NOT with QWindow::fromWinId() +
+    // setParent(): that puts Qt on its "foreign window" path, where Qt keeps
+    // treating the view as something IT has to map and unmap.  When the host
+    // (jalv.gtk3 wraps the plug-in in a GtkSocket) sends an UnmapNotify, Qt
+    // obeys and the editor vanishes; every attempt to put it back repainted the
+    // whole window, which is the flicker that was reported.
+    //
+    // Instead the Qt window is handed to the OS as a plain child of the host's
+    // window, so nothing in Qt manages its mapping any more.  Same thing on all
+    // three platforms, different API:
+    //
+    //   Linux    XReparentWindow        (Qt window id is an X Window)
+    //   Windows  SetParent              (Qt window id is an HWND)
+    //   macOS    addSubview:            (Qt window id is an NSView*)
+    //
+    // Two rules that apply everywhere:
+    //   * reparent BEFORE showing.  Showing a top-level first registers it with
+    //     the window manager (or with the platform's window list), which then
+    //     undoes the reparent and the editor floats away at (0,0).
+    //   * the window must be opaque.  With no compositor an unpainted region of
+    //     Qt's backing store has alpha 0, and once reparented the host's
+    //     background shows through it.
+    const int wantW = std::max (64, (int) std::lround (top->getWidth()  / ovQtScale()));
+    const int wantH = std::max (64, (int) std::lround (top->getHeight() / ovQtScale()));
 
-    // The editor must never be larger than the area the host gives us: jalv
-    // hands out a widget window that is smaller than the 840x624 default, so
-    // ask the host for a size that actually fits (setSize -> LV2 ui:resize).
+    impl->view->setFlag (Qt::FramelessWindowHint, true);
+    impl->view->setFlag (Qt::NoDropShadowWindowHint, true);
+    impl->view->resize (wantW, wantH);
+
+    const bool embedded = ovEmbedNative (impl->view, containerId,
+                                         offX, offY, wantW, wantH);
+    if (dbg) std::fprintf (stderr, "[attach] embed %s -> container %lx as %dx%d\n",
+                           embedded ? "ok" : "FAILED",
+                           (unsigned long) containerId, wantW, wantH);
+    Q_UNUSED (embedded);
+
+    // Ask the host to give us a window that matches the desktop scale.  One
+    // request only (see fitToHost).
     fitToHost (containerId);
-    impl->view->show();
     impl->view->raise();
-    if (dbg) std::fprintf (stderr, "[attach] container %lx geom %dx%d shown\n",
-                           (unsigned long) containerId,
-                           impl->view->width(), impl->view->height());
-
-   #if JUCE_LINUX
-    // Empty input shape: pointer events pass through to the JUCE window
-    // underneath, which forwards them into the QML scene (see forwardMouse).
-    if (std::getenv ("ONYXTEON_CLEAR_INPUT") != nullptr)
-        if (auto* dpy = XOpenDisplay (nullptr))
-        {
-            XShapeCombineRectangles (dpy, (::Window) (quintptr) impl->view->winId(),
-                                     ShapeInput, 0, 0, nullptr, 0, ShapeSet, Unsorted);
-            XFlush (dpy);
-        }
-   #endif
 
     attached = true;
     attachedXid = native;
@@ -641,71 +834,19 @@ void OvQmlEditor::timerCallback()
         }
     }
 
-    if (attached && impl->container != nullptr)
-    {
-        auto* top = getTopLevelComponent();
-        if (top != nullptr && top->getPeer() != nullptr)
-        {
-            const int w = top->getPeer()->getBounds().getWidth();
-            const int h = top->getPeer()->getBounds().getHeight();
-            if (impl->view->width() != w || impl->view->height() != h)
-                impl->view->setGeometry (0, 0, ovDeviceToLogical (w),
-                                         ovDeviceToLogical (h));
-        }
-    }
-
-    // Qt has no event loop of its own inside the plugin: it is driven from the
-    // JUCE timer, which the host pumps through the LV2 idle interface.
+    // ---- let Qt run, and do not drive its painting ------------------------
+    // With QSG_RENDER_LOOP=threaded Qt owns a render thread with its own vsync
+    // clock: it presents frames on its own schedule, and nothing here can make
+    // that faster or slower.  All the GUI thread needs is for its queued events
+    // (timers, property bindings, input) to be dispatched, which is what
+    // processEvents() below does.
     //
-    // The host decides how often that happens, and it is NOT the rate we ask
-    // for.  jalv idles at its own update rate — 15 Hz measured — so a fixed
-    // 4 ms of processEvents per call gave Qt 15 x 4 = 60 ms out of every
-    // second: 6 % of the time.  Qt's timers then fire in bursts, the meters
-    // and the spectrum appear and disappear, and the scene renders a few
-    // irregular frames.  That is the "flickering and very laggy" report.
-    //
-    // So the budget is a FRACTION OF THE TIME THAT ACTUALLY ELAPSED since the
-    // last call.  Half of it goes to Qt, whatever cadence the host uses: 15 Hz
-    // gives ~33 ms per second each way, a 120 Hz pump gives the same share of a
-    // much smaller slice.  The cap stops a long stall (a resize, a first paint)
-    // from locking the audio thread out of the message queue.
+    // Everything I tried before this was an attempt to drive the painting from
+    // here — a fixed budget per call, then an accumulator that rendered "as
+    // many frames as had come due".  Both are wrong for the same reason: the
+    // host's idle callback arrives at ~15 Hz with a 3.4x spread (measured 9 to
+    // 32 calls a second in jalv), so any paint loop hung off it inherits that
+    // jitter.  The frame rate has to come from Qt's clock, not the host's.
     if (QCoreApplication::instance() != nullptr)
-    {
-        using clk = std::chrono::steady_clock;
-        static auto last = clk::now();
-        const auto now = clk::now();
-        const double elapsedMs = std::chrono::duration<double, std::milli> (now - last).count();
-        last = now;
-
-        // A/B switch while bisecting the flashing: ONYXTEON_PUMP=<ms> forces a
-        // fixed budget, the default is the adaptive fraction.
-        const int budget = std::getenv ("ONYXTEON_PUMP")
-            ? std::atoi (std::getenv ("ONYXTEON_PUMP"))
-            : (int) juce::jlimit (4.0, 20.0, elapsedMs * 0.5);
-        QCoreApplication::processEvents (QEventLoop::AllEvents, budget);
-
-        // Qt applies the host's UnmapNotify to our QWindow, so a longer pump
-        // ends with the editor hidden: measured, the window sat at Map State
-        // IsUnMapped while `view->isVisible()` still said true, and nothing was
-        // ever drawn.  Mapping it again here, after the events are drained, is
-        // the only place that wins the race — the earlier attempt in the timer
-        // body ran before Qt had seen the unmap.
-       #if JUCE_LINUX
-        if (attached && impl->view != nullptr && impl->view->isVisible())
-        {
-            WId own = (WId) (quintptr) impl->view->winId();
-            if (own != 0)
-            {
-                static Display* dpy = XOpenDisplay (nullptr);
-                XWindowAttributes a {};
-                if (dpy != nullptr && XGetWindowAttributes (dpy, (::Window) own, &a) != 0
-                    && a.map_state == IsUnmapped)
-                {
-                    XMapWindow (dpy, (::Window) own);
-                    XFlush (dpy);
-                }
-            }
-        }
-       #endif
-    }
+        QCoreApplication::processEvents (QEventLoop::AllEvents, 5);
 }

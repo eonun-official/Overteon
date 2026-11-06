@@ -158,22 +158,21 @@ OvMeters OvJuceSource::meters() const
     return m;
 }
 
-void OvJuceSource::spectrum (float* dest, int count)
+bool OvJuceSource::spectrum (float* dest, int count)
 {
-    analyse (dest, count, false);      // the output tap: leaves the processor
+    return analyse (dest, count, false);   // the output tap: leaves the processor
 }
 
-void OvJuceSource::spectrumIn (float* dest, int count)
+bool OvJuceSource::spectrumIn (float* dest, int count)
 {
-    analyse (dest, count, true);       // the input tap: enters the processor
+    return analyse (dest, count, true);    // the input tap: enters the processor
 }
 
-void OvJuceSource::analyse (float* dest, int count, bool inTap)
+bool OvJuceSource::analyse (float* dest, int count, bool inTap)
 {
-    std::fill (dest, dest + count, 0.0f);
-
     auto& ready = inTap ? proc.fftInReady : proc.fftReady;
-    if (! ready.load()) return;
+    // No new block: leave `dest` alone so the caller keeps its last picture.
+    if (! ready.load()) return false;
 
     auto&  buf = inTap ? fftInBuf : fftBuf;
     auto&  tap = inTap ? proc.fftInData : proc.fftData;
@@ -197,6 +196,7 @@ void OvJuceSource::analyse (float* dest, int count, bool inTap)
         const float db   = juce::Decibels::gainToDecibels (mag, -90.0f);
         dest[i] = juce::jlimit (0.0f, 1.0f, juce::jmap (db, -85.0f, 0.0f, 0.0f, 1.0f));
     }
+    return true;
 }
 
 double OvJuceSource::sampleRate() const

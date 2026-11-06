@@ -41,8 +41,8 @@ public:
     void openSaveDialog() override;
 
     OvMeters meters() const override;
-    void     spectrum (float* dest, int count) override;
-    void     spectrumIn (float* dest, int count) override;
+    bool     spectrum (float* dest, int count) override;
+    bool     spectrumIn (float* dest, int count) override;
     double   sampleRate() const override;
 
     int driveModeIndex() const override;
@@ -74,5 +74,5 @@ private:
     juce::dsp::FFT fftIn { 11 };
     std::array<float, (1 << 11) * 2> fftInBuf {};
     /// Shared body of spectrum()/spectrumIn(); `inTap` picks the buffer.
-    void analyse (float* dest, int count, bool inTap);
+    bool analyse (float* dest, int count, bool inTap);
 };
