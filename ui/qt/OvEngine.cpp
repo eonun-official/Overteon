@@ -52,17 +52,33 @@ void OvEngine::tick()
     // each change repaints both EQ plots — the plots then ran at the poll rate
     // instead of their own 30 Hz, costing ~25 % of a core.
     bool any = false;
+    // Which parameter groups moved since the last poll.  Both EQ plots connect
+    // to paramRevisionChanged, so without this a drag on an SC node repainted
+    // the PQ plot too — its 2.4 ms render for a picture that had not changed.
+    bool anySc = false, anyPq = false, anyOther = false;
     for (auto* p : m_paramList)
     {
         const auto before = p->norm();
         p->poll();
-        if (std::abs (p->norm() - before) > 1.0 / 4096.0)
-            any = true;
+        if (std::abs (p->norm() - before) <= 1.0 / 4096.0) continue;
+
+        any = true;
+        const QString id = p->id();
+        if (id.startsWith (QLatin1String ("sc")))      anySc = true;   // sc1Freq, scRange ...
+        else if (id.startsWith (QLatin1String ("pq"))) anyPq = true;
+        else if (id.startsWith (QLatin1String ("drive"))
+                 || id == QLatin1String ("protectMode"))
+        {   // these change what both plots show (dimming, gain scale)
+            anySc = anyPq = true;
+        }
+        else anyOther = true;
     }
+    Q_UNUSED (anyOther);
+
     if (any)
     {
         ++m_paramRevision;
-        emit paramRevisionChanged();
+        emit paramRevisionChanged (anySc, anyPq);
     }
 
     const int mode = m_source->driveModeIndex();
@@ -124,7 +140,7 @@ void OvEngine::initAll()
     m_source->applyInit();
     for (auto* p : m_paramList) p->poll();
     ++m_paramRevision;
-    emit paramRevisionChanged();
+    emit paramRevisionChanged (true, true);
 }
 
 void OvEngine::refreshPresets()
@@ -158,7 +174,7 @@ void OvEngine::loadPreset (const QString& folder, const QString& name)
         emit presetNameChanged();
         for (auto* p : m_paramList) p->poll();
         ++m_paramRevision;
-        emit paramRevisionChanged();
+        emit paramRevisionChanged (true, true);
     }
 }
 

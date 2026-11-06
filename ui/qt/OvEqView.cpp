@@ -24,6 +24,7 @@ namespace
     constexpr double OvThemeBarHeight = 32.0;    // .eqhdr height
 }
 #include <cstdio>
+#include <cstring>
 #include <chrono>
 #include <cstdlib>
 #include <utility>
@@ -147,11 +148,11 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickPaintedItem (parent)
     // separable Gaussian over the bar strip.  On a software GL stack (wine,
     // Xephyr) that costs more than a frame period, so the event loop starves
     // and the window appears to freeze.
-    m_repaint.setInterval (OvTiming::kPlotMs);
+    // This timer exists only for movement the user did not cause (the
+    // spectrum scrolling).  Anything the user does — dragging a node, turning
+    // a knob — repaints from its own signal, in the frame it happened.
+    m_repaint.setInterval (OvTiming::kFrameMs);
     connect (&m_repaint, &QTimer::timeout, this, [this] {
-        // A repaint costs a full plot render plus a 1040x386 texture upload,
-        // so it only happens when the spectrum moved or the parameters
-        // changed — not on a fixed cadence.
         const bool spectrumMoved = (m_spectrumStamp != m_lastSpectrumStamp);
         if (spectrumMoved)
         {
@@ -171,8 +172,18 @@ void OvEqView::setEngine (OvEngine* e)
 
     if (m_engine != nullptr)
     {
-        // the plot depends on the parameters, the spectrum and the glow
-        connect (m_engine, &OvEngine::paramRevisionChanged, this, [this] { m_dirty = true; });
+        // The plot depends on the parameters, the spectrum and the glow.
+        //
+        // A parameter change while dragging a node must reach the screen in
+        // the same frame as the mouse move that caused it.  Setting only the
+        // dirty flag made the repaint wait for the next timer tick, which at
+        // the old 30 Hz plot rate was up to 33 ms of lag before the render
+        // cost was even counted — the node visibly trailed the cursor.
+        connect (m_engine, &OvEngine::paramRevisionChanged, this,
+                 [this] (bool scMoved, bool pqMoved) {
+            if (m_prefix == QStringLiteral ("sc") ? scMoved : pqMoved)
+                update();
+        });
         connect (m_engine, &OvEngine::spectrumChanged, this, [this] { ++m_spectrumStamp; });
         // Deliberately NOT connected to metersChanged: the meter only drives
         // the accent glow, and repainting the whole plot (full re-render plus
@@ -208,7 +219,12 @@ void OvEqView::setAccent (const QString& c)
 
 void OvEqView::setGlow (double v)
 {
-    if (qFuzzyCompare (v, m_glow)) return;
+    // Quantised to 1/64.  The design transitions --light over 0.1 s, so a step
+    // of 1.6 % arrives faster than the eye can follow it, while an unquantised
+    // value changed on every meter tick and repainted both plots at 120 Hz for
+    // a difference of a couple of 8-bit alpha levels.
+    v = std::round (std::clamp (v, 0.0, 1.0) * 64.0) / 64.0;
+    if (qFuzzyCompare (1.0 + v, 1.0 + m_glow)) return;
     m_glow = v;
     emit glowChanged();
     m_dirty = true;
@@ -419,8 +435,47 @@ QString OvEqView::debugHit (const QPointF& pos) const
 //  design — grid, spectrum, curve, overflow fog — and it doubles as the source
 //  for the frosted glass, which is why the blur can be computed on the CPU the
 //  same way FrostEngine does it in the HTML.
+struct OvPaintTimer
+{
+    // Static locals inside a function in ONE translation unit: the header-only
+    // version I tried first ended up with a private copy per TU, so the plot
+    // never appeared in its own report.
+    std::chrono::steady_clock::time_point t0;
+    const char* name;
+    explicit OvPaintTimer (const char* n) : name (n)
+    {
+        if (std::getenv ("ONYXTEON_PROFILE")) t0 = std::chrono::steady_clock::now();
+        else t0 = std::chrono::steady_clock::time_point();
+    }
+    ~OvPaintTimer()
+    {
+        if (t0 == std::chrono::steady_clock::time_point()) return;
+        static double acc[4] {}, n[4] {};
+        static int slotCount = 0;
+        static const char* slotName[4] {};
+        int slot = -1;
+        for (int i = 0; i < slotCount; ++i)
+            if (slotName[i] == name) { slot = i; break; }
+        if (slot < 0 && slotCount < 4) { slot = slotCount; slotName[slotCount++] = name; }
+        if (slot < 0) return;
+        acc[slot] += std::chrono::duration<double, std::milli> (
+                         std::chrono::steady_clock::now() - t0).count();
+        ++n[slot];
+        static int since = 0;
+        if (++since % 120 == 0)
+        {
+            std::fprintf (stderr, "[prof]");
+            for (int i = 0; i < slotCount; ++i)
+                std::fprintf (stderr, " %s=%.2fms/%d", slotName[i], acc[i], (int) n[i]);
+            std::fprintf (stderr, "\n");
+            for (int i = 0; i < 4; ++i) acc[i] = 0, n[i] = 0;
+        }
+    }
+};
+
 void OvEqView::paint (QPainter* g)
 {
+    OvPaintTimer _p (m_prefix == QStringLiteral ("sc") ? "sc" : "pq");
     if (std::getenv ("ONYXTEON_FPS") != nullptr)
     {
         static int frames = 0;
@@ -457,12 +512,36 @@ void OvEqView::paint (QPainter* g)
         m_content = QImage (std::max (1, pw), std::max (1, ph),
                             QImage::Format_ARGB32_Premultiplied);
 
+    const bool prof = std::getenv ("ONYXTEON_PROFILE") != nullptr;
+    const auto tRender0 = std::chrono::steady_clock::now();
     {
         QPainter cg (&m_content);
         cg.setRenderHint (QPainter::Antialiasing, true);
         cg.setRenderHint (QPainter::TextAntialiasing, true);
         cg.scale (dpr, dpr);
         paintContent (&cg, w, h, m_plot.top(), m_plot.bottom(), accent);
+    }
+    const double msRender = std::chrono::duration<double, std::milli> (
+        std::chrono::steady_clock::now() - tRender0).count();
+
+    // How long after the mouse move did this frame reach the painter?  This is
+    // the number that decides whether a drag feels attached to the cursor;
+    // frame rate alone does not answer it.
+    if (prof && m_lastMoveTime != std::chrono::steady_clock::time_point())
+    {
+        static double sumLat = 0; static int latN = 0; static double worst = 0;
+        const double lat = std::chrono::duration<double, std::milli> (
+                               std::chrono::steady_clock::now() - m_lastMoveTime).count();
+        if (lat < 500.0)        // ignore the gap after the drag ended
+        {
+            sumLat += lat; ++latN; worst = std::max (worst, lat);
+            if (latN % 30 == 0)
+            {
+                std::fprintf (stderr, "[lat] %s avg=%.1fms worst=%.1fms over %d frames\n",
+                              m_prefix.toStdString().c_str(), sumLat / latN, worst, latN);
+                sumLat = 0; latN = 0; worst = 0;
+            }
+        }
     }
 
     if (std::getenv ("ONYXTEON_HITTEST") != nullptr)
@@ -474,19 +553,124 @@ void OvEqView::paint (QPainter* g)
         std::fprintf (stderr, " content=%dx%d\n", m_content.width(), m_content.height());
     }
 
+    const auto tBlit0 = std::chrono::steady_clock::now();
     g->setRenderHint (QPainter::SmoothPixmapTransform, true);
     g->drawImage (QRectF (0, 0, w, h), m_content,
                   QRectF (0, 0, m_content.width(), m_content.height()));
+    const double msBlit = std::chrono::duration<double, std::milli> (
+        std::chrono::steady_clock::now() - tBlit0).count();
+
+    if (prof)
+    {
+        static double sumRender = 0, sumBlit = 0; static int cnt = 0;
+        sumRender += msRender; sumBlit += msBlit;
+        if (++cnt % 60 == 0) {
+            std::fprintf (stderr, "[split] %s render=%.2fms blit=%.2fms\n",
+                          m_prefix.toStdString().c_str(), sumRender / 60, sumBlit / 60);
+            sumRender = sumBlit = 0;
+        }
+    }
 
     // Tell the seam glass that this half changed.  Queued by the receiver, so
     // this cannot re-enter paint() and spin.
     emit contentChanged();
 }
 
-void OvEqView::paintContent (QPainter* g, double w, double h,
-                             double top, double bottom, const QColor& accent)
+namespace
 {
-    g->fillRect (QRectF (0, 0, w, h), kBg);
+    // One set of accumulators for the whole file.  (The first attempt put the
+    // statics inside the macro body, which gives every expansion its own copy,
+    // so every marker reported its own private history.)
+    struct SectionClock
+    {
+        double acc[16] {};
+        const char* name[16] {};
+        int count = 0;
+        const char* last = "paint-start";
+        std::chrono::steady_clock::time_point t = std::chrono::steady_clock::now();
+        int prints = 0;
+
+        void mark (const char* label)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            int i = 0;
+            for (; i < count; ++i) if (name[i] == last) break;
+            if (i == count && count < 16) name[count++] = last;
+            if (i < count) acc[i] += std::chrono::duration<double, std::milli> (now - t).count();
+            last = label;
+            t = now;
+            if (++prints % 120 == 0)
+            {
+                std::fprintf (stderr, "[sec]");
+                for (int j = 0; j < count; ++j)
+                    std::fprintf (stderr, " %s=%.2f", name[j], acc[j] / 120.0);
+                std::fprintf (stderr, "\n");
+                std::memset (acc, 0, sizeof acc);
+            }
+        }
+    };
+    SectionClock g_sections;
+}
+
+#define OV_MARK(label) do { if (std::getenv ("ONYXTEON_PROFILE")) g_sections.mark (label); } while (0)
+
+const std::vector<double>& OvEqView::totalCurveY (double w, double h,
+                                                 double top, double bottom, int step)
+{
+    CurveKey k;
+    for (int i = 0; i < 5; ++i)
+    {
+        k.p[i][0] = m_bands[i].freq;
+        k.p[i][1] = m_bands[i].gain;
+        k.p[i][2] = m_bands[i].q;
+        k.p[i][3] = double (m_bands[i].type) + (m_bands[i].active ? 0.5 : 0.0);
+    }
+    k.range = m_rangeDb; k.w = w; k.h = h; k.top = top; k.bottom = bottom;
+    k.step = step;
+
+    if (m_curveValid && k == m_curveKey)
+        return m_curveY;
+
+    m_curveKey = k;
+    m_curveValid = true;
+    m_curveStep = step;
+
+    const int samples = int (std::ceil (w / step)) + 1;
+    m_curveY.resize ((size_t) samples);
+    for (int i = 0; i < samples; ++i)
+    {
+        const double x = std::min (w, i * double (step));
+        m_curveY[(size_t) i] = toY (totalMagAt (fromX (x, w)), h, m_rangeDb, top, bottom);
+    }
+    return m_curveY;
+}
+
+const QImage& OvEqView::backgroundImage (double w, double h, double top,
+                                         double bottom, const QColor& accent)
+{
+    // Everything that decides what the background looks like.  A string key is
+    // cheap to build and impossible to forget to update — the failure mode of a
+    // hand-maintained dirty flag here would be a stale grid.
+    const QString key = QStringLiteral ("%1x%2|%3|%4|%5|%6|%7|%8")
+                            .arg (w, 0, 'f', 2).arg (h, 0, 'f', 2)
+                            .arg (top, 0, 'f', 2).arg (bottom, 0, 'f', 2)
+                            .arg (m_rangeDb).arg (accent.name())
+                            .arg (int (m_headerTop)).arg (inactiveOpacity(), 0, 'f', 3);
+    if (m_bgKey == key && ! m_bg.isNull())
+        return m_bg;
+
+    m_bgKey = key;
+
+    const double dpr = window() != nullptr ? window()->devicePixelRatio() : 1.0;
+    const int pw = std::max (1, int (std::lround (w * dpr)));
+    const int ph = std::max (1, int (std::lround (h * dpr)));
+    m_bg = QImage (pw, ph, QImage::Format_ARGB32_Premultiplied);
+
+    QPainter g (&m_bg);
+    g.setRenderHint (QPainter::Antialiasing, true);
+    g.setRenderHint (QPainter::TextAntialiasing, true);
+    g.scale (dpr, dpr);
+    g.fillRect (QRectF (0, 0, w, h), kBg);
 
     // ---- vertical frequency grid: full height, so both EQ sections read
     //      as one continuous background (exactly like the canvas version)
@@ -495,17 +679,17 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
                                   7000, 8000, 9000, 20000 };
     static const int majors[] = { 10, 100, 1000, 10000 };
 
-    g->setPen (QPen (kMinor, 1.0));
+    g.setPen (QPen (kMinor, 1.0));
     for (int f : minors)
     {
         const double x = toX (f, w);
-        g->drawLine (QPointF (x, 0), QPointF (x, h));
+        g.drawLine (QPointF (x, 0), QPointF (x, h));
     }
-    g->setPen (QPen (kMajor, 1.0));
+    g.setPen (QPen (kMajor, 1.0));
     for (int f : majors)
     {
         const double x = toX (f, w);
-        g->drawLine (QPointF (x, 0), QPointF (x, h));
+        g.drawLine (QPointF (x, 0), QPointF (x, h));
     }
 
     // ---- horizontal dB lines (plot only)
@@ -515,39 +699,52 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     for (double db = -m_rangeDb; db <= m_rangeDb + 1e-6; db += step)
     {
         const double y = toY (db, h, m_rangeDb, top, bottom);
-        g->setPen (QPen (std::abs (db) < 1e-6 ? kZero : kHLine, 1.0));
-        g->drawLine (QPointF (0, y), QPointF (w, y));
+        g.setPen (QPen (std::abs (db) < 1e-6 ? kZero : kHLine, 1.0));
+        g.drawLine (QPointF (0, y), QPointF (w, y));
     }
 
     // ---- frequency labels: inside the plot edge and up in the header band
-    QFont f9 = g->font();
+    QFont f9 = g.font();
     f9.setPixelSize (9);
     f9.setFamily (QStringLiteral ("Inter"));
-    g->setFont (f9);
-    g->setPen (kLabel);
+    g.setFont (f9);
+    g.setPen (kLabel);
     static const int labels[] = { 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000 };
     static const char* labelText[] = { "20", "50", "100", "200", "500", "1k",
                                        "2k", "5k", "10k", "20k" };
     for (int i = 0; i < 10; ++i)
     {
         const double x = toX (labels[i], w) + 2.0;
-        g->drawText (QPointF (x, bottom - 4.0), QString::fromLatin1 (labelText[i]));
-        g->drawText (QPointF (x, m_headerTop ? 22.0 : h - 8.0),
+        g.drawText (QPointF (x, bottom - 4.0), QString::fromLatin1 (labelText[i]));
+        g.drawText (QPointF (x, m_headerTop ? 22.0 : h - 8.0),
                      QString::fromLatin1 (labelText[i]));
     }
 
     // ---- dB labels (accent tinted, inside the plot)
     QColor dbInk = accent;
     dbInk.setAlphaF (0.85f);
-    g->setPen (dbInk);
+    g.setPen (dbInk);
     for (double db = -m_rangeDb; db <= m_rangeDb + 1e-6; db += step)
     {
         if (std::abs (db) < 1e-6) continue;
         const double y = toY (db, h, m_rangeDb, top, bottom);
         const QString t = (db > 0 ? "+" : "") + QString::number (qRound (db));
-        g->drawText (QPointF (6.0, std::clamp (y - 2.0, top + 9.0, bottom - 2.0)), t);
+        g.drawText (QPointF (6.0, std::clamp (y - 2.0, top + 9.0, bottom - 2.0)), t);
     }
 
+    g.end();
+    return m_bg;
+}
+
+void OvEqView::paintContent (QPainter* g, double w, double h,
+                             double top, double bottom, const QColor& accent)
+{
+    // The grid and every ruler label come from a cache; only what actually
+    // moves is drawn here.
+    g->drawImage (QRectF (0, 0, w, h), backgroundImage (w, h, top, bottom, accent),
+                  QRectF (0, 0, m_bg.width(), m_bg.height()));
+
+    OV_MARK ("spec");
     // ---- spectrum (from the engine, 0..1 over 20 Hz..20 kHz)
     {
         float spec[128];
@@ -571,6 +768,7 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
         g->fillPath (sp, grad);
     }
 
+    OV_MARK ("curves");
     // ---- per-band curves + node positions
     for (int i = 0; i < 5; ++i)
     {
@@ -585,7 +783,9 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
                 const double y = toY (bandMagAt (b, fromX (x, w)), h, m_rangeDb, top, bottom);
                 if (x == 0.0) path.moveTo (x, y); else path.lineTo (x, y);
             }
+            OV_MARK ("bandbuild");
             g->drawPath (path);
+            OV_MARK ("banddraw");
         }
 
         const double nodeGain = isGainType (b.type) ? b.gain * displayMult()
@@ -595,13 +795,22 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     }
 
     // ---- total curve + fill (clipped to the plot)
+    // 2 px sampling: the response is smooth over 0.2 % of a log decade, so a
+    // half-pixel step of error is invisible, and it halves the number of
+    // biquad evaluations.  Shared with the fog below through the cache, so the
+    // total response is computed once per parameter change, not twice per
+    // repaint.
+    const int curveStep = 2;
+    const auto& curveY = totalCurveY (w, h, top, bottom, curveStep);
+
     auto drawTotal = [&]
     {
         QPainterPath path;
-        for (double x = 0; x <= w; x += 1.0)
+        for (size_t i = 0; i < curveY.size(); ++i)
         {
-            const double y = toY (totalMagAt (fromX (x, w)), h, m_rangeDb, top, bottom);
-            if (x == 0.0) path.moveTo (x, y); else path.lineTo (x, y);
+            const double x = std::min (w, double (i) * curveStep);
+            const double y = curveY[i];
+            if (i == 0) path.moveTo (x, y); else path.lineTo (x, y);
         }
 
         QPainterPath fill = path;
@@ -609,8 +818,10 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
         fill.lineTo (0.0, toY (0.0, h, m_rangeDb, top, bottom));
         fill.closeSubpath();
 
+        OV_MARK ("beforefill");
         QColor fc = accent; fc.setAlphaF (0.06f);
         g->fillPath (fill, fc);
+        OV_MARK ("afterfill");
 
         g->setPen (QPen (accent, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         g->setBrush (Qt::NoBrush);
@@ -619,13 +830,17 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
 
     g->save();
     g->setClipRect (QRectF (0, top, w, bottom - top));
+    OV_MARK ("totbuild");
     drawTotal ();
+    OV_MARK ("totdraw");
     g->restore();
 
+    OV_MARK ("fog");
     // Overflow fog (requestEQOverflow / drawEQOverflow in the design): the
     // curve keeps going past the plot edge in 12 graded bands, each one
     // blurrier and fainter than the last — blur(0.4 + k*0.55 px) and
     // alpha (1 - k/12)^1.15.
+    if (std::getenv ("ONYXTEON_NOFOG") == nullptr)
     {
         constexpr int   kSteps = 12;
         constexpr double kRange = 224.0;      // CSS range in design px
@@ -637,13 +852,15 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
         QPainterPath bands[kSteps];
         bool used[kSteps] = {};
 
+
         double prevX = 0.0;
-        double prevY = std::clamp (toY (totalMagAt (fromX (0.0, w)), h, m_rangeDb, top, bottom),
+        double prevY = std::clamp (curveY.empty() ? 0.0 : curveY[0],
                                    std::min (edge, edge + dir * kRange),
                                    std::max (edge, edge + dir * kRange));
-        for (double x = 1.0; x <= w; x += 1.0)
+        for (size_t si = 1; si < curveY.size(); ++si)
         {
-            const double yy = std::clamp (toY (totalMagAt (fromX (x, w)), h, m_rangeDb, top, bottom),
+            const double x  = std::min (w, double (si) * curveStep);
+            const double yy = std::clamp (curveY[si],
                                           std::min (edge, edge + dir * kRange),
                                           std::max (edge, edge + dir * kRange));
             const double d = (prevY + yy) * 0.5 - edge;
@@ -674,6 +891,7 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
         g->restore();
     }
 
+    OV_MARK ("nodes");
     // ---- nodes on top
     for (int i = 0; i < 5; ++i)
     {
@@ -685,7 +903,7 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
         g->setBrush (fill);
         g->drawEllipse (QPointF (b.x, b.y), r, r);
 
-        QFont nf = f9;
+        QFont nf = g->font();
         nf.setPixelSize (10);
         nf.setBold (true);
         g->setFont (nf);
@@ -977,6 +1195,7 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
 
 void OvEqView::mouseMoveEvent (QMouseEvent* e)
 {
+    m_lastMoveTime = std::chrono::steady_clock::now();
     // Only drag while the button is really down.  Without this check a single
     // lost release turned the plot into a node that follows the cursor.
     if (m_dragBand >= 0 && ! (e->buttons() & Qt::LeftButton))

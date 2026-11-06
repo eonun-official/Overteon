@@ -44,13 +44,15 @@
 #include <QVariant>
 
 #include <chrono>
+#include <vector>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <QLibrary>
 
 #ifdef Q_OS_LINUX
  #include <X11/Xlib.h>
- #include <X11/extensions/sync.h>
+ #include <GL/glx.h>
 #endif
 #include <memory>
 #include <string>
@@ -86,53 +88,97 @@ namespace
         return 1.0;
     }
 
-   #ifdef Q_OS_LINUX
-    /// Does this display provide a vblank / UST counter?
-    ///
-    /// This is what Qt's vsync'd render loop waits on.  A server with no such
-    /// counter (measured on a bare X session here: only IDLETIME and
-    /// SERVERTIME are advertised) makes every glXSwapBuffers with swap
-    /// interval 1 block until the driver's ~900 ms timeout:
-    ///
-    ///     interval 1 : 904.89 ms per swap   (1.1 fps)
-    ///     interval 0 :   0.02 ms per swap   (53523 fps)
-    ///
-    /// That reads as a completely frozen UI.  When there is no counter, Qt
-    /// must not wait for vsync; its render loop then paces itself instead.
-    bool hasVblankCounter()
+    //  Whether vsync actually paces on this display has to be MEASURED, not
+    //  inferred from the X SYNC counters.
+    //
+    //  The old rule was "no vblank/UST/MSC system counter => disable vsync".
+    //  That is wrong on this very machine: :0 has none of those counters, yet
+    //  glXSwapBuffers with swap interval 1 paces it exactly to its 120 Hz
+    //  panel, while a Xephyr screen with the same missing counters does not
+    //  pace at all.  Disabling vsync on the strength of the counter test left
+    //  the UI running at ~90 fps on a 122 Hz display — visible as judder.
+    //
+    //  So: open a throwaway GLX context, time a few swaps with the interval
+    //  set to 1 and again at 0, and let the numbers decide.
+    //      :0  interval 1 = 8.20 ms (122 fps)   interval 0 = 0.29 ms
+    //      :3  interval 1 = 0.23 ms             interval 0 = 0.23 ms
+    struct VSyncProbe
     {
-       #ifdef Q_OS_LINUX
-        if (auto* dpy = XOpenDisplay (nullptr))
+        bool paces = true;        // does the driver block on the display?
+        double interval1Ms = 0.0;
+        double interval0Ms = 0.0;
+        double refreshHz = 0.0;   // implied by the paced interval
+    };
+
+   #ifdef Q_OS_LINUX
+    using SwapIntervalEXT = void (*) (Display*, GLXDrawable, int);
+
+    VSyncProbe probeVSync()
+    {
+        VSyncProbe r;
+        Display* dpy = XOpenDisplay (nullptr);
+        if (dpy == nullptr) return r;
+
+        int attribs[] = { GLX_RGBA, GLX_DOUBLEBUFFER, GLX_RED_SIZE, 8,
+                          GLX_GREEN_SIZE, 8, GLX_BLUE_SIZE, 8, None };
+        XVisualInfo* vi = glXChooseVisual (dpy, DefaultScreen (dpy), attribs);
+        if (vi == nullptr) { XCloseDisplay (dpy); return r; }
+
+        XSetWindowAttributes swa {};
+        swa.colormap = XCreateColormap (dpy, RootWindow (dpy, vi->screen),
+                                       vi->visual, AllocNone);
+        swa.override_redirect = True;
+        Window w = XCreateWindow (dpy, RootWindow (dpy, vi->screen),
+                                  0, 0, 64, 64, 0, vi->depth, InputOutput,
+                                  vi->visual, CWColormap | CWOverrideRedirect, &swa);
+        XMapWindow (dpy, w);
+        GLXContext ctx = glXCreateContext (dpy, vi, nullptr, True);
+        if (ctx == nullptr) { XCloseDisplay (dpy); return r; }
+        glXMakeCurrent (dpy, w, ctx);
+
+        auto* setInterval = reinterpret_cast<SwapIntervalEXT> (
+            glXGetProcAddressARB (reinterpret_cast<const GLubyte*> ("glXSwapIntervalEXT")));
+
+        // Per-swap times, then the MEDIAN.  A mean is useless here: a single
+        // 900 ms stall (which this X server does produce) moves the average
+        // from 8 ms to 98 ms and flips the whole decision.  Measured three
+        // runs of the naive mean on the same machine: 8.00, 7.79, 98.47 ms.
+        auto timeSwaps = [&] (int interval, int n)
         {
-            int ev = 0, er = 0;
-            bool found = false;
-            if (XSyncQueryExtension (dpy, &ev, &er))
+            if (setInterval != nullptr) setInterval (dpy, w, interval);
+            XSync (dpy, False);
+            std::vector<double> per;
+            per.reserve ((size_t) n);
+            for (int i = 0; i < n; ++i)
             {
-                int n = 0;
-                if (auto* counters = XSyncListSystemCounters (dpy, &n))
-                {
-                    for (int i = 0; i < n; ++i)
-                    {
-                        const char* name = counters[i].name;
-                        if (name == nullptr) continue;
-                        const std::string s (name);
-                        if (s.find ("vblank") != std::string::npos
-                            || s.find ("VBLANK") != std::string::npos
-                            || s.find ("UST")    != std::string::npos
-                            || s.find ("MSC")    != std::string::npos)
-                        {
-                            found = true;
-                            break;
-                        }
-                    }
-                    XSyncFreeSystemCounterList (counters);
-                }
+                const auto t0 = std::chrono::steady_clock::now();
+                glClearColor (0.05f, 0.05f, 0.10f, 1.0f);
+                glClear (GL_COLOR_BUFFER_BIT);
+                glXSwapBuffers (dpy, w);
+                per.push_back (std::chrono::duration<double, std::milli> (
+                                   std::chrono::steady_clock::now() - t0).count());
             }
-            XCloseDisplay (dpy);
-            return found;
-        }
-       #endif
-        return true;      // cannot tell: leave Qt alone
+            std::sort (per.begin(), per.end());
+            return per[per.size() / 2];
+        };
+
+        // Warm up: the first swaps map the window and allocate back buffers.
+        timeSwaps (1, 4);
+        r.interval0Ms = timeSwaps (0, 15);
+        r.interval1Ms = timeSwaps (1, 30);
+
+        glXMakeCurrent (dpy, None, nullptr);
+        glXDestroyContext (dpy, ctx);
+        XDestroyWindow (dpy, w);
+        XCloseDisplay (dpy);
+
+        // "Paces" means interval 1 waits noticeably longer than interval 0.
+        // A 120 Hz panel gives ~8 ms; a 60 Hz one ~16 ms.  If the two are
+        // within 1.5x of each other the driver is ignoring the interval.
+        r.paces = r.interval1Ms > std::max (2.0, r.interval0Ms * 1.5);
+        if (r.paces && r.interval1Ms > 0.1)
+            r.refreshHz = 1000.0 / r.interval1Ms;
+        return r;
     }
    #endif
 
@@ -170,11 +216,44 @@ int main (int argc, char** argv)
     // with QSG_NO_VSYNC=1 runs at ~104 fps.  Set it here so the preview works
     // out of the box, and let a caller override.
    #ifdef Q_OS_LINUX
-    if (qEnvironmentVariableIsEmpty ("QSG_NO_VSYNC") && ! hasVblankCounter())
+    if (qEnvironmentVariableIsEmpty ("QSG_NO_VSYNC"))
     {
-        std::fprintf (stderr, "[preview] this display has no vblank counter; "
-                              "disabling vsync (otherwise the UI runs at 1 fps)\n");
-        qputenv ("QSG_NO_VSYNC", "1");
+        const VSyncProbe vs = probeVSync();
+        if (vs.paces)
+        {
+            // The driver blocks in glXSwapBuffers until the display's next
+            // refresh, so set the swap interval inside the driver (measured:
+            // 8.00 ms/frame = 125 Hz on this 120 Hz panel) and take Qt's own
+            // vsync wait out of the picture.
+            //
+            // Qt's wait is the part that breaks here: it waits for a vblank
+            // notification this X server cannot deliver and lands on 1 fps.
+            // With the wait gone, the driver's swap still paces the frames —
+            // measured 93-113 fps on a 120 Hz panel at 1 % CPU, against 75 fps
+            // at 58 % CPU when Qt rasterises on the CPU instead.
+            std::fprintf (stderr, "[preview] vsync paces this display: "
+                                  "%.2f ms/frame = %.1f Hz; using it "
+                                  "(driver-paced, not Qt-paced)\n",
+                          vs.interval1Ms, vs.refreshHz);
+            qputenv ("QSG_NO_VSYNC", "1");
+
+            // Software rasterisation throws the frame away: it redraws the
+            // whole window on the CPU.  On a display that really paces there
+            // is a GPU to use, so ask for it.
+            if (qEnvironmentVariableIsEmpty ("QSG_RHI_BACKEND")
+                && qEnvironmentVariableIsEmpty ("QT_QUICK_BACKEND"))
+                qputenv ("QSG_RHI_BACKEND", "opengl");
+        }
+        else
+        {
+            // Nothing paces here.  Waiting for a vblank that never arrives
+            // pins Qt Quick to 1 fps, so let the render loop free-run.
+            std::fprintf (stderr, "[preview] vsync does not pace this display "
+                                  "(%.2f ms at interval 1, %.2f ms at 0); "
+                                  "letting the render loop free-run\n",
+                          vs.interval1Ms, vs.interval0Ms);
+            qputenv ("QSG_NO_VSYNC", "1");
+        }
     }
    #endif
 
@@ -682,8 +761,9 @@ int main (int argc, char** argv)
             // Is the window exposed at all?  A QQuickWindow that never gets an
             // expose does not run its render loop.
             QObject::connect (&view, &QQuickWindow::sceneGraphInitialized, [&view] {
-                std::fprintf (stderr, "[fps] scene graph initialised, api=%d\n",
-                              (int) view.rendererInterface()->graphicsApi());
+                std::fprintf (stderr, "[fps] scene graph initialised, api=%d backend=%s\n",
+                              (int) view.rendererInterface()->graphicsApi(),
+                              view.sceneGraphBackend().toStdString().c_str());
             });
             QObject::connect (&view, &QQuickWindow::sceneGraphError,
                               [] (QQuickWindow::SceneGraphError e, const QString& m) {

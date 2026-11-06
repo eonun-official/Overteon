@@ -84,6 +84,7 @@ void OvSeamFrost::paint (QPainter* g)
     // has none.  (It used to skip only the control pits, which made an A/B of
     // the seam look like the seam was not painting.)
     if (std::getenv ("ONYXTEON_NOFROST") != nullptr) return;
+    if (std::getenv ("ONYXTEON_NOSEAM") != nullptr) return;
     if (m_top == nullptr || m_bottom == nullptr) return;
 
     const QImage top    = m_top->contentImage();

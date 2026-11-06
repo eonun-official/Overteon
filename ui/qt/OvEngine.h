@@ -72,7 +72,9 @@ public:
     OvSource& source() { return *m_source; }
 
 signals:
-    void paramRevisionChanged();
+    /// `scMoved` / `pqMoved` say which EQ half needs repainting; a global
+    /// parameter sets both.
+    void paramRevisionChanged (bool scMoved, bool pqMoved);
     void metersChanged();
     void spectrumChanged();
     void presetsChanged();

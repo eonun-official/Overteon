@@ -17,6 +17,8 @@
 #include <QTimer>
 #include <QString>
 #include <QImage>
+#include <vector>
+#include <chrono>
 #include <QPainterPath>
 
 class OvEngine;
@@ -152,6 +154,41 @@ private:
     double    m_glow = 0.0;
 
     Band   m_bands[5];
+
+    // ---- total-curve sample cache ---------------------------------------
+    //  Drawing the curve needs totalMagAt() at every x, and so does the
+    //  overflow fog: 1040 samples x 5 biquads, twice, per repaint.  The curve
+    //  only changes when a band parameter does, while the spectrum changes
+    //  every frame — so at 120 Hz almost every repaint was recomputing a curve
+    //  that had not moved.  This caches the samples against a key made of the
+    //  parameters and the geometry, which is cheap to compare (several < on
+    //  doubles) and immune to missing an invalidation.
+    struct CurveKey
+    {
+        double p[5][4] {};        // freq, gain, q, type per band
+        double range = 0.0, w = 0.0, h = 0.0, top = 0.0, bottom = 0.0;
+        int    step = 1;
+        bool operator== (const CurveKey& o) const
+        {
+            if (range != o.range || w != o.w || h != o.h
+                || top != o.top || bottom != o.bottom || step != o.step) return false;
+            for (int i = 0; i < 5; ++i)
+                for (int k = 0; k < 4; ++k)
+                    if (p[i][k] != o.p[i][k]) return false;
+            return true;
+        }
+    };
+
+    CurveKey                m_curveKey;
+    bool                    m_curveValid = false;
+    std::vector<double>     m_curveY;     // item-space y per sample
+    int                     m_curveStep = 1;
+
+    /// y of the total response at each x, sampled every `m_curveStep` px.
+    /// Rebuilt only when the key changes; returns a reference so the curve
+    /// and the fog can share one evaluation.
+    const std::vector<double>& totalCurveY (double w, double h, double top,
+                                            double bottom, int step);
     QRectF m_plot;
     double m_rangeDb = 12.0;
 
@@ -161,6 +198,18 @@ private:
     int    m_hoverBand = -1;
 
     QImage m_content;        // the plot, rendered off-screen
+    std::chrono::steady_clock::time_point m_lastMoveTime;
+
+    // ---- static background cache ----------------------------------------
+    //  The grid and the ~30 frequency/dB labels never move unless a parameter
+    //  or the geometry does, but they were redrawn into the plot image on
+    //  every repaint — 30 antialiased glyph runs at 120 Hz, twice, for a
+    //  picture that had not changed.  They are rendered once into m_bg and
+    //  blitted instead.
+    QImage m_bg;
+    QString m_bgKey;         // geometry + range + accent + dim state
+    const QImage& backgroundImage (double w, double h, double top, double bottom,
+                                   const QColor& accent);
     QImage m_blurred;        // its blurred copy (bar strip only)
     int    m_contentW = 0, m_contentH = 0;
     QTimer m_repaint;

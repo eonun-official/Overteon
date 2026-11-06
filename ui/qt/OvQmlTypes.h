@@ -1,39 +1,33 @@
 #pragma once
-// ============================================================
-//  OnyxTEON Qt/QML UI — QML type registration.
+// ============================================================================
+//  Timing.
 //
-//  The two painted items are registered under "OnyxTEON 1.0" so the QML
-//  files can `import OnyxTEON 1.0` (both the plugin editor and the preview
-//  app call this once, before loading main.qml).
-// ============================================================
-#include <QtQml/qqml.h>
-
-// The UI refreshes at the display rate.  Every repainting item and every
-// polling core timer uses this, so the EQ plots, the meter pod and the
-// parameter polling stay in step (they used to be 30, 30 and 33 ms apart,
-// which produced a stuttering pod and 125 fps plots).
+//  One number governs everything: 120 frames per second, which is the highest
+//  rate the UI is ever asked to present.  There are no other rate limits
+//  anywhere in the editor — no 30 Hz plot timer, no 60 Hz meter timer, no
+//  separate poll rate.  Every repainting item and both polling timers run at
+//  this rate, so an input reaches the screen in one frame and cannot be
+//  delayed by a slower sub-system.
+//
+//  This matters most while dragging an EQ node: with a 30 Hz plot timer the
+//  drag was rendered on the timer's next tick, so the node lagged the cursor by
+//  up to 33 ms before any drawing cost was counted.
+//
+//  Work that is not needed every frame is still skipped, but by proving there
+//  is nothing to draw (a dirty check), not by a slower clock.
+// ============================================================================
 namespace OvTiming
 {
-    constexpr int kFrameHz    = 120;
-    constexpr int kFrameMs    = 1000 / kFrameHz;
-    // the pod is 550x73 with 4 strokes + a ring; 60 Hz is its data rate
-    constexpr int kMeterHz    = 60;
-    // parameters are polled less often than the screen refreshes: 60 Hz is
-    // plenty for host automation and costs nothing
-    constexpr int kPollHz     = 60;
-    constexpr int kPollMs     = 1000 / kPollHz;
+    constexpr int kFrameHz = 120;
+    constexpr int kFrameMs = 1000 / kFrameHz;      // 8 ms
 
-    // The EQ plot redraws its spectrum and glow, and the engine only produces
-    // spectrum at kPollHz/2.  Repainting faster re-uploads a 1040x386 texture
-    // for identical pixels: measured 85 % cpu uncapped vs 20 % at this rate,
-    // with no visual difference (the spectrum is the only moving part).
-    constexpr int kPlotHz     = 30;
-    constexpr int kPlotMs     = 1000 / kPlotHz;
-
-    // The spectrum is the only part of a plot that moves; the engine produces
-    // it at kPollHz/2 = 30 Hz.  Everything else is cached.  Rendering the plot
-    // faster than this re-uploads a 1040x386 texture for identical pixels.
-    constexpr int kSpectrumHz = 30;
+    // Every consumer uses these; they exist so a call site reads clearly, not
+    // to allow a different rate.
+    constexpr int kPlotHz   = kFrameHz;
+    constexpr int kPlotMs   = kFrameMs;
+    constexpr int kMeterHz  = kFrameHz;
+    constexpr int kPollHz   = kFrameHz;
+    constexpr int kPollMs   = kFrameMs;
 }
 
 #include "OvEqView.h"
