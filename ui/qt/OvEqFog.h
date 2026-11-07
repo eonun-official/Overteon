@@ -14,6 +14,7 @@
 // ============================================================
 #include <QQuickPaintedItem>
 #include <QPointer>
+#include <QTimer>
 
 // The Q_PROPERTY(OvEqView*) below needs the type to be COMPLETE for moc's
 // metatype registration, not just declared.
@@ -43,6 +44,7 @@ private:
     void subscribe (OvEqView* v);
     void unsubscribe (OvEqView* v);
 
+    QTimer m_tick;
     QPointer<OvEqView> m_top;
     QPointer<OvEqView> m_bottom;
 };

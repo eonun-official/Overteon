@@ -28,10 +28,14 @@
 module app;
 
 import vibe.vibe;
-import std.string : replace, indexOf, split;
+import std.string : replace, indexOf, split, endsWith;
 import std.path : buildPath;
-import std.file : read, readText, exists;
+import std.file : read, readText, exists, write, mkdirRecurse, dirEntries, SpanMode;
+import std.path : baseName;
 import std.process : environment;
+import std.uni : isAlphaNum, toLower;
+import std.conv : to;
+import std.datetime.systime : Clock;
 
 // ---------------------------------------------------------------------------
 //  Roots.  Overridable so the same server binary can serve any checkout.
@@ -187,6 +191,90 @@ string mockBackendScript ()
   // ends served from one origin, and they must not overwrite each other's state.
   const STORE_KEY = "overteon.params:" + location.pathname;
 
+  // Apply id -> scaled value.  The ONE path used by ?id=value, ?preset=, the
+  // preset menu and an upload, so a state cannot arrive by four routes and
+  // behave in four ways.
+  function applyValues (vals, markAsUrl) {
+    const touched = [];
+    for (const id in vals) {
+      const p = P[id];
+      if (!p) continue;
+      const v = vals[id];
+      if (!isFinite (v)) continue;
+      p.target = p.norm = (p.kind === "c")
+          ? Math.max (0, Math.min (1, Math.round (v) / (p.choices.length - 1)))
+          : Math.pow (Math.max (0, Math.min (1, (v - p.lo) / (p.hi - p.lo))), p.skew);
+      if (markAsUrl) urlIds.add (id);
+      touched.push (id);
+    }
+    return touched;
+  }
+
+  // Tell the PAGE what the values are now.
+  //
+  // This is the part that made an uploaded preset look like it had done
+  // nothing: P[] is this mock's own table, but the UI draws from the page's
+  // SliderState objects, and those only ever change when a valueChanged event
+  // arrives from the backend.  Writing to P[] alone moved a number nobody was
+  // looking at.
+  //
+  // Every parameter is driven through SliderState on this page — it never calls
+  // getToggleState/getComboBoxState, it wraps all of them with S(id) — so the
+  // identifier is "__juce__slider" + id even for a combo box or a switch, and
+  // the payload is the SCALED value, which is what SliderState expects.
+  function pushToPage (ids) {
+    // Before the page's backend bridge exists there is nothing to push to — and
+    // nothing to fix: the values are in P[] already, and the page asks for them
+    // with requestInitialUpdate when each control is created.
+    if (!window.__JUCE__ || !window.__JUCE__.backend) return 0;
+    let n = 0;
+    for (const id of ids) {
+      const p = P[id];
+      if (!p) continue;
+      try {
+        emit ("__juce__slider" + id,
+              { eventType: "valueChanged", value: valueOfParam (p) });
+        ++n;
+      } catch (e) {
+        console.warn ("[preset] cannot push", id, e);
+      }
+    }
+    return n;
+  }
+
+  // Ask the server for a .hinj.  Synchronous: a preset has to be in place
+  // before the next frame, or the picture jumps after the screenshot.
+  function fetchPreset (folder, name) {
+    try {
+      const q = "/preset?folder=" + encodeURIComponent (folder || "Factory")
+                      + "&name=" + encodeURIComponent (name);
+      const xhr = new XMLHttpRequest ();
+      xhr.open ("GET", q, false);
+      xhr.send (null);
+      if (xhr.status !== 200) return null;
+      const vals = JSON.parse (xhr.responseText);
+      return vals.error ? null : vals;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // A loaded preset is the state: apply it, remember it, and tell the page
+  // which name it is now showing (the menu button listens for "presetName").
+  function loadPresetValues (vals, label) {
+    const touched = applyValues (vals, true);
+    const n = touched.length;
+    if (n) {
+      pushToPage (touched);
+      try { localStorage.setItem (STORE_KEY, JSON.stringify (
+          Object.fromEntries (Object.keys (P).map (k => [k, P[k].target])))); } catch (e) {}
+      syncUrl ();
+      if (label) emit ("presetName", label);
+      console.log ("[preset]", label || "?", n, "of", Object.keys (vals).length, "applied");
+    }
+    return n;
+  }
+
   function normOfValue (p, v) {
     return (p.kind === "c")
         ? Math.max (0, Math.min (1, Math.round (v) / (choiceCount (p) - 1)))
@@ -233,9 +321,97 @@ string mockBackendScript ()
         qs.push (encodeURIComponent (id) + "=" + valueOfParam (P[id]));
       if (FROZEN) qs.push ("freeze=1");
       if (mT) qs.push ("t=" + mT[1]);
+      const mp = /[?&]preset=([^&]+)/.exec (location.search);
+      if (mp) qs.push ("preset=" + mp[1]);
       const url = location.pathname + (qs.length ? "?" + qs.join("&") : "");
       history.replaceState (null, "", url);
     } catch (e) { /* some embeddings refuse; the page still works */ }
+  }
+
+  // ---- preset file I/O in the browser -------------------------------------
+  // The plugin loads and saves via JUCE FileChooser; the page cannot, so both
+  // ends of that go through the server: an upload in, a download out.  The
+  // resulting file is a real APVTS <HINJ> document, so it drops straight into
+  // the plugin afterwards — that is what makes this usable as a reference rig.
+  let hinjInput = null;
+
+  function pickHinjFile() {
+    if (!hinjInput) {
+      hinjInput = document.createElement("input");
+      hinjInput.type = "file";
+      hinjInput.accept = ".hinj,application/xml,text/xml";
+      hinjInput.style.display = "none";
+      // Keep it in the document: a detached input is not reliably clickable in
+      // every browser, and the change event bubbles nowhere without a parent.
+      document.body.appendChild(hinjInput);
+      hinjInput.addEventListener("change", () => {
+        const file = hinjInput.files && hinjInput.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          uploadHinj(String(reader.result), file.name);
+          // Clear it only after the bytes are in hand, so picking the SAME file
+          // twice still fires a change event — a silent no-op the second time
+          // is exactly the kind of "nothing happened" this rig must not have.
+          hinjInput.value = "";
+        };
+        reader.onerror = () => {
+          hinjInput.value = "";
+          presetError("READ FAILED");
+        };
+        reader.readAsText(file);
+      });
+    }
+    hinjInput.click();
+  }
+
+  // A failed load must say so.  The console is not visible to whoever is
+  // staring at the page, and "nothing happened" is indistinguishable from a
+  // broken button.
+  function presetError (msg) {
+    const btn = document.getElementById("bPresets");
+    if (!btn) { console.warn("[preset]", msg); return; }
+    const was = btn.textContent;
+    btn.textContent = msg;
+    btn.style.color = "#ff5a5a";
+    setTimeout(() => { btn.textContent = was; btn.style.color = ""; }, 2500);
+  }
+
+  function uploadHinj(text, fileName) {
+    let base = (fileName || "upload").replace(/\.[^.]*$/, "").replace(/[^\w .+-]/g, "_");
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/upload?name=" + encodeURIComponent(base), false);
+      xhr.setRequestHeader("Content-Type", "text/plain; charset=utf-8");
+      xhr.send(text);
+      const info = JSON.parse(xhr.responseText);
+      if (info.error) { presetError("NOT A .HINJ"); console.warn("[upload] rejected:", info.error); return; }
+      const vals = fetchPreset(info.folder, info.name);
+      if (!vals) { presetError("READ BACK FAILED"); return; }
+      const n = loadPresetValues(vals, info.name);
+      if (!n) presetError("NO MATCHING PARAMS");
+    } catch (e) {
+      presetError("UPLOAD FAILED");
+      console.warn("[upload] failed:", e);
+    }
+  }
+
+  function downloadHinj(name) {
+    const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                                 .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<HINJ>\n';
+    for (const id of Object.keys(P).sort())
+      xml += '  <PARAM id="' + esc(id) + '" value="' + esc(valueOfParam(P[id])) + '"/>\n';
+    xml += '</HINJ>\n';
+
+    const url = URL.createObjectURL(new Blob([xml], { type: "application/xml" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name.replace(/[^\w .+-]/g, "_") + ".hinj";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function handleInvoke(payload) {
@@ -243,16 +419,40 @@ string mockBackendScript ()
     let result = true;
 
     if (name === "applyInit") {
-      for (const id in P) P[id].target = P[id].defNorm;
+      for (const id in P) P[id].norm = P[id].target = P[id].defNorm;
+      pushToPage (Object.keys (P));
       // INIT means "back to defaults", so the remembered state has to go too —
       // leaving it would restore the old values on the next reload and make
       // INIT look like it had done nothing.
       try { localStorage.removeItem (STORE_KEY); } catch (e) {}
       syncUrl();
     } else if (name === "listPresets") {
-      result = JSON.stringify(presets);
+      // The real plugin reads its preset directories; so does this.  Whatever
+      // is on disk is what the menu shows, uploads included.
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", "/presets", false);
+        xhr.send(null);
+        result = xhr.status === 200 ? xhr.responseText : JSON.stringify(presets);
+      } catch (e) { result = JSON.stringify(presets); }
+
+    } else if (name === "loadPreset") {
+      // "Load Preset" in the menu.  In the plugin this opens a native chooser;
+      // a browser has no such thing, so the picker is an <input type=file>.
+      // The element is created once and reused — a fresh one per click leaks a
+      // DOM node every time — and click() happens inside the same gesture that
+      // reached us, which is what lets the browser open the chooser at all.
+      pickHinjFile();
+
     } else if (name === "loadPresetAt") {
-      console.log("[preview] load preset", params[0], params[1]);
+      // A click in the preset menu: folder + name, straight off the server.
+      const vals = fetchPreset(params[0], params[1]);
+      if (vals) { if (!loadPresetValues(vals, params[1])) presetError("NO MATCHING PARAMS"); }
+      else { presetError("PRESET MISSING"); console.warn("[preview] preset not found:", params[0], params[1]); }
+
+    } else if (name === "savePreset") {
+      downloadHinj(params[0] || "preset");
+
     } else if (name === "openExternal") {
       console.log("[preview] open", params[0]);
     }
@@ -330,12 +530,8 @@ string mockBackendScript ()
       if (i < 0) continue;
       const k = decodeURIComponent(kv.slice(0, i));
       const v = parseFloat(decodeURIComponent(kv.slice(i + 1)));
-      const p = P[k];
-      if (!p || !isFinite(v)) continue;
-      p.target = p.norm = (p.kind === "c")
-          ? Math.max(0, Math.min(1, Math.round(v) / (p.choices.length - 1)))
-          : Math.pow(Math.max(0, Math.min(1, (v - p.lo) / (p.hi - p.lo))), p.skew);
-      urlIds.add (k);
+      const one = {}; one[k] = v;
+      applyValues (one, true);
     }
   })();
 
@@ -352,6 +548,24 @@ string mockBackendScript ()
       if (urlIds.has (id)) continue;          // the URL said it explicitly
       p.target = p.norm = normOfValue (p, v);
     }
+  })();
+
+  // ?preset=<name> — a .hinj on the server, applied like ?id=value.
+  //
+  // Synchronous on purpose: the file has to be in place before the first frame,
+  // or the page would flash the defaults and then jump.  It is a few kilobytes
+  // off localhost, so the block is imperceptible, and getting it wrong would
+  // make every screenshot of a preset unreliable.
+  (function applyPresetParam () {
+    const m = /[?&]preset=([^&]+)/.exec (location.search);
+    if (!m) return;
+    let spec = decodeURIComponent (m[1]);
+    let folder = "Factory", name = spec;
+    const slash = spec.indexOf ("/");
+    if (slash > 0) { folder = spec.slice (0, slash); name = spec.slice (slash + 1); }
+    const vals = fetchPreset (folder, name);
+    if (!vals) { console.warn ("[preset]", spec, "not found"); return; }
+    loadPresetValues (vals, name);
   })();
 
   // A link is a setting too: seed the store from whatever the URL asked for, so
@@ -566,6 +780,113 @@ void addEditorRoutes (URLRouter router, string which)
     });
 }
 
+
+// ---------------------------------------------------------------------------
+//  Reading a .hinj preset.
+//
+//  The format is JUCE's APVTS state dump: a <PARAM> child per parameter, with
+//  the id and the scaled value as attributes.
+//
+//      <HINJ><PARAM id="pq1Freq" value="248.53"/> ... </HINJ>
+//
+//  Parsed here rather than in the browser so the same file can be opened as a
+//  URL: ?preset=<name> is enough to reproduce a state, and that is what makes a
+//  reference comparison repeatable.  Only the name/value pairs are extracted —
+//  anything else in the document is ignored.
+// ---------------------------------------------------------------------------
+string[string] parseHinj (string text)
+{
+    string[string] result;
+    size_t i = 0;
+    while (true)
+    {
+        const p = text.indexOf ("<PARAM", i);
+        if (p < 0) break;
+        const q = text.indexOf (">", p);
+        if (q < 0) break;
+        const element = text[p .. q];
+        i = q + 1;
+
+        string attrOf (string name)
+        {
+            size_t a = 0;
+            while (true)
+            {
+                const k = element.indexOf (name, a);
+                if (k < 0) return null;
+                // whole-attribute match only
+                if (k > 0 && (isAlphaNum (element[k-1]) || element[k-1] == '_'))
+                { a = k + name.length; continue; }
+                size_t v = k + name.length;
+                while (v < element.length && (element[v] == ' ' || element[v] == '\t')) ++v;
+                if (v >= element.length || element[v] != '=') { a = k + name.length; continue; }
+                ++v;
+                while (v < element.length && (element[v] == ' ' || element[v] == '\t')) ++v;
+                if (v >= element.length) return null;
+                const quote = element[v];
+                if (quote != '"' && quote != '\'') return null;
+                ++v;
+                const e = element.indexOf (quote, v);
+                if (e < 0) return null;
+                return element[v .. e];
+            }
+        }
+
+        const id  = attrOf ("id");
+        const val = attrOf ("value");
+        if (id.length && val.length) result[id] = val;
+    }
+    return result;
+}
+
+/// Where presets live: <root>/Factory for the ones in the repo, <root>/User for
+/// whatever was uploaded.  The page's own menu is organised exactly this way
+/// (listPresets returns {Factory:[...], User:[...]} and loadPresetAt takes the
+/// folder as its first argument), so an uploaded file lands where the menu can
+/// already point at it.
+string presetRoot ()
+{
+    return envOr ("OVERTEON_PRESET_DIR", "/home/x_x/build/Onyx-z/OnyxTEON/presets");
+}
+
+/// <root>/<folder>/<file>, or null if the name is not one we serve.  Exactly
+/// one level: no traversal, so this route cannot read arbitrary files.
+string presetPath (string folder, string file)
+{
+    if (folder != "Factory" && folder != "User") return null;
+    if (file.length == 0) return null;
+    if (file.indexOf ("/") >= 0 || file.indexOf ("..") >= 0) return null;
+    string f = file;
+    if (! f.endsWith (".hinj")) f ~= ".hinj";
+    return buildPath (presetRoot (), folder, f);
+}
+
+string[] listPresets (string folder)
+{
+    string[] names;
+    try
+        foreach (e; dirEntries (buildPath (presetRoot (), folder), SpanMode.shallow))
+        {
+            const bn = baseName (e.name);
+            if (bn.endsWith (".hinj")) names ~= bn [0 .. $ - 5];
+        }
+    catch (Exception) {}          // the directory may not exist yet
+    return names;
+}
+
+string valuesJson (string[string] vals)
+{
+    string json = "{";
+    bool first = true;
+    foreach (id, v; vals)
+    {
+        if (! first) json ~= ",";
+        first = false;
+        json ~= `"` ~ id ~ `":` ~ v;
+    }
+    return json ~ "}";
+}
+
 // ---------------------------------------------------------------------------
 void setupRoutes ()
 {
@@ -602,6 +923,101 @@ void setupRoutes ()
         const body = req.bodyReader.readAllUTF8 ();
         append ("/tmp/overteon-diag.log", body ~ "\n");
         res.writeBody ("ok", "text/plain");
+    });
+
+    // ---- presets ---------------------------------------------------------
+    // GET /preset?folder=Factory&name=X  -> {"id":value,...}
+    //
+    // The page applies these through the same function as ?id=value, so a
+    // preset and a query string cannot disagree about how a value is scaled.
+    // folder defaults to Factory, and a bare name is searched in both.
+    router.get ("/preset", (HTTPServerRequest req, HTTPServerResponse res) {
+        res.contentType = "application/json";
+        res.headers["Cache-Control"] = "no-store";
+
+        string folder = req.query.get ("folder", "");
+        const name = req.query.get ("name", "");
+
+        string path = presetPath (folder, name);
+        if (path is null && folder.length == 0)
+        {
+            // No folder given: try Factory, then User.
+            foreach (f; [ "Factory", "User" ])
+            {
+                path = presetPath (f, name);
+                if (path !is null && exists (path)) break;
+                path = null;
+            }
+        }
+
+        if (path is null)
+        {
+            res.writeBody (`{"error":"bad name"}`, "application/json");
+            return;
+        }
+        if (! exists (path))
+        {
+            res.writeBody (`{"error":"not found","path":"` ~ path ~ `"}`, "application/json");
+            return;
+        }
+
+        res.writeBody (valuesJson (parseHinj (readText (path))), "application/json");
+    });
+
+    // GET /presets -> {"Factory":[...],"User":[...]}   (this is what the page's
+    // preset menu asks listPresets() for)
+    router.get ("/presets", (HTTPServerRequest req, HTTPServerResponse res) {
+        import std.algorithm : sort;
+        import std.array : array;
+        string json = "{";
+        foreach (i, folder; [ "Factory", "User" ])
+        {
+            if (i) json ~= ",";
+            json ~= `"` ~ folder ~ `":[`;
+            auto names = listPresets (folder).sort.array;
+            foreach (j, n; names)
+            {
+                if (j) json ~= ",";
+                json ~= `"` ~ n ~ `"`;
+            }
+            json ~= "]";
+        }
+        res.writeBody (json ~ "}", "application/json");
+    });
+
+    // POST /upload  (body = a .hinj)  -> {"folder":"User","name":"...","count":N}
+    router.post ("/upload", (HTTPServerRequest req, HTTPServerResponse res) {
+        const body = req.bodyReader.readAllUTF8 ();
+        res.contentType = "application/json";
+
+        if (body.length == 0 || body.indexOf ("<PARAM") < 0)
+        {
+            res.writeBody (`{"error":"no <PARAM> element: this is not an APVTS .hinj"}`, "application/json");
+            return;
+        }
+
+        const vals = parseHinj (body);
+        if (vals.length == 0)
+        {
+            res.writeBody (`{"error":"parsed 0 parameters"}`, "application/json");
+            return;
+        }
+
+        string name = req.query.get ("name", "");
+        if (name.length == 0)
+            name = "upload-" ~ to!string (Clock.currTime ().toUnixTime ());
+        const path = presetPath ("User", name);
+        if (path is null)
+        {
+            res.writeBody (`{"error":"bad name"}`, "application/json");
+            return;
+        }
+
+        mkdirRecurse (buildPath (presetRoot (), "User"));
+        write (path, body);
+
+        res.writeBody (`{"folder":"User","name":"` ~ baseName (path) [0 .. $ - 5]
+                       ~ `","count":` ~ to!string (vals.length) ~ `}`, "application/json");
     });
 
     router.get ("/healthz", (HTTPServerRequest req, HTTPServerResponse res) {

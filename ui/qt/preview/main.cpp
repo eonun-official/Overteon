@@ -16,6 +16,7 @@
 // ============================================================
 #include "OvEngine.h"
 #include "OvJackSource.h"
+#include "OvPreset.h"
 #include "OvTick.h"
 #include "OvQmlTypes.h"
 #include "OvEqView.h"
@@ -298,19 +299,20 @@ int main (int argc, char** argv)
     // Forcing OpenGL unconditionally is what made the window hang under wine
     // with no fallback.
     //
-    // RENDER LOOP: threaded, the same as the plug-in.  `basic` renders inside
-    // processEvents() on the GUI thread, so the whole scene and the whole UI
-    // share one core; `threaded` gives Qt a render thread of its own and they
-    // run on two.  Measured with real audio through `--jack`:
+    // RENDER LOOP: basic, and this is NOT a preference.
     //
-    //     basic     42.5 % total, 32.7 % of it on the GUI thread
-    //     threaded  38.7 % total, 25.2 % on QSGRenderThread + 5.3 % GUI
+    // I switched this to `threaded` after measuring that it spread the work over
+    // two cores — and it broke the preview outright on this display: with
+    // `threaded` the window is never mapped at all, leaving only the 1x1 helper
+    // and the 10x10 stub (verified: same binary, QSG_RENDER_LOOP=basic maps a
+    // 1354x1005 window, =threaded maps nothing).  A frame rate is worth nothing
+    // if there is no window to show it in.
     //
-    // i.e. slightly less work overall AND spread across two cores.  Under wine
-    // there is only a software GL stack, where a render thread can starve the
-    // window it is feeding, so wine keeps `basic`.
+    // `basic` renders inside processEvents() on the GUI thread, which is what
+    // this preview has always done.  Threaded rendering stays available for the
+    // plug-in, where the host owns the loop and it does work.
     if (qEnvironmentVariableIsEmpty ("QSG_RENDER_LOOP"))
-        qputenv ("QSG_RENDER_LOOP", wine ? "basic" : "threaded");
+        qputenv ("QSG_RENDER_LOOP", "basic");
 
     // Confirm it took.  Qt reads this when the FIRST QQuickWindow is created,
     // and silently falls back to the basic loop when the platform cannot host a
@@ -333,6 +335,7 @@ int main (int argc, char** argv)
     bool compat = wine || qEnvironmentVariableIsSet ("ONYXTEON_COMPAT");
     int tickReadPid = 0;   // --tick-read <pid>
     QStringList presets;          // id=value pairs, applied before the first frame
+    QStringList presetFiles;      // .hinj files, also applied before the first frame
 
     for (int i = 1; i < argc; ++i)
     {
@@ -398,6 +401,13 @@ int main (int argc, char** argv)
         else if (a == "--set" && i + 1 < argc)
         {
             presets << QString::fromLatin1 (argv[++i]);
+        }
+        else if (a == "--preset" && i + 1 < argc)
+        {
+            // A .hinj preset, the same file the plug-in loads.  Repeatable, and
+            // applied before --set so a command line can start from a preset and
+            // then override single values.
+            presetFiles << QString::fromLatin1 (argv[++i]);
         }
         else if (a == "--qml" && i + 1 < argc)
         {
@@ -502,7 +512,28 @@ int main (int argc, char** argv)
         if (auto* ro = widget->rootObject())
             ro->setProperty ("engine", QVariant::fromValue<QObject*> (engine.get()));
 
-    for (const auto& pv : presets)
+    // Presets first, then --set (same order as the QQuickView path).
+        for (const auto& pf : presetFiles)
+        {
+            std::string err;
+            const auto vals = ovpreset::read (pf.toStdString(), &err);
+            if (vals.empty())
+            {
+                std::fprintf (stderr, "[preset] %s: %s\n", qPrintable (pf), err.c_str());
+                continue;
+            }
+            int applied = 0;
+            for (const auto& kv : vals)
+                if (auto* prm = engine->typedParam (QString::fromStdString (kv.first)))
+                {
+                    prm->setValue (kv.second);
+                    ++applied;
+                }
+            std::fprintf (stderr, "[preset] %s: %d of %zu values applied\n",
+                          qPrintable (pf), applied, vals.size());
+        }
+
+        for (const auto& pv : presets)
         {
             const int eq = pv.indexOf ('=');
             if (eq <= 0) continue;
@@ -624,6 +655,28 @@ int main (int argc, char** argv)
 
     if (auto* ro = view.rootObject())
         ro->setProperty ("engine", QVariant::fromValue<QObject*> (engine.get()));
+
+    // Presets first, then --set, so --set can override single values of a preset.
+    for (const auto& pf : presetFiles)
+    {
+        std::string err;
+        const auto vals = ovpreset::read (pf.toStdString(), &err);
+        if (vals.empty())
+        {
+            std::fprintf (stderr, "[preset] %s: %s\n", qPrintable (pf), err.c_str());
+            continue;
+        }
+
+        int applied = 0;
+        for (const auto& kv : vals)
+            if (auto* prm = engine->typedParam (QString::fromStdString (kv.first)))
+            {
+                prm->setValue (kv.second);
+                ++applied;
+            }
+        std::fprintf (stderr, "[preset] %s: %d of %zu values applied\n",
+                      qPrintable (pf), applied, vals.size());
+    }
 
     for (const auto& pv : presets)
     {

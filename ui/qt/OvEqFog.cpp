@@ -1,14 +1,25 @@
 #include "OvEqFog.h"
 
 #include <QPainter>
+#include <QTimer>
 
 #include <cstdio>
 #include <cstdlib>
 #include "OvEqView.h"
 #include "OvEngine.h"
 
-OvEqFog::OvEqFog (QQuickItem* parent) : QQuickPaintedItem (parent)
+OvEqFog::OvEqFog (QQuickItem* parent) : QQuickPaintedItem (parent), m_tick (this)
 {
+    // A timer as well as the signals.  The signals are the right trigger, but if
+    // one is missed the fog silently stops updating — measured: one paint total,
+    // ever, and thereafter nothing, because paramRevisionChanged has a change
+    // threshold and a spectrum-driven plot repaint does not raise it.  The timer
+    // costs one comparison when nothing moved.
+    m_tick.setInterval (200);
+    QObject::connect (&m_tick, &QTimer::timeout, this, [this] {
+        if (m_top != nullptr && m_bottom != nullptr) update();
+    });
+    m_tick.start();
     // Transparent: everything outside the fog paths must stay see-through so
     // the plots underneath show.  (QQuickPaintedItem has setOpaquePainting, not
     // setOpaque — the latter is QWidget's.)
@@ -68,10 +79,6 @@ void OvEqFog::unsubscribe (OvEqView* v)
 
 void OvEqFog::paint (QPainter* g)
 {
-    if (std::getenv ("ONYXTEON_FOGDEBUG") != nullptr)
-        std::fprintf (stderr, "[fog] paint %gx%g top=%p bottom=%p\n",
-                      width(), height(), (void*) m_top.data(), (void*) m_bottom.data());
-
     g->setRenderHint (QPainter::Antialiasing, true);
 
     // Each view paints its own fog in its own coordinates; `origin` places it in

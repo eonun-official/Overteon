@@ -1184,6 +1184,12 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
         };
 
         buildFog (totalAt, paths, used);
+        if (std::getenv ("ONYXTEON_FOGDEBUG") != nullptr)
+        {
+            std::fprintf (stderr, "[fog] %s used:", m_prefix.toStdString().c_str());
+            for (int k = 0; k < kSteps; ++k) std::fprintf (stderr, " %d", (int) used[k]);
+            std::fprintf (stderr, "\n");
+        }
         strokeFog (paths, used, accent, 2.0);
     }
 
