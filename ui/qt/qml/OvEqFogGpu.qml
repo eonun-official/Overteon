@@ -45,11 +45,43 @@ Item {
     readonly property int devW: Math.max (2, Math.round (width  * dpr))
     readonly property int devH: Math.max (2, Math.round (height * dpr))
 
+    // The strokes, captured and then HIDDEN.
+    //
+    // Two things had to be true and only one could be at a time:
+    //
+    //   * the raw strokes must not be drawn, or they are composited on top of
+    //     their own blurred copy and the fog reads as a hard line with a faint
+    //     halo — which is exactly how it looked: "it never blurs";
+    //   * a hidden item is NOT rendered, so `visible: false` alone leaves the
+    //     texture empty and the fog disappears completely (measured: 0 pink
+    //     pixels anywhere).
+    //
+    // ShaderEffectSource::hideSource is the answer: it keeps capturing the item
+    // while taking it out of the scene.
     OvFogSource {
         id: srcItem
         anchors.fill: parent
         topView: root.topView
         bottomView: root.bottomView
+    }
+
+    ShaderEffectSource {
+        id: srcTex
+        // NOT DRAWN.  hideSource hides the ITEM it captures, not this capture
+        // itself — a ShaderEffectSource draws its content unless told not to.
+        // Leaving it visible composited the raw, razor-sharp strokes on top of
+        // their own blurred copy, so the fog looked like a hard line no matter
+        // what the shader did.  It only shows up for ONYXTEON_FOGRAW.
+        visible: root.raw
+        sourceItem: srcItem
+        hideSource: true
+        live: true
+        smooth: true
+        x: 0; y: 0
+        width: root.width
+        height: root.height
+        sourceRect: Qt.rect (0, 0, root.width, root.height)
+        textureSize: Qt.size (root.devW, root.devH)
     }
 
     OvBlur {
@@ -87,12 +119,5 @@ Item {
     }
 
     // ONYXTEON_FOGRAW: the unblurred strokes, to check the source on its own.
-    ShaderEffectSource {
-        anchors.fill: parent
-        visible: root.raw
-        sourceItem: srcItem
-        textureSize: Qt.size (root.devW, root.devH)
-        live: true
-        smooth: true
-    }
+
 }

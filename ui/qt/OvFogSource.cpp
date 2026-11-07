@@ -59,12 +59,24 @@ void OvFogSource::subscribe (OvEqView* v)
     // The plots move when the geometry they are laid out in changes.
     connect (v, &OvEqView::fogGeometryChanged, this, [this] { update(); });
 
+    // Repaint WHENEVER THE PLOTS REPAINT.
+    //
+    // The parameter signal was the obvious trigger and it was wrong: it fires on
+    // a parameter revision, but the curve on screen is redrawn by the plots' own
+    // paint path, which also runs for things that are not a parameter revision.
+    // Driven by the parameter signal alone the fog updated at about 2 frames a
+    // second while everything around it ran at 60-80 — the reported "the
+    // crossing region only updates 2 times a second".
+    //
+    // contentChanged is emitted at the end of every plot repaint, which is
+    // exactly the cadence the fog has to match: its strokes are drawn from the
+    // same curves, so if the plot is new the strokes are potentially new too.
+    // The signature check in paint() then decides whether anything actually has
+    // to be redrawn, so following the frame rate costs a hash comparison.
+    connect (v, &OvEqView::contentChanged, this, [this] { update(); });
+
     if (auto* e = v->engine())
     {
-        // Any parameter can move either curve: both halves are in one surface
-        // now, so there is nothing to gain from splitting the signal.
-        connect (e, &OvEngine::paramRevisionChanged, this,
-                 [this] (bool, bool) { update(); });
         connect (e, &OvEngine::driveModeChanged, this, [this] { update(); });
     }
 }
@@ -102,6 +114,22 @@ void OvFogSource::paint (QPainter* g)
     mix (quint64 (pw));
     mix (quint64 (ph));
     if (m_top != nullptr)    mix (quint64 (qint64 (std::llround (m_top->displayScale() * 4096.0))));
+
+    if (std::getenv ("ONYXTEON_FOGDEBUG") != nullptr)
+    {
+        static int n = 0, hit = 0;
+        static auto t0 = std::chrono::steady_clock::now();
+        ++n;
+        if (key == m_cacheKey && ! m_cache.isNull()) ++hit;
+        const double dt = std::chrono::duration<double> (
+            std::chrono::steady_clock::now() - t0).count();
+        if (dt >= 1.0)
+        {
+            std::fprintf (stderr, "[fograte] paint %.1f/s  rebuild %.1f/s\n",
+                          n / dt, (n - hit) / dt);
+            n = hit = 0; t0 = std::chrono::steady_clock::now();
+        }
+    }
 
     if (key == m_cacheKey && ! m_cache.isNull())
     {

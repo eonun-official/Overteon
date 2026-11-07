@@ -139,12 +139,31 @@ namespace
 
 OvEqView::OvEqView (QQuickItem* parent) : QQuickPaintedItem (parent)
 {
-    // The fog surface is positioned from fogEdge()/fogRange(), which are derived
-    // from the plot layout — so it has to be told when that layout changes.
-    QObject::connect (this, &QQuickItem::widthChanged,  this,
-                      [this] { emit fogGeometryChanged(); });
-    QObject::connect (this, &QQuickItem::heightChanged, this,
-                      [this] { emit fogGeometryChanged(); });
+    // Geometry changed: rebuild the picture NOW, and tell the fog.
+    //
+    // update() is the important half, and it was missing.  A QQuickPaintedItem
+    // keeps its last texture when the item is resized and Qt simply STRETCHES
+    // it — so between the resize and the next repaint the plot is an enlarged
+    // copy of the previous size.  Repaints here are driven by the spectrum, and
+    // the analyzer does not emit in step with a window drag, so during a drag a
+    // half could keep a stale picture for many frames.
+    //
+    // Worse, the two halves are separate items with separate schedules: if a
+    // spectrum tick landed between them, the upper plot was redrawn at the new
+    // size while the lower one was still the old picture stretched.  That is
+    // exactly the reported tearing — the upper half showing a new frame and the
+    // lower half the previous one — and it has nothing to do with the fog.
+    //
+    // Marking both dirty here makes them repaint in the SAME render pass, so
+    // they cannot disagree.
+    QObject::connect (this, &QQuickItem::widthChanged, this, [this] {
+        update();
+        emit fogGeometryChanged();
+    });
+    QObject::connect (this, &QQuickItem::heightChanged, this, [this] {
+        update();
+        emit fogGeometryChanged();
+    });
 
     setAcceptHoverEvents (true);
     setAcceptedMouseButtons (Qt::LeftButton | Qt::RightButton);

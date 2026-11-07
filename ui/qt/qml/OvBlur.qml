@@ -51,6 +51,11 @@ Item {
     /// height (0 = a plain, uniform blur).
     property real   sigma: 1.0
     property real   sigmaSlope: 0.0
+    /// Texture texels per item unit.  BOTH sigma and sigmaSlope are given in
+    /// the caller's units and converted here — converting only sigma left the
+    /// gradient in texels while the base was in item units, so the slope came
+    /// out at the wrong scale and the fog barely grew.
+    readonly property real texScale: texH / Math.max (1, itemH)
     /// The fog's gradient geometry, normalised to this surface's height:
     /// the seam centre, half the gap between the two plot edges, and the fog's
     /// reach.  Only used when sigmaSlope or fade is set; the glass leaves them
@@ -103,9 +108,9 @@ Item {
         width: root.itemW; height: root.itemH
         visible: false                    // intermediate, read by passV
         property variant src: capture
-        property real sigma: root.sigma * (root.texH / Math.max (1, root.itemH))
+        property real sigma: root.sigma * root.texScale
         property real axis: 0.0
-        property real sigmaSlope: root.sigmaSlope
+        property real sigmaSlope: root.sigmaSlope * root.texScale
         property real alphaMul: 0.0       // the fade goes on the last pass only
         property real fogMid: root.fogMid
         property real fogGap: root.fogGap
@@ -129,9 +134,9 @@ Item {
         width: root.itemW; height: root.itemH
         visible: false
         property variant src: afterH
-        property real sigma: root.sigma * (root.texH / Math.max (1, root.itemH))
+        property real sigma: root.sigma * root.texScale
         property real axis: 1.0
-        property real sigmaSlope: root.sigmaSlope
+        property real sigmaSlope: root.sigmaSlope * root.texScale
         property real alphaMul: root.fade ? 1.0 : 0.0
         property real fogMid: root.fogMid
         property real fogGap: root.fogGap
