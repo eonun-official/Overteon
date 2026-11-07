@@ -4,6 +4,7 @@
 
 #include <QPainter>
 #include <QQuickWindow>
+#include <QQuickWindow>
 #include <QString>
 #include <QTimer>
 #include <algorithm>
@@ -18,10 +19,10 @@ namespace
     constexpr double kStripH = 68.0;
 }
 
-OvSeamFrost::OvSeamFrost (QQuickItem* parent) : QQuickPaintedItem (parent)
+OvSeamFrost::OvSeamFrost (QQuickItem* parent) : QQuickItem (parent)
 {
     setAntialiasing (true);
-    setOpaquePainting (false);
+    setFlag (QQuickItem::ItemHasContents, true);
 }
 
 void OvSeamFrost::attach (OvEqView* v)
@@ -85,14 +86,14 @@ void OvSeamFrost::setBottomView (OvEqView* v)
 // reproduced here through OvFrost so every glass surface in the UI goes
 // through identical code: half-resolution capture, 7-tap dual Gaussian,
 // saturate, bilinear upscale, veil, then the radial mask.
-void OvSeamFrost::paint (QPainter* g)
+QImage OvSeamFrost::renderGlass()
 {
     // ONYXTEON_NOFROST means no glass anywhere, so a reference capture really
     // has none.  (It used to skip only the control pits, which made an A/B of
     // the seam look like the seam was not painting.)
-    if (std::getenv ("ONYXTEON_NOFROST") != nullptr) return;
-    if (std::getenv ("ONYXTEON_NOSEAM") != nullptr) return;
-    if (m_top == nullptr || m_bottom == nullptr) return;
+    if (std::getenv ("ONYXTEON_NOFROST") != nullptr) return QImage();
+    if (std::getenv ("ONYXTEON_NOSEAM") != nullptr) return QImage();
+    if (m_top == nullptr || m_bottom == nullptr) return QImage();
 
     // unfrostedImage(): the page's FrostEngine samples the raw plot canvases.
     // Using contentImage() here fed the glass a picture that already had each
@@ -100,10 +101,10 @@ void OvSeamFrost::paint (QPainter* g)
     // out visibly darker and more saturated than the page.
     const QImage top    = m_top->unfrostedImage();
     const QImage bottom = m_bottom->unfrostedImage();
-    if (top.isNull() && bottom.isNull()) return;
+    if (top.isNull() && bottom.isNull()) return QImage();
 
     const double w = width(), h = height();
-    if (w < 2.0 || h < 2.0) return;
+    if (w < 2.0 || h < 2.0) return QImage();
 
     const qreal dpr = window() != nullptr ? window()->devicePixelRatio() : 1.0;
 
@@ -178,16 +179,13 @@ void OvSeamFrost::paint (QPainter* g)
     const quint64 key = sum ^ mix ^ (quint64 (w) << 48) ^ (quint64 (h) << 32)
                         ^ quint64 (dpr * 100);
 
-    if (key == m_cacheKey && ! m_cache.isNull() && m_cache.size() == QSize (int (std::lround (w * dpr)), int (std::lround (h * dpr))))
-    {
-        g->setRenderHint (QPainter::SmoothPixmapTransform, true);
-        g->drawImage (QRectF (0, 0, w, h), m_cache,
-                      QRectF (0, 0, m_cache.width(), m_cache.height()));
-        return;
-    }
+    if (key == m_cacheKey && ! m_cache.isNull()
+        && m_cache.size() == QSize (int (std::lround (w * dpr)),
+                                    int (std::lround (h * dpr))))
+        return m_cache;
 
     const QImage out = OvFrost::composite (capture, w, h, dpr, p);
-    if (out.isNull()) return;
+    if (out.isNull()) return QImage();
     m_cacheKey = key;
     m_cache = out;
 
@@ -203,7 +201,33 @@ void OvSeamFrost::paint (QPainter* g)
         out.save (QStringLiteral ("/tmp/seam_%1.png").arg (n++));
     }
 
-    g->setRenderHint (QPainter::SmoothPixmapTransform, true);
-    g->drawImage (QRectF (0, 0, w, h), out,
-                  QRectF (0, 0, out.width(), out.height()));
+    return out;
+}
+
+QSGNode* OvSeamFrost::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
+{
+    const QImage glass = renderGlass();
+    if (glass.isNull()) return old;
+
+    if (m_node == nullptr)
+    {
+        m_node = window()->createImageNode();
+        m_node->setFiltering (QSGTexture::Linear);
+        m_node->setTextureCoordinatesTransform (QSGImageNode::NoTransform);
+    }
+
+    // The glass changes whenever the plots do, so the key is the checksum the
+    // cache already computed plus the size — the image itself is never compared.
+    const QString key = QStringLiteral ("%1|%2x%3")
+                            .arg (m_cacheKey).arg (glass.width()).arg (glass.height());
+    if (key != m_texKey)
+    {
+        m_texKeep = glass.copy();     // must outlive the render pass's upload
+        m_node->setTexture (window()->createTextureFromImage (m_texKeep));
+        m_texKey = key;
+    }
+    m_node->setRect (QRectF (0, 0, width(), height()));
+
+    if (old == nullptr) return m_node;
+    return old;
 }

@@ -14,13 +14,14 @@
 //  OvFrost, shared with the control pits so the three glass surfaces cannot
 //  drift apart.
 // ============================================================
-#include <QQuickPaintedItem>
+#include <QQuickItem>
+#include <QSGImageNode>
 #include <QImage>
 #include <chrono>
 
 class OvEqView;
 
-class OvSeamFrost : public QQuickPaintedItem
+class OvSeamFrost : public QQuickItem
 {
     Q_OBJECT
 
@@ -36,7 +37,14 @@ public:
     OvEqView* bottomView() const { return m_bottom; }
     void setBottomView (OvEqView*);
 
-    void paint (QPainter*) override;
+protected:
+    /// The RHI path.  renderGlass() does the work and caches its result; this
+    /// just puts the finished picture in the scene graph as a texture.
+    QSGNode* updatePaintNode (QSGNode* old, UpdatePaintNodeData*) override;
+
+public:
+    /// Build (or reuse) the composited glass.  Null when there is nothing.
+    QImage renderGlass();
 
 signals:
     void viewsChanged();
@@ -50,5 +58,8 @@ private:
     bool m_scheduled = false;
     std::chrono::steady_clock::time_point m_lastRebuild {};
     QImage  m_cache;        // last composited glass
+    QSGImageNode* m_node = nullptr;
+    QString m_texKey;
+    QImage  m_texKeep;      // outlives the texture upload
     quint64 m_cacheKey = 0;
 };
