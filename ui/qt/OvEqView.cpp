@@ -432,6 +432,25 @@ QPointF OvEqView::nodePosition (int index)
     return QPointF (m_bands[index].x, m_bands[index].y);
 }
 
+// How much the design is enlarged on its way to the window.
+//
+// mapToScene maps item units to window pixels, so the length of the image of a
+// 1-unit vector is exactly the factor the design is drawn at: 1.0 at 1040x772,
+// 0.62 in a 700x480 window, 1.5 in a 1560x1158 one.  Taking both axes and
+// averaging keeps this honest if a rotation or a non-uniform scale is ever
+// introduced, and it degrades to 1.0 for an item that is not in a window
+// (mapToScene returns item coordinates then) rather than to a division by zero.
+double OvEqView::displayScale() const
+{
+    const QPointF o  = mapToScene (QPointF (0, 0));
+    const QPointF ex = mapToScene (QPointF (1, 0));
+    const QPointF ey = mapToScene (QPointF (0, 1));
+    const double sx = std::hypot (ex.x() - o.x(), ex.y() - o.y());
+    const double sy = std::hypot (ey.x() - o.x(), ey.y() - o.y());
+    const double s  = (sx + sy) * 0.5;
+    return (std::isfinite (s) && s > 0.05 && s < 64.0) ? s : 1.0;
+}
+
 // ------------------------------------------------------------ debug HUD
 //  Read-only diagnostics for --hud.  Answers, in text a human can read while
 //  the app runs, the only two questions that matter: where is each node drawn,
@@ -1043,7 +1062,19 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
     if (curveY.empty()) return;
 
     constexpr int    kSteps = 12;
-    constexpr double kRange = 224.0;                 // CSS range, design px
+    // The reach of the fog and its blur profile are a TREATMENT, not geometry:
+    // they were tuned at the design size and must not grow with the window.
+    //
+    // They used to be plain design pixels, so a window at 1.5x turned the fog
+    // into 1.5x the smear — a band that reads as a glass edge at 1040x772 read
+    // as a haze at 1560x1158.  Dividing by the scale we are about to be drawn
+    // at cancels that: the fog reaches the SAME number of screen pixels past
+    // the plot edge at every window size, and its twelve bands fade over the
+    // same screen distance with the same sigmas.  The curve inside it still
+    // scales, because the curve is the plot.
+    const double kRangeCss = 224.0;                  // CSS range, design px
+    const double s         = displayScale();
+    const double kRange    = kRangeCss / s;          // in this view's units
     const double bandW = kRange / kSteps;
     const double edge  = m_headerTop ? bottom : top;
     const double dir   = m_headerTop ? 1.0 : -1.0;    // outward from the plot
@@ -1102,7 +1133,12 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
                 continue;
             }
 
-            const double sigma  = 0.4 + k * 0.55;        // CSS px
+            // Same division as kRange: the blur profile is a treatment with a
+            // fixed size on screen, so it must not be multiplied by the window
+            // scale as well.  lineWidth is deliberately NOT divided — the fog
+            // has to continue the curve's stroke, which does scale, or there
+            // would be a width step right at the plot edge.
+            const double sigma  = (0.4 + k * 0.55) / s;  // CSS px
             const double margin = 3.0 * sigma;
 
             // No brightness compensation for the blur.  A Gaussian keeps total
@@ -1186,6 +1222,14 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
         buildFog (totalAt, paths, used);
         if (std::getenv ("ONYXTEON_FOGDEBUG") != nullptr)
         {
+            // The numbers a screenshot cannot settle: what the fog's reach and
+            // its finest blur actually come out at ON SCREEN.  Both must be the
+            // same at every window size; only the view-space values may change.
+            std::fprintf (stderr,
+                          "[fog] %s scale:%.4f  reach:%.2f viewpx = %.2f screenpx"
+                          "  band:%.2f  sigma11:%.2f screenpx\n",
+                          m_prefix.toStdString().c_str(), s, kRange, kRange * s,
+                          bandW * s, (0.4 + (kSteps - 1) * 0.55));
             std::fprintf (stderr, "[fog] %s used:", m_prefix.toStdString().c_str());
             for (int k = 0; k < kSteps; ++k) std::fprintf (stderr, " %d", (int) used[k]);
             std::fprintf (stderr, "\n");

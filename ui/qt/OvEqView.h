@@ -152,6 +152,11 @@ private:
     void endDrag();
     double plotRangeDb() const;
     double inactiveOpacity() const;
+    /// How much this view is enlarged on its way to the window: 1.0 at the
+    /// design size, 2.0 when the window is twice as large.  The overflow fog
+    /// divides by it, because the fog's reach and its blur profile are a fixed
+    /// treatment rather than geometry that belongs to the design.
+    double displayScale() const;
     int nodeAt (const QPointF& pos) const;
 
     // ---- painting helpers ------------------------------------------
