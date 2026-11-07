@@ -16,7 +16,11 @@
 #include <QQuickWindow>
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLFramebufferObjectFormat>
-#include <QOpenGLPaintDevice>
+#include <QSGSimpleTextureNode>
+#include <QSGGeometryNode>
+#include <QSGVertexColorMaterial>
+#include <QSGTexture>
+#include <QQuickWindow>
 #include <QRadialGradient>
 #include <QLinearGradient>
 #include <QVector>
@@ -140,7 +144,7 @@ namespace
     }
 }
 
-OvEqView::OvEqView (QQuickItem* parent) : QQuickFramebufferObject (parent)
+OvEqView::OvEqView (QQuickItem* parent) : QQuickItem (parent)
 {
     // Geometry changed: rebuild the picture NOW, and tell the fog.
     //
@@ -582,58 +586,147 @@ struct OvPaintTimer
 //  rounded caps and glyphs are tessellated into GL commands here instead of
 //  being rasterised into a QImage and uploaded.
 // ---------------------------------------------------------------------------
-class OvEqFboRenderer : public QQuickFramebufferObject::Renderer
+// ---------------------------------------------------------------------------
+//  The render node.
+//
+//  Four layers, in the order paintContent() draws them:
+//
+//      background   QSGSimpleTextureNode   grid + ruler labels, cached
+//      spectrum     QSGGeometryNode        the analyser fill, per frame
+//      glow bar     QSGSimpleTextureNode   the control pit's bloom, cached
+//      overlay      QSGSimpleTextureNode   curves, nodes, digits, cached
+//
+//  QPainter runs only when a cached layer's key changes, and even then it draws
+//  into a QImage off the render path.  Nothing here is OpenGL-specific: Qt
+//  renders QSGGeometry and QSGSimpleTextureNode on GL, D3D11, Vulkan or Metal,
+//  which is the whole point of using them.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Upload `img` into `node` when `key` changed, and place it at `rect`.
+//
+// The image is copied into `keep` first: createTextureFromImage builds a
+// texture whose pixels are committed during the render pass, which happens
+// after this function has returned, so the source must still be alive.
+// Returns true when the node should be IN the tree.
+//
+// A texture node with no texture must not be: the renderer compares materials
+// across the whole opaque batch, and a node whose texture is null makes
+// QSGOpaqueTextureMaterial::compare read through it — measured as a SIGSEGV on
+// the first frame with one empty glow-bar node present.  So an empty layer is
+// detached rather than left drawn as nothing.
+bool applyTexture (QQuickWindow* win, QSGImageNode* node, const QImage& img,
+                   const QString& key, QString& haveKey, QImage& keep,
+                   const QRectF& rect)
+{
+    if (node == nullptr || win == nullptr) return false;
+    if (img.isNull() || rect.isEmpty())
+        return false;
+    if (key != haveKey || node->texture() == nullptr)
+    {
+        keep = img.copy();
+        node->setTexture (win->createTextureFromImage (keep));
+        haveKey = key;
+    }
+    node->setRect (rect);
+    return true;
+}
+
+// A cached QImage as a scene-graph texture.  `key` decides when it is
+// re-uploaded: the image itself is not compared, because that would cost a full
+// pass over the pixels every frame.
+class LayerNode
 {
 public:
-    explicit OvEqFboRenderer (OvEqView* v) : m_view (v) {}
+    // QSGImageNode instead of QSGSimpleTextureNode.
+    //
+    // QSGSimpleTextureNode crashed this renderer outright — SIGSEGV inside
+    // QSGOpaqueTextureMaterial::compare, on the first frame, with a single
+    // texture node in the tree and nothing else.  QSGImageNode is the node Qt
+    // provides for "draw this image as a quad"; it owns its texture and its
+    // material, so there is no lifetime to get wrong here.
+    QSGNode* node = nullptr;
+    QSGImageNode* img = nullptr;
+    QString key;
+    QImage pending;      // must outlive the texture upload
 
-    QOpenGLFramebufferObject* createFramebufferObject (const QSize& size) override
+    void init (QQuickWindow* win)
     {
-        QOpenGLFramebufferObjectFormat f;
-        f.setAttachment (QOpenGLFramebufferObject::CombinedDepthStencil);
-        f.setSamples (0);          // the drawing is already antialiased by QPainter
-        return new QOpenGLFramebufferObject (size, f);
+        if (node != nullptr) return;
+        img  = win->createImageNode();
+        node = img;
+        img->setFiltering (QSGTexture::Linear);
+        img->setTextureCoordinatesTransform (QSGImageNode::NoTransform);
     }
 
-    void render() override
+    void refresh (QQuickWindow* win, const QImage& image, const QString& k,
+                  const QRectF& rect)
     {
-        QOpenGLFramebufferObject* fbo = framebufferObject();
-        if (fbo == nullptr || m_view == nullptr) return;
-
-        const QSize px = fbo->size();
-        if (m_dev.width() != px.width() || m_dev.height() != px.height())
-            m_dev.setSize (px);
-
-        QPainter p;
-        if (! p.begin (&m_dev)) return;
-        p.setRenderHint (QPainter::Antialiasing, true);
-        p.setRenderHint (QPainter::TextAntialiasing, true);
-        // The device is in DEVICE pixels; the drawing code works in item
-        // pixels, exactly as it did when it owned an image of that size.
-        const qreal dpr = m_view->window() != nullptr
-                        ? m_view->window()->devicePixelRatio() : 1.0;
-        p.scale (dpr, dpr);
-        m_view->paint (&p);
-        p.end();
-
-        // The CPU seam glass needs pixels, not a texture.  Read back only when
-        // it is actually on screen — this is the cost the class no longer pays.
-        if (m_view->wantImage())
+        init (win);
+        if (image.isNull() || rect.isEmpty())
         {
-            const QImage img = fbo->toImage();
-            if (! img.isNull()) m_view->setContentImage (img);
+            img->setRect (QRectF());
+            return;
         }
+        if (k != key)
+        {
+            // Keep our own copy: the texture is uploaded from this image later,
+            // during the render pass, so the pixels have to still be there.
+            pending = image.copy();
+            img->setTexture (win->createTextureFromImage (pending));
+            key = k;
+        }
+        img->setRect (rect);
     }
-
-private:
-    OvEqView* m_view = nullptr;
-    QOpenGLPaintDevice m_dev;
 };
 
-QQuickFramebufferObject::Renderer* OvEqView::createRenderer() const
+// The spectrum: a triangle strip from the baseline to the outline, with the
+// gradient carried in the vertex colours (opaque at the top, transparent at the
+// baseline) — the same thing QLinearGradient did, without a paint engine.
+class SpectrumNode : public QSGGeometryNode
 {
-    return new OvEqFboRenderer (const_cast<OvEqView*> (this));
-}
+public:
+    SpectrumNode()
+    {
+        auto* geom = new QSGGeometry (QSGGeometry::defaultAttributes_ColoredPoint2D(), 2);
+        geom->setDrawingMode (QSGGeometry::DrawTriangleStrip);
+        setGeometry (geom);
+        setFlag (QSGNode::OwnsGeometry);
+        setMaterial (new QSGVertexColorMaterial);
+        setFlag (QSGNode::OwnsMaterial);
+    }
+
+    /// Returns the vertex count drawn; 0 means "nothing".
+    int rebuild (const QVector<QPointF>& top, double bottom, const QColor& accent)
+    {
+        QSGGeometry* geom = geometry();
+        const int n = top.size();
+        if (n < 2) { geom->setVertexCount (0); markDirty (QSGNode::DirtyGeometry); return 0; }
+        if (geom->vertexCount() < n * 2)
+            geom->allocate (n * 2);
+
+        auto* v = geom->vertexDataAsColoredPoint2D();
+        const int hiA = int (accent.alpha() * 0.18 * 255.0 + 0.5);   // the fill's top
+        const int loA = 0;                                           // fades out
+        int k = 0;
+        for (const QPointF& p : top)
+        {
+            v[k].set (float (p.x()), float (p.y()),
+                      uchar (accent.red()), uchar (accent.green()), uchar (accent.blue()),
+                      uchar (hiA));
+            ++k;
+            v[k].set (float (p.x()), float (bottom),
+                      uchar (accent.red()), uchar (accent.green()), uchar (accent.blue()),
+                      uchar (loA));
+            ++k;
+        }
+        geom->setVertexCount (k);
+        markDirty (QSGNode::DirtyGeometry);
+        return k;
+    }
+};
+
+}  // namespace
 
 void OvEqView::setWantImage (bool on)
 {
@@ -643,16 +736,126 @@ void OvEqView::setWantImage (bool on)
     update();
 }
 
-// Read the framebuffer back for the CPU seam glass.  Called from the render
-// thread, so the painters below are the only thing touching the image.
-// Called from the render thread with the finished frame.
-void OvEqView::setContentImage (const QImage& img)
+QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 {
-    m_content   = img;
-    m_unfrosted = img;      // the plot is drawn without this half's glass now
-    // Queued: the seam glass lives on the GUI thread.
-    QMetaObject::invokeMethod (this, [this] { emit contentChanged(); },
-                               Qt::QueuedConnection);
+    if (m_engine == nullptr) return old;
+
+    // The CPU seam glass — the fallback for a machine where the GPU chain
+    // cannot run — reads this half's pixels.  Producing them means rasterising
+    // the plot with QPainter, which is exactly the cost the node path removes,
+    // so it runs only when that glass is actually the active path.
+    if (m_wantImage)
+    {
+        const qreal dpr = window() != nullptr ? window()->devicePixelRatio() : 1.0;
+        const int pw = int (std::lround (width() * dpr));
+        const int ph = int (std::lround (height() * dpr));
+        if (m_content.width() != pw || m_content.height() != ph)
+            m_content = QImage (std::max (1, pw), std::max (1, ph),
+                                QImage::Format_ARGB32_Premultiplied);
+        {
+            QPainter cg (&m_content);
+            cg.setRenderHint (QPainter::Antialiasing, true);
+            cg.setRenderHint (QPainter::TextAntialiasing, true);
+            cg.scale (dpr, dpr);
+            paintContent (&cg, width(), height(), m_plot.top(), m_plot.bottom(),
+                          QColor (m_accent));
+        }
+        m_unfrosted = m_content;
+        QMetaObject::invokeMethod (this, [this] { emit contentChanged(); },
+                                   Qt::QueuedConnection);
+    }
+    if (window() == nullptr) return old;
+
+    if (std::getenv ("ONYXTEON_NONODE")) return old;
+
+    OvEqView::Layers L;
+    buildLayers (L);
+
+    if (m_sgRoot == nullptr)
+    {
+        m_sgRoot = new QSGNode;
+        m_sgBg      = window()->createImageNode();
+        auto* spn = new SpectrumNode; m_sgSpectrum = spn;
+        m_sgGlow    = window()->createImageNode();
+        m_sgOverlay = window()->createImageNode();
+        m_sgRoot->appendChildNode (m_sgBg);
+        m_sgRoot->appendChildNode (m_sgSpectrum);
+        m_sgRoot->appendChildNode (m_sgGlow);
+        m_sgRoot->appendChildNode (m_sgOverlay);
+        for (QSGImageNode* n : { m_sgBg, m_sgGlow, m_sgOverlay })
+        {
+            n->setFiltering (QSGTexture::Linear);
+            n->setTextureCoordinatesTransform (QSGImageNode::NoTransform);
+        }
+    }
+
+    const QRectF full (0, 0, width(), height());
+
+    // Keep a node in the tree only while it has something to draw.
+    auto slot = [this] (QSGImageNode* n, bool wanted) {
+        if (n == nullptr) return;
+        const bool in = n->parent() != nullptr;
+        if (wanted && ! in) m_sgRoot->appendChildNode (n);
+        else if (! wanted && in) m_sgRoot->removeChildNode (n);
+    };
+
+    // ---- background ------------------------------------------------------
+    {
+        const QImage& img = ! L.background.isNull() ? L.background
+                                                   : backgroundImage (width(), height(),
+                                                                      m_plot.top(), m_plot.bottom(),
+                                                                      QColor (m_accent));
+        slot (m_sgBg, applyTexture (window(), m_sgBg, img, L.bgKey,
+                                    m_texKeyBg, m_texImgBg, full));
+    }
+
+    // ---- spectrum (the only thing that changes per frame) ----------------
+    //
+    // Detached when it has nothing to draw.  An empty QSGGeometryNode keeps its
+    // material, and the renderer compares materials across the whole opaque
+    // batch: a vertex-colour material compared against a texture material reads
+    // the wrong type and segfaults — measured in
+    // QSGOpaqueTextureMaterial::compare as soon as this node was present with
+    // zero vertices.
+    {
+        auto* sp = static_cast<SpectrumNode*> (m_sgSpectrum);
+        const int n = std::getenv ("ONYXTEON_ONLYBG")
+                    ? sp->rebuild (QVector<QPointF>(), 0.0, L.accent)
+                    : sp->rebuild (L.spectrum, L.spectrumBottom, L.accent);
+        if (n > 0 && ! m_spAttached)
+        {
+            m_sgRoot->insertChildNodeBefore (sp, m_sgGlow);
+            m_spAttached = true;
+        }
+        else if (n == 0 && m_spAttached)
+        {
+            m_sgRoot->removeChildNode (sp);
+            m_spAttached = false;
+        }
+    }
+
+    // ---- glow bar --------------------------------------------------------
+    {
+        const bool have = ! m_glowBar.isNull() && ! m_glowDest.isEmpty();
+        slot (m_sgGlow, applyTexture (window(), m_sgGlow,
+                                      have ? m_glowBar : QImage(),
+                                      have ? QString::number (m_glowKey) : QString(),
+                                      m_texKeyGlow, m_texImgGlow,
+                                      have ? m_glowDest : QRectF()));
+    }
+
+    // ---- overlay ---------------------------------------------------------
+    {
+        const QImage& img = ! L.overlay.isNull() ? L.overlay
+                                                : overlayImage (width(), height(),
+                                                                m_plot.top(), m_plot.bottom(),
+                                                                QColor (m_accent));
+        slot (m_sgOverlay, applyTexture (window(), m_sgOverlay, img, L.overlayKey,
+                                         m_texKeyOv, m_texImgOv, full));
+    }
+
+    QSGNode* root = m_sgRoot;
+    return root;
 }
 
 void OvEqView::paint (QPainter* g)
@@ -1130,8 +1333,110 @@ const QImage& OvEqView::overlayImage (double w, double h, double top,
 //
 //  `origin` is where this view's (0,0) lands in the target's coordinates.
 // ---------------------------------------------------------------------------
-void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
+// ---------------------------------------------------------------------------
+//  Build the four layers for the render node.
+//
+//  The spectrum is re-derived every call because it is the only thing that
+//  moves; the other three are built through their existing caches and returned
+//  only when their key changed, so an idle frame does no drawing at all.
+// ---------------------------------------------------------------------------
+void OvEqView::buildLayers (Layers& out)
 {
+    out = Layers();
+    if (m_engine == nullptr) return;
+
+    gatherBands();
+    layoutGeometry (m_plot, m_rangeDb);
+    const double w = width(), h = height();
+    if (w < 2.0 || h < 2.0) return;
+    const double top = m_plot.top(), bottom = m_plot.bottom();
+    const QColor accent (m_accent);
+    out.accent = accent;
+
+    // ---- cached layers ---------------------------------------------------
+    // backgroundImage() returns the SAME image when its key has not changed, so
+    // comparing keys afterwards is how "did this rebuild?" is answered without
+    // adding a second dirty flag that could disagree with the cache.
+    const QString prevBg = m_bgKey;
+    out.background = backgroundImage (w, h, top, bottom, accent);
+    if (m_bgKey != prevBg || out.background.isNull())
+    {
+        out.bgKey = m_bgKey;
+        out.background.detach();      // a copy: the cache keeps its own
+    }
+    else
+    {
+        out.background = QImage();
+        out.bgKey = m_bgKey;
+    }
+
+    const QString prevOv = m_overlayKey;
+    out.overlay = overlayImage (w, h, top, bottom, accent);
+    if (m_overlayKey != prevOv || out.overlay.isNull())
+    {
+        out.overlayKey = m_overlayKey;
+        out.overlay.detach();
+    }
+    else
+    {
+        out.overlay = QImage();
+        out.overlayKey = m_overlayKey;
+    }
+
+    // ---- the spectrum, flattened -----------------------------------------
+    //
+    // The analyser outline, Catmull-Rom through the 128 log-spaced samples so
+    // the fill does not read as a staircase, then flattened to a polyline the
+    // node can triangulate.  Same smoothing the painter path used.
+    {
+        float spec[128] = {};
+        if (m_engine != nullptr)
+        {
+            const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
+                                          : m_engine->spectrumTable();
+            const int n = std::min (128, int (tbl.size()));
+            for (int i = 0; i < n; ++i) spec[i] = float (tbl.at (i).toDouble());
+        }
+
+        double xs[128], ys[128];
+        for (int i = 0; i < 128; ++i)
+        {
+            const double f = 20.0 * std::pow (1000.0, (double) i / 127.0);
+            xs[i] = toX (f, w);
+            ys[i] = bottom - (double) spec[i] * (bottom - top) * 0.92;
+        }
+
+        out.spectrumBottom = bottom;
+        out.spectrum.reserve (128 * 6);
+        const int kSub = 5;                   // 5 segments per span is plenty
+        for (int i = 0; i < 127; ++i)
+        {
+            const double x0 = (i > 0) ? xs[i - 1] : xs[0];
+            const double y0 = (i > 0) ? ys[i - 1] : ys[0];
+            const double x1 = xs[i],     y1 = ys[i];
+            const double x2 = xs[i + 1], y2 = ys[i + 1];
+            const double x3 = (i + 2 < 128) ? xs[i + 2] : x2;
+            const double y3 = (i + 2 < 128) ? ys[i + 2] : y2;
+
+            // cubic Bezier control points of the Catmull-Rom segment
+            const QPointF c1 (x1 + (x2 - x0) / 6.0, y1 + (y2 - y0) / 6.0);
+            const QPointF c2 (x2 - (x3 - x1) / 6.0, y2 - (y3 - y1) / 6.0);
+            for (int k = 0; k < kSub; ++k)
+            {
+                const double t = double (k) / kSub;
+                const double mt = 1.0 - t;
+                const double bx = mt*mt*mt*x1 + 3*mt*mt*t*c1.x() + 3*mt*t*t*c2.x() + t*t*t*x2;
+                const double by = mt*mt*mt*y1 + 3*mt*mt*t*c1.y() + 3*mt*t*t*c2.y() + t*t*t*y2;
+                out.spectrum.push_back (QPointF (bx, by));
+            }
+        }
+        out.spectrum.push_back (QPointF (xs[127], ys[127]));
+    }
+}
+
+void OvEqView::fogSegments (const QPointF& origin, QVector<FogSegment>& out)
+{
+    out.clear();
     if (m_engine == nullptr) return;
     if (std::getenv ("ONYXTEON_NOFOG") != nullptr) return;
 
@@ -1140,8 +1445,7 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
 
     // Compute the layout here rather than reading m_plot: that member is only
     // filled by paint(), and the fog is asked for before this view has painted
-    // once.  Reading it gave an empty rect, the function returned immediately,
-    // and the fog was never drawn at all.
+    // once.  Reading it gave an empty rect and the fog was never drawn.
     gatherBands();
     QRectF plot;
     double rangeDb = 0.0;
@@ -1155,32 +1459,25 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
     const auto& curveY = totalCurveY (w, h, top, plot.bottom(), curveStep);
     if (curveY.empty()) return;
 
-    const double edge = fogEdge();
-    const double dir  = fogDir();
+    const double edge   = fogEdge();
+    const double dir    = fogDir();
     const double kRange = fogRange();
-
     const double lo = std::min (edge, edge + dir * kRange);
     const double hi = std::max (edge, edge + dir * kRange);
 
-    // Sample y(x) at the page's 3 px step and keep only the part that is past
-    // the edge.  ONE path — no per-band split, no per-band blur.
+    // Sample y(x) at the page's 3 px step and keep only the part past the edge.
     //
-    // The twelve graded bands were the design's way of FAKING a blur that grows
-    // with distance: twelve separate strokes, each with its own canvas filter.
-    // Reproducing that with twelve off-screen images and twelve CPU Gaussians
-    // did reproduce it — including the part that should never have been
-    // visible: a band is a hard-edged slice, so wherever the curve handed over
-    // from one band to the next there was a step, and the seam region showed
-    // them as stacked slabs.  On the GPU the same falloff is a continuous
-    // function of distance (see fogfx.frag), so there is nothing to step
-    // between.
-    auto buildPath = [&] (auto&& yAt, QPainterPath& path)
+    // ONE continuous run — no per-band split.  The twelve graded bands were the
+    // design's way of FAKING a growing blur, and a band is a hard-edged slice:
+    // wherever the curve handed over from one band to the next the picture
+    // stepped, which is what read as stacked slabs round the seam.  The blur
+    // and the fade are a continuous function of distance now (blur.frag).
+    auto push = [&] (auto&& yAt, float alpha, float width)
     {
         auto clampY = [&] (double y) { return std::clamp (y, lo, hi); };
 
         double prevX = 0.0;
         double prevY = clampY (yAt (0.0));
-        bool  open = false;
         for (double x = 3.0; ; x += 3.0)
         {
             const double xx = std::min (x, w);
@@ -1188,81 +1485,59 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
             const double mid = (prevY + yy) * 0.5;
             const double outward = dir > 0 ? (mid - edge) : (edge - mid);
             if (outward > 0.0)
-            {
-                if (! open) { path.moveTo (prevX, prevY); open = true; }
-                path.lineTo (xx, yy);
-            }
-            else
-            {
-                open = false;       // back inside the plot: start a new run
-            }
+                out.push_back ({ QPointF (origin.x() + prevX, origin.y() + prevY),
+                                 QPointF (origin.x() + xx,    origin.y() + yy),
+                                 alpha, width });
             prevX = xx;
             prevY = yy;
             if (xx >= w) break;
         }
     };
 
-    g->save();
-    g->translate (origin);
-    g->setBrush (Qt::NoBrush);
-
     // ---- the five band curves, .22 accent, 1 px --------------------------
+    for (int i = 0; i < 5; ++i)
     {
-        QPainterPath path;
-        for (int i = 0; i < 5; ++i)
-        {
-            const auto& b = m_bands[i];
-            if (! b.active) continue;
-            buildPath ([&] (double x)
-                       {
-                           return toY (bandMagAt (b, fromX (x, w)),
-                                       h, rangeDb, top, plot.bottom());
-                       },
-                       path);
-        }
-        QColor bandColour = accent;
-        bandColour.setAlphaF (0.22f);
-        g->setPen (QPen (bandColour, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        g->drawPath (path);
+        const auto& b = m_bands[i];
+        if (! b.active) continue;
+        push ([&] (double x)
+              {
+                  return toY (bandMagAt (b, fromX (x, w)),
+                              h, rangeDb, top, plot.bottom());
+              },
+              0.22f * float (accent.alphaF()), 1.0f);
     }
 
     // ---- the total curve, accent, 2 px -----------------------------------
-    {
-        QPainterPath path;
-        auto totalAt = [&] (double x)
-        {
-            const double t = std::clamp (x / double (curveStep), 0.0,
-                                         double (curveY.size() - 1));
-            const int i = int (t);
-            const int j = std::min (i + 1, int (curveY.size()) - 1);
-            return curveY[(size_t) i]
-                 + (curveY[(size_t) j] - curveY[(size_t) i]) * (t - i);
-        };
-        buildPath (totalAt, path);
-        if (std::getenv ("ONYXTEON_FOGDEBUG") != nullptr)
-        {
-            double ymin = 1e9, ymax = -1e9, first = 0.0, last = 0.0;
-            for (size_t i = 0; i < curveY.size(); ++i)
-            {
-                ymin = std::min (ymin, curveY[i]);
-                ymax = std::max (ymax, curveY[i]);
-            }
-            if (! curveY.empty()) { first = curveY.front(); last = curveY.back(); }
-            std::fprintf (stderr, "[fogcurve] maxdB %.2f  gains:", 
-                          totalMagAt (350.0));
-            for (int i = 0; i < 5; ++i)
-                std::fprintf (stderr, " %d[t%d g%.1f f%.0f]", i, m_bands[i].type,
-                              m_bands[i].gain, m_bands[i].freq);
-            std::fprintf (stderr, "\n[fogcurve] %s elems %d edge %.1f dir %.0f range %.1f "
-                                  "lo %.1f hi %.1f | curveY %.1f..%.1f (ends %.1f/%.1f) "
-                                  "plot %.1f..%.1f\n",
-                          qPrintable (m_prefix), path.elementCount(), edge, dir, kRange,
-                          lo, hi, ymin, ymax, first, last, top, plot.bottom());
-        }
-        g->setPen (QPen (accent, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        g->drawPath (path);
-    }
+    push ([&] (double x)
+          {
+              const double t = std::clamp (x / double (curveStep), 0.0,
+                                           double (curveY.size() - 1));
+              const int i = int (t);
+              const int j = std::min (i + 1, int (curveY.size()) - 1);
+              return curveY[(size_t) i]
+                   + (curveY[(size_t) j] - curveY[(size_t) i]) * (t - i);
+          },
+          float (accent.alphaF()), 2.0f);
+}
 
+void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
+{
+    // The CPU fallback: the same segments, drawn as lines.  Used only when a
+    // painter is what the caller has; the live path builds QSGGeometry from
+    // fogSegments(), which works on every RHI backend.
+    QVector<FogSegment> segs;
+    fogSegments (origin, segs);
+    const QColor accent (m_accent);
+
+    g->save();
+    g->setBrush (Qt::NoBrush);
+    for (const auto& s : segs)
+    {
+        QColor c = accent;
+        c.setAlphaF (accent.alphaF() * s.alpha);
+        g->setPen (QPen (c, s.width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        g->drawLine (s.a, s.b);
+    }
     g->restore();
 }
 
@@ -1432,11 +1707,16 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
 //  from the single 128-bin table in OvEngine, so a bar can never show a
 //  different picture from the plot it belongs to.
 // ---------------------------------------------------------------------------
-void OvEqView::paintGlowBar (QPainter* g, double w, double h,
-                             const QColor& accent, const float* spec)
+// Build (or reuse) the glow bar's image and report where it goes.
+//
+// Split out of paintGlowBar so the render node can get the pixels without a
+// QPainter: the bar is a cached image, and drawing it is a separate step that
+// only the CPU path needs.  Returns false when there is nothing to draw.
+bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
+                              const float* spec, QRectF& dest)
 {
-    if (std::getenv ("ONYXTEON_NOGLOW") != nullptr) return;
-    if (w < 8.0 || h < OvThemeBarHeight) return;
+    if (std::getenv ("ONYXTEON_NOGLOW") != nullptr) return false;
+    if (w < 8.0 || h < OvThemeBarHeight) return false;
 
     //   .controlpit{ left:50%; width:640px; height:32px; transform:translateX(-50%) }
     //   .controlpit.top{top:0}   .controlpit.bottom{bottom:0}
@@ -1552,7 +1832,7 @@ void OvEqView::paintGlowBar (QPainter* g, double w, double h,
     // the last image on screen — three consecutive static captures in a passage
     // where the audio was merely quiet.  `m_glowFalling` is set whenever a bar
     // is above its target, so the release is always allowed to finish.
-    if (loud < 0.002 && ! m_glowFalling) { return; }   // nothing to draw, nothing falling
+    if (loud < 0.002 && ! m_glowFalling) { return false; }  // nothing to draw
 
     // Never divide by a tiny peak: band/peak with peak at 1e-6 multiplies the
     // residue of the release into full-scale noise, and at exactly 0 it produces
@@ -1601,8 +1881,9 @@ void OvEqView::paintGlowBar (QPainter* g, double w, double h,
 
     if (key == m_glowKey && ! m_glowBar.isNull())
     {
-        drawGlowImage (g, pitX, barY, pitW, barH);
-        return;
+        dest = QRectF (pitX, barY, pitW, barH);
+        m_glowDest = dest;
+        return true;
     }
 
     // ---- the blob, per pixel --------------------------------------------
@@ -1737,7 +2018,17 @@ void OvEqView::paintGlowBar (QPainter* g, double w, double h,
     }
 
     m_glowKey = key;
-    drawGlowImage (g, pitX, barY, pitW, barH);
+    dest = QRectF (pitX, barY, pitW, barH);
+    m_glowDest = dest;
+    return true;
+}
+
+void OvEqView::paintGlowBar (QPainter* g, double w, double h,
+                             const QColor& accent, const float* spec)
+{
+    QRectF dest;
+    if (! ensureGlowBar (w, h, accent, spec, dest)) return;
+    drawGlowImage (g, dest.x(), dest.y(), dest.width(), dest.height());
 }
 
 void OvEqView::drawGlowImage (QPainter* g, double pitX, double barY,

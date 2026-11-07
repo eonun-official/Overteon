@@ -18,6 +18,10 @@
 #include <QString>
 #include <QImage>
 #include <vector>
+#include <QVector>
+#include <QSGGeometryNode>
+#include <QSGImageNode>
+#include <QColor>
 #include <chrono>
 #include <QPainterPath>
 
@@ -39,7 +43,7 @@ class OvEngine;
 //  (Qt's RHI path has no QPainter backend, so "the same QPainter code on the
 //  GPU" is only available through GL.  The rest of the UI — the glass, the fog
 //  — is ShaderEffect and therefore already RHI.)
-class OvEqView : public QQuickFramebufferObject
+class OvEqView : public QQuickItem
 {
     Q_OBJECT
 
@@ -62,6 +66,51 @@ public:
     /// and fogfx.frag applies the distance-dependent blur and alpha on the GPU.
     /// `origin` is where this view's (0,0) lands in the target's coordinates.
     void paintOverflowFog (QPainter* g, const QPointF& origin);
+
+    // ---- RHI accessors ---------------------------------------------------
+    //
+    // The plot is four layers, and only ONE of them changes per frame:
+    //
+    //   background  grid + ruler labels        cached on a key
+    //   spectrum    the analyser fill          rebuilt every frame
+    //   glow bar    the control pit's bloom    cached on the smoothed levels
+    //   overlay     curves, nodes, digits      cached on a key
+    //
+    // So the render path is four textures' worth of quads plus one triangle
+    // fan, and QPainter only runs when a cached layer's key changes.  Nothing
+    // here needs OpenGL: the node is plain QSGGeometry + QSGSimpleTextureNode,
+    // which Qt renders on whatever RHI backend it is using.
+    struct Layers
+    {
+        QImage background;   ///< null when unchanged since `bgKey`
+        QString bgKey;
+        QImage overlay;      ///< null when unchanged since `overlayKey`
+        QString overlayKey;
+        QImage glow;         ///< null when unchanged since `glowKey`
+        quint64 glowKey = 0;
+        /// The analyser outline, already flattened to a polyline, and the
+        /// baseline it fills down to.  Both in item coordinates.
+        QVector<QPointF> spectrum;
+        double spectrumBottom = 0.0;
+        QColor accent;
+    };
+    /// Everything the render node needs for this frame.  Builds whichever
+    /// cached layers are stale and leaves the rest null.
+    void buildLayers (Layers& out);
+
+    /// One straight run of the outgoing curve, in this view's coordinates.
+    struct FogSegment { QPointF a, b; float alpha; float width; };
+
+    /// The outgoing curve as line SEGMENTS rather than a painted stroke.
+    ///
+    /// This is the RHI path: QSGGeometry takes triangles, so the caller turns
+    /// these into quads and picks whatever backend Qt is running — GL, D3D11,
+    /// Vulkan, Metal.  Going through QPainter would have meant
+    /// QQuickFramebufferObject + QOpenGLPaintDevice, and that is OpenGL only.
+    ///
+    /// `origin` shifts the segments into the target's coordinates, exactly as
+    /// paintOverflowFog() does for a painter.
+    void fogSegments (const QPointF& origin, QVector<FogSegment>& out);
 
     /// Where the fog starts and which way it goes, in this view's pixels.
     /// Q_PROPERTYs so QML can place the fog surface without duplicating the
@@ -99,12 +148,14 @@ public:
     void setGlow (double);
 
     void paint (QPainter*);
-    /// QQuickFramebufferObject entry point; the renderer lives in OvEqView.cpp.
-    Renderer* createRenderer() const override;
-    /// Called on the RENDER thread with the finished frame, for the CPU seam
-    /// glass.  Only used when wantImage() is set.
-    void setContentImage (const QImage& img);
 
+protected:
+    /// The RHI path: four layers as scene-graph nodes.  Three of them are cached
+    /// images uploaded as textures, and only the spectrum is rebuilt per frame —
+    /// as a triangle strip with vertex colours, so the gradient costs nothing.
+    QSGNode* updatePaintNode (QSGNode* old, UpdatePaintNodeData*) override;
+
+public:
     /// Build contentImage()/unfrostedImage() as well.
     ///
     /// Only the CPU seam glass needs them, and on this path producing them
@@ -225,6 +276,26 @@ private:
     /// frosted layer blooms it.
     void paintGlowBar (QPainter* g, double w, double h,
                        const QColor& accent, const float* spec);
+    /// Build (or reuse) the glow bar's cached image; `dest` is where it goes.
+    /// Split out of paintGlowBar so the render node can take the pixels without
+    /// a QPainter.
+    bool ensureGlowBar (double w, double h, const QColor& accent,
+                        const float* spec, QRectF& dest);
+    QRectF m_glowDest;
+
+    // ---- scene-graph state ------------------------------------------------
+    // The node tree is fixed after the first frame; only the contents of the
+    // spectrum node and the textures change.
+    QSGNode*         m_sgRoot    = nullptr;
+    QSGGeometryNode* m_sgSpectrum = nullptr;
+    QSGImageNode*    m_sgBg      = nullptr;
+    QSGImageNode*    m_sgGlow    = nullptr;
+    QSGImageNode*    m_sgOverlay = nullptr;
+    QString m_texKeyBg, m_texKeyGlow, m_texKeyOv;
+    // The images the textures are uploaded from.  They must outlive the upload,
+    // which happens later in the render pass, so they are kept here.
+    QImage  m_texImgBg, m_texImgGlow, m_texImgOv;
+    bool    m_spAttached = true;
     /// Blit the cached glow image through the trapezoid clip.
     void drawGlowImage (QPainter* g, double pitX, double barY,
                         double pitW, double barH);

@@ -45,6 +45,9 @@ Item {
     /// The surface's own paint rate, for ONYXTEON_SOLO.
     readonly property alias paintFps: srcItem.paintFps
 
+    // srcItem emits the curve as QSGGeometry, so it renders on whatever RHI
+    // backend Qt is using — no QPainter, no OpenGL requirement.
+
     readonly property int devW: Math.max (2, Math.round (width  * dpr))
     readonly property int devH: Math.max (2, Math.round (height * dpr))
 
@@ -68,20 +71,21 @@ Item {
         bottomView: root.bottomView
     }
 
+    // Keeps srcItem out of the scene while still capturing it.
+    //
+    // This exists because of what a capture is NOT: hideSource on the same
+    // ShaderEffectSource that feeds the blur does not work — the item is dropped
+    // from the render pass, nothing renders it into that capture, and the blur
+    // reads an empty texture (measured: the fog vanished completely).  Taking it
+    // out of the scene has to be a separate capture from the one the blur
+    // consumes, so this one hides the item and the blur makes its own.
+    //
+    // It is parked off-screen rather than made invisible: a ShaderEffectSource
+    // draws its own texture wherever it sits, which would composite the sharp
+    // strokes over their blurred copy, and `visible: false` stops it rendering
+    // at all.
     ShaderEffectSource {
         id: srcTex
-        // NOT DRAWN — but still rendered.
-        //
-        // Two facts collide here: a ShaderEffectSource draws its own texture
-        // wherever it sits, so leaving it on screen composites the raw, sharp
-        // strokes over their blurred copy (the fog then looks like a hard line
-        // whatever the shader does); but setting `visible: false` stops it
-        // rendering at all, and the fog disappears completely — measured, 0
-        // pixels of difference against ONYXTEON_NOFOG.
-        //
-        // hideSource only hides the ITEM being captured.  So the capture stays
-        // visible and is parked off-screen, where being drawn cannot be seen.
-        // ONYXTEON_FOGRAW parks it back at 0 to show the raw strokes on purpose.
         x: root.raw ? 0 : -100000
         y: 0
         visible: true

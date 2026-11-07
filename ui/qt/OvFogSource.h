@@ -1,43 +1,41 @@
 #pragma once
 // ============================================================
-//  OvFogSource — the texture the GPU fog pass reads.
+//  OvFogSource — the outgoing EQ curve, as RHI geometry.
 //
-//  It paints BOTH halves' outgoing curves — the parts of the EQ curves that have
-//  left their plots — as plain strokes: no blur, no fading, no band split.  The
-//  blur and the fade are applied by the shared OvBlur chain, with the radius a
-//  continuous function of the distance from the seam instead of twelve
-//  hard-edged slices (see blur.frag).
+//  Both halves' curves past the plot edge, emitted as triangles through
+//  QQuickItem::updatePaintNode.  Qt renders that with whatever RHI backend is
+//  active — GL, D3D11, Vulkan or Metal — so there is no GL dependency and no
+//  per-frame upload.
 //
-//  ONE item for both halves, deliberately.  Two items — one per half — meant two
-//  textures and two chains, and those did not present in the same frame while a
-//  window was being dragged: the upper half showed a new frame and the lower one
-//  the previous frame, which is exactly what reads as tearing.  One surface
-//  cannot be inconsistent with itself.
+//  Why not QPainter: Qt 6 has only two QPainter engines, raster (CPU) and
+//  QOpenGL2PaintEngineEx (GL).  A QPainter that rasterises on the GPU therefore
+//  forces OpenGL, which is why the first attempt had to be a
+//  QQuickFramebufferObject.  The fog is only two polylines, so it does not need
+//  a paint engine at all: each segment becomes a quad, and Qt Quick draws it on
+//  every backend.
 //
-//  Item geometry: the surface spans the seam, from half a reach above it to half
-//  a reach below, so it contains both halves' strokes.  OvEqView::paintOverflowFog
-//  clamps each stroke to its own reach, so both fit inside.
+//  The blur and the fade are still blur.frag, which is a ShaderEffect and thus
+//  already RHI.  This item supplies the shape; that shader supplies the look.
 // ============================================================
-#include <QImage>
-#include <QQuickPaintedItem>
-#include <QPointer>
+#include <QQuickItem>
 #include <QTimer>
+#include <QPointer>
+#include <QSGGeometry>
 
-// The Q_PROPERTY(OvEqView* view) below needs the type to be COMPLETE for moc's
-// metatype registration, not just declared.
+// The Q_PROPERTY(OvEqView*) below needs the type to be COMPLETE for moc's
+// metatype registration.
 #include "OvEqView.h"
 
-class OvFogSource : public QQuickPaintedItem
+class OvFogSource : public QQuickItem
 {
     Q_OBJECT
     Q_PROPERTY(OvEqView* topView    READ topView    WRITE setTopView    NOTIFY viewChanged)
     Q_PROPERTY(OvEqView* bottomView READ bottomView WRITE setBottomView NOTIFY viewChanged)
-    /// Frames this surface actually painted in the last second — its own rate,
+    /// Frames this surface actually produced in the last second — its own rate,
     /// not the window's.
     Q_PROPERTY(double paintFps READ paintFps NOTIFY paintFpsChanged)
 
 public:
-    double paintFps() const { return m_paintFps; }
     explicit OvFogSource (QQuickItem* parent = nullptr);
 
     OvEqView* topView() const    { return m_top.data(); }
@@ -45,26 +43,33 @@ public:
     void setTopView (OvEqView* v);
     void setBottomView (OvEqView* v);
 
-    void paint (QPainter* g) override;
+    double paintFps() const { return m_paintFps; }
 
 signals:
     void viewChanged();
     void revisionChanged();
     void paintFpsChanged();
 
+protected:
+    QSGNode* updatePaintNode (QSGNode* old, UpdatePaintNodeData*) override;
+
 private:
     void subscribe (OvEqView* v);
     void unsubscribe (OvEqView* v);
-    OvEqView* prefixView() const { return m_top != nullptr ? m_top.data() : m_bottom.data(); }
+    void markDirty();
 
-    // The fog depends only on the parameters — not on the spectrum — so it is
-    // rebuilt when one moved.  The tick is a safety net for a signapl this fog
-    // does not listen to; it only marks the surface dirty.
+    /// Everything the geometry depends on, as one number.  Rebuilding ~2000
+    /// vertices per frame for a picture that did not change was most of what
+    /// made this surface slow; one comparison is not.
+    quint64 signature() const;
+
     QTimer m_tick;
     int    m_revision = 0;
     QPointer<OvEqView> m_top, m_bottom;
-    QImage  m_cache;            // the strokes, at device resolution
-    quint64 m_cacheKey = 0;     // what the cache was built from
-    double  m_paintFps = 0.0;
 
+    // Render-thread state.
+    quint64 m_builtKey = 0;
+    quint64 m_built = 0;
+    double  m_paintFps = 0.0;
+    bool    m_dirty = true;
 };

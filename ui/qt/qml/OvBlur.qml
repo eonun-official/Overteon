@@ -74,6 +74,16 @@ Item {
     property bool   live: true
     property bool   smooth: true
 
+    /// Keep capturing the source but take it OUT of the scene.
+    ///
+    /// A ShaderEffectSource draws its own texture wherever it sits, so a source
+    /// item that is also captured on purpose would be composited twice: once
+    /// sharp, once blurred.  hideSource is Qt's answer — the item still renders
+    /// into this capture and is not drawn again.
+    property bool   hideSource: false
+    /// Show the unblurred capture itself (a raw view, for debugging).
+    property bool   showInput: false
+
     /// Recompute the whole chain.  Safe to call every frame: Qt coalesces it.
     function scheduleUpdate() {
         capture.scheduleUpdate()
@@ -90,6 +100,8 @@ Item {
     property bool   exposeOutput: false
     /// The blurred result.  Sample this; it is an opaque ShaderEffectSource.
     readonly property alias output: blurred
+    /// The UNBLURRED capture, for a raw view.
+    readonly property alias input: capture
 
     ShaderEffectSource {
         id: capture
@@ -100,7 +112,9 @@ Item {
         live: root.live
         recursive: false
         smooth: root.smooth
-        visible: false
+        hideSource: root.hideSource
+        // Only drawn for a raw view; normally it is an intermediate.
+        visible: root.showInput
     }
 
     ShaderEffect {
