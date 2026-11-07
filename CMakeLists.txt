@@ -95,9 +95,16 @@ FetchContent_Declare(JUCE
     GIT_PROGRESS TRUE)
 FetchContent_MakeAvailable(JUCE)
 
+# VST2 needs an SDK on the include path.  Steinberg stopped shipping one in 2018,
+# so third_party/vst2sdk/ carries the two headers JUCE's wrapper includes, written
+# against the clean-room reimplementation vendored beside them (see the notes at
+# the top of aeffect.h).  Set up before the plug-in targets are created — JUCE
+# refuses to add a VST target otherwise.
+juce_set_vst2_sdk_path("${CMAKE_CURRENT_SOURCE_DIR}/third_party/vst2sdk")
+
 # LV2 is a first-class JUCE format on all three platforms (no extra SDK needed).
 # Leave it out explicitly with -DOVERTEON_FORMATS="VST3;Standalone".
-set(PLUGIN_FORMATS LV2 VST3 Standalone)
+set(PLUGIN_FORMATS LV2 VST3 VST Standalone)
 set(OVERTEON_FORMATS "${PLUGIN_FORMATS}" CACHE STRING "JUCE plug-in formats to build")
 set(PLUGIN_FORMATS ${OVERTEON_FORMATS})
 if(APPLE)
