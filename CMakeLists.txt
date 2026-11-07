@@ -36,6 +36,7 @@ if(OVERTEON_PREVIEW_ONLY)
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
+        ui/qt/OvEqFog.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
@@ -193,6 +194,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvParam.cpp
         ui/qt/OvJuceSource.cpp
         ui/qt/OvEqView.cpp
+        ui/qt/OvEqFog.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
@@ -268,6 +270,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
+        ui/qt/OvEqFog.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
@@ -308,6 +311,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
+        ui/qt/OvEqFog.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp)

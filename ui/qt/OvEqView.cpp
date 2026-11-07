@@ -1004,6 +1004,192 @@ const QImage& OvEqView::overlayImage (double w, double h, double top,
     return m_overlay;
 }
 
+// ---------------------------------------------------------------------------
+//  The overflow fog — drawEQOverflow() in the design.
+//
+//  Painted into a surface that spans the WHOLE EQ zone, not this view.  The page
+//  puts its two .eqOverflow canvases inside #eqzone with `inset:0` and offsets
+//  them by the curve canvas's position, so a curve leaving the top plot keeps
+//  going across the middle of the UI and into the other section.  Clipping it to
+//  the section cut it off after the ~24 px of padding, which is why the crossing
+//  did not read like the page.
+//
+//  `origin` is where this view's (0,0) lands in the target's coordinates.
+// ---------------------------------------------------------------------------
+void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
+{
+    if (m_engine == nullptr) return;
+    if (std::getenv ("ONYXTEON_NOFOG") != nullptr) return;
+
+    const double w = width(), h = height();
+    if (w < 2.0 || h < 2.0) return;
+
+    // Compute the layout here rather than reading m_plot: that member is only
+    // filled by paint(), and OvEqFog may well ask for the fog before this view
+    // has painted once.  Reading it gave an empty rect, the function returned
+    // immediately, and the fog was never drawn at all — the curve then ended
+    // flat at the plot edge, which is what the screenshot showed.
+    gatherBands();
+    QRectF plot;
+    double rangeDb = 0.0;
+    layoutGeometry (plot, rangeDb);
+
+    const double top = plot.top(), bottom = plot.bottom();
+    if (bottom - top < 4.0) return;
+
+    const QColor accent (m_accent);
+    const int curveStep = 2;
+    const auto& curveY = totalCurveY (w, h, top, bottom, curveStep);
+    if (curveY.empty()) return;
+
+    constexpr int    kSteps = 12;
+    constexpr double kRange = 224.0;                 // CSS range, design px
+    const double bandW = kRange / kSteps;
+    const double edge  = m_headerTop ? bottom : top;
+    const double dir   = m_headerTop ? 1.0 : -1.0;    // outward from the plot
+    const double dim   = inactiveOpacity();
+    const double ratio = window() != nullptr ? window()->devicePixelRatio() : 1.0;
+
+    const double lo = std::min (edge, edge + dir * kRange);
+    const double hi = std::max (edge, edge + dir * kRange);
+
+    // Sample y(x) at the page's 3 px step; file each segment under the band that
+    // matches how far past the edge it is.
+    auto buildFog = [&] (auto&& yAt, QPainterPath* paths, bool* used)
+    {
+        auto clampY = [&] (double y) { return std::clamp (y, lo, hi); };
+
+        double prevX = 0.0;
+        double prevY = clampY (yAt (0.0));
+        for (double x = 3.0; ; x += 3.0)
+        {
+            const double xx = std::min (x, w);
+            const double yy = clampY (yAt (xx));
+            const double mid = (prevY + yy) * 0.5;
+            const double outward = dir > 0 ? (mid - edge) : (edge - mid);
+            if (outward > 0.0 && outward < kRange)
+            {
+                const int k = std::min (kSteps - 1, int (outward / bandW));
+                paths[k].moveTo (prevX, prevY);
+                paths[k].lineTo (xx, yy);
+                used[k] = true;
+            }
+            prevX = xx;
+            prevY = yy;
+            if (xx >= w) break;
+        }
+    };
+
+    // Every band except k = 0 goes through a real Gaussian blur; k = 0 is the
+    // page's `filter = "none"`.
+    auto strokeFog = [&] (QPainterPath* paths, const bool* used,
+                          const QColor& colour, double lineWidth)
+    {
+        for (int k = 0; k < kSteps; ++k)
+        {
+            if (! used[k]) continue;
+
+            QColor c = colour;
+            c.setAlphaF (colour.alphaF() * dim
+                         * std::pow (1.0 - double (k) / double (kSteps), 1.15));
+            const QPen pen (c, lineWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+
+            if (k == 0)
+            {
+                g->setPen (pen);
+                g->setBrush (Qt::NoBrush);
+                g->drawPath (paths[k]);
+                continue;
+            }
+
+            const double sigma  = 0.4 + k * 0.55;        // CSS px
+            const double margin = 3.0 * sigma;
+
+            // No brightness compensation for the blur.  A Gaussian keeps total
+            // energy, so a blurry band is dimmer at its peak than a sharp one —
+            // and the browser's blur() does exactly the same.  Boosting the
+            // layer first made the far bands BRIGHTER than the page (measured
+            // max(R-G) at k=9: 23 against the page's 3).
+
+            // Blur only this band's rectangle plus a 3-sigma margin: a band is
+            // one stripe of the curve, so this is a few thousand pixels rather
+            // than a full-surface pass.
+            QRectF box = paths[k].boundingRect()
+                             .adjusted (-margin, -margin, margin, margin);
+            if (box.isEmpty()) continue;
+
+            const int bwi = std::max (1, int (std::lround (box.width()  * ratio)));
+            const int bhi = std::max (1, int (std::lround (box.height() * ratio)));
+
+            QImage layer (bwi, bhi, QImage::Format_ARGB32_Premultiplied);
+            layer.fill (Qt::transparent);
+            {
+                QPainter lp (&layer);
+                lp.setRenderHint (QPainter::Antialiasing, true);
+                lp.scale (ratio, ratio);
+                lp.translate (-box.left(), -box.top());
+                lp.setPen (pen);
+                lp.setBrush (Qt::NoBrush);
+                lp.drawPath (paths[k]);
+            }
+
+            // The layer is in DEVICE pixels, so sigma is too.
+            const QImage blurred = OvFrost::dualGaussian (layer, sigma * ratio);
+
+            g->setPen (Qt::NoPen);
+            g->drawImage (box, blurred,
+                          QRectF (0, 0, blurred.width(), blurred.height()));
+        }
+    };
+
+    g->save();
+    g->translate (origin);
+    g->setBrush (Qt::NoBrush);
+
+    // ---- the five band curves, .22 accent, 1 px --------------------------
+    {
+        QPainterPath paths[kSteps];
+        bool used[kSteps] = {};
+
+        for (int i = 0; i < 5; ++i)
+        {
+            const auto& b = m_bands[i];
+            if (! b.active) continue;
+            buildFog ([&] (double x)
+                      {
+                          return toY (bandMagAt (b, fromX (x, w)),
+                                      h, rangeDb, top, bottom);
+                      },
+                      paths, used);
+        }
+
+        QColor bandColour = accent;
+        bandColour.setAlphaF (0.22f);
+        strokeFog (paths, used, bandColour, 1.0);
+    }
+
+    // ---- the total curve, accent, 2 px -----------------------------------
+    {
+        QPainterPath paths[kSteps];
+        bool used[kSteps] = {};
+
+        auto totalAt = [&] (double x)
+        {
+            const double t = std::clamp (x / double (curveStep), 0.0,
+                                         double (curveY.size() - 1));
+            const int i = int (t);
+            const int j = std::min (i + 1, int (curveY.size()) - 1);
+            return curveY[(size_t) i]
+                 + (curveY[(size_t) j] - curveY[(size_t) i]) * (t - i);
+        };
+
+        buildFog (totalAt, paths, used);
+        strokeFog (paths, used, accent, 2.0);
+    }
+
+    g->restore();
+}
+
 void OvEqView::paintOverlay (QPainter* g, double w, double h,
                              double top, double bottom, const QColor& accent)
 {
@@ -1072,62 +1258,6 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
     drawTotal ();
     OV_MARK ("totdraw");
     g->restore();
-
-    OV_MARK ("fog");
-    // Overflow fog (requestEQOverflow / drawEQOverflow in the design): the
-    // curve keeps going past the plot edge in 12 graded bands, each one
-    // blurrier and fainter than the last — blur(0.4 + k*0.55 px) and
-    // alpha (1 - k/12)^1.15.
-    if (std::getenv ("ONYXTEON_NOFOG") == nullptr)
-    {
-        constexpr int   kSteps = 12;
-        constexpr double kRange = 224.0;      // CSS range in design px
-        const double band = kRange / kSteps;
-        const double edge = m_headerTop ? bottom : top;
-        const double dir  = m_headerTop ? 1.0 : -1.0;   // outward
-        const double dim  = inactiveOpacity();
-
-        QPainterPath bands[kSteps];
-        bool used[kSteps] = {};
-
-
-        double prevX = 0.0;
-        double prevY = std::clamp (curveY.empty() ? 0.0 : curveY[0],
-                                   std::min (edge, edge + dir * kRange),
-                                   std::max (edge, edge + dir * kRange));
-        for (size_t si = 1; si < curveY.size(); ++si)
-        {
-            const double x  = std::min (w, double (si) * curveStep);
-            const double yy = std::clamp (curveY[si],
-                                          std::min (edge, edge + dir * kRange),
-                                          std::max (edge, edge + dir * kRange));
-            const double d = (prevY + yy) * 0.5 - edge;
-            const double outward = dir > 0 ? d : -d;
-            if (outward > 0.0 && outward < kRange)
-            {
-                const int k = std::min (kSteps - 1, (int) (outward / band));
-                bands[k].moveTo (prevX, prevY);
-                bands[k].lineTo (x, yy);
-                used[k] = true;
-            }
-            prevX = x;
-            prevY = yy;
-        }
-
-        g->save();
-        if (m_headerTop) g->setClipRect (QRectF (0, 0, w, top));
-        else             g->setClipRect (QRectF (0, bottom, w, h - bottom));
-        g->setBrush (Qt::NoBrush);
-        for (int k = 0; k < kSteps; ++k)
-        {
-            if (! used[k]) continue;
-            QColor c = accent;
-            c.setAlphaF (dim * std::pow (1.0 - (double) k / kSteps, 1.15));
-            g->setPen (QPen (c, 2.0 + k * 0.55, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-            g->drawPath (bands[k]);
-        }
-        g->restore();
-    }
 
     OV_MARK ("nodes");
     // ---- nodes on top

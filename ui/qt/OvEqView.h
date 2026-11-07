@@ -40,6 +40,12 @@ public:
     void setEngine (OvEngine*);
 
     QString prefix() const { return m_prefix; }
+
+    /// Paint the overflow fog — the curve continuing past the plot edge in 12
+    /// graded bands, each blurrier and fainter.  Drawn by OvEqFog into a surface
+    /// that spans the whole EQ zone, so `origin` is where this view's (0,0)
+    /// lands in that surface.  Public because that is a different object.
+    void paintOverflowFog (QPainter* g, const QPointF& origin);
     void setPrefix (const QString&);
 
     QString accent() const { return m_accent; }

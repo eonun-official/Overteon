@@ -117,6 +117,20 @@ Item {
                     headerTop: false
                     glow: root.inLight * root.inLight
                 }
+
+                // The overflow fog, in ONE surface for both halves.
+                //
+                // The page's two .eqOverflow canvases are not per section: they
+                // live in #eqzone with inset:0, so a curve leaving the top plot
+                // carries on across the middle of the UI.  Drawn here — above
+                // both plots, and inside the layer the glass samples — which is
+                // the page's stacking order too.
+                OvEqFog {
+                    objectName: "eqFog"
+                    anchors.fill: parent
+                    topView: scView
+                    bottomView: pqView
+                }
             }
 
             // #hdr::before — the elliptical frost on the seam.
