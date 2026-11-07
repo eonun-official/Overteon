@@ -253,8 +253,11 @@ QImage composite (const QImage& capture, double w, double h, double dpr,
         // .36 mix would add ~21.  Painting the CSS number dotted the glass with
         // colour, so the glass read as a slab over the plot.  Measured against
         // chromium rendering the same page; see the note in glass.frag.
-        const double kGlowMatch = 0.20;
-        const double a = p.light * 0.36 * kGlowMatch;   // light is already squared
+        // The page's number, not a scaled-down one.  The 0.20 that used to be
+        // here came from a comparison taken while the glass was sampling the
+        // wrong part of the plot; it left the glow at a fifth of the CSS value
+        // and made a kick drum barely visible in the pit.
+        const double a = p.light * 0.36;                // light is already squared
         QColor c0 = p.accent; c0.setAlphaF (std::clamp (a, 0.0, 1.0));
         QColor c1 = p.accent; c1.setAlphaF (std::clamp (a * (0.13 / 0.36), 0.0, 1.0));
         QColor c2 = p.accent; c2.setAlphaF (0.0);

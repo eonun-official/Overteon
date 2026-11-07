@@ -1,5 +1,6 @@
 #include "OvEngine.h"
 #include "OvQmlTypes.h"
+#include "OvTick.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -28,9 +29,81 @@ OvEngine::OvEngine (std::unique_ptr<OvSource> source, QObject* parent)
     m_timer.setInterval (OvTiming::kPollMs);   // parameters + spectrum
     connect (&m_timer, &QTimer::timeout, this, &OvEngine::tick);
     m_timer.start();
+
+    // The light gets a clock of its own at the display rate.  Sharing the data
+    // poll was the bug: a property bound to a value that only changes when a
+    // measurement arrives cannot animate between measurements, so the accent
+    // glow snapped from one brightness to the next and looked inert.
+    m_lightTimer.setInterval (1000 / 60);
+    connect (&m_lightTimer, &QTimer::timeout, this, &OvEngine::lightTick);
+    m_lightTimer.start();
 }
 
 OvEngine::~OvEngine() = default;
+
+// ---------------------------------------------------------------------------
+//  The light behind the accent glow.
+//
+//  Same ballistics as the bars and the spectrum — an instant attack, and a
+//  release whose per-frame step is derived from the refresh rate:
+//
+//      n_frames = rate * decay_seconds
+//      step     = 1 - (target/start)^(1/n_frames)
+//
+//  (SpectrumDecayer::setDecaySpeed in ZLEqualizer.)  In the dB domain, because
+//  the mapping to 0..1 is linear in dB and a light should fade at a constant
+//  number of dB per second.
+//
+//  Faster than the bars: a glow that lags behind the music reads as broken
+//  rather than as smooth.  120 ms to fall the full scale.
+// ---------------------------------------------------------------------------
+void OvEngine::lightTick()
+{
+    using clk = std::chrono::steady_clock;
+    const auto now = clk::now();
+    double dt = 1.0 / 60.0;
+    if (m_lightAt != clk::time_point())
+        dt = std::clamp (std::chrono::duration<double> (now - m_lightAt).count(),
+                         0.0005, 0.20);
+    m_lightAt = now;
+
+    auto step = [dt] (double shown, double target) -> double
+    {
+        if (target >= shown) return target;                 // instant attack
+
+        constexpr double kDecaySec = 0.12;
+        constexpr double kFloorDb  = -60.0;
+
+        const double rate    = (dt > 1e-6) ? 1.0 / dt : 60.0;
+        const double nFrames = std::max (1.0, rate * kDecaySec);
+
+        const double startDb   = shown  * 60.0 - 60.0;
+        const double targetDb  = target * 60.0 - 60.0;
+        const double startDist = std::max (1e-6, startDb - kFloorDb);
+        const double goalDist  = std::max (0.0,   targetDb - kFloorDb);
+        const double ratio     = std::clamp (goalDist / startDist, 0.0, 1.0);
+        const double st        = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
+
+        const double nextDb = startDb + (startDb - kFloorDb) * -st;
+        return std::clamp ((std::max (nextDb, targetDb) + 60.0) / 60.0, 0.0, 1.0);
+    };
+
+    auto lvl = [] (double db) { return std::clamp ((db + 60.0) / 60.0, 0.0, 1.0); };
+
+    const double targetOut = std::max (lvl (m_meters.outL), lvl (m_meters.outR));
+    const double targetIn  = std::max (lvl (m_meters.inL),  lvl (m_meters.inR));
+
+    const double nextOut = step (m_outLight, targetOut);
+    const double nextIn  = step (m_inLight,  targetIn);
+
+    // Threshold in the 0..1 domain: 0.002 is well under one pixel of glow.
+    if (std::abs (nextOut - m_outLight) > 0.002 || std::abs (nextIn - m_inLight) > 0.002)
+    {
+        m_outLight = nextOut;
+        m_inLight  = nextIn;
+        emit lightChanged();
+    }
+}
 
 QObject* OvEngine::param (const QString& id) const
 {
@@ -103,6 +176,7 @@ void OvEngine::tick()
 
     if (any)
     {
+        ovtick::markKind ("params-new", ovtick::TickKind::ParamsChanged);
         ++m_paramRevision;
         emit paramRevisionChanged (anySc, anyPq);
     }
@@ -123,12 +197,20 @@ void OvEngine::tick()
         if (lm != m_limiterMode) { m_limiterMode = lm; emit driveModeChanged(); }
     }
 
+    // One "sample" = one read of the analyser/meters.  This is the rate the
+    // display ultimately cannot exceed, so it is reported separately from the
+    // repaint rate: `--tick` prints both and the gap between them is the thing
+    // that was being argued about.
+    ovtick::markKind ("sample", ovtick::TickKind::Sample,
+                      1000.0 / double (OvTiming::kPollMs));
+
     const auto m = m_source->meters();
     if (std::abs (m.inL - m_meters.inL) > 0.01f || std::abs (m.inR - m_meters.inR) > 0.01f
         || std::abs (m.outL - m_meters.outL) > 0.01f || std::abs (m.outR - m_meters.outR) > 0.01f
         || std::abs (m.harm - m_meters.harm) > 0.01f)
     {
         m_meters = m;
+        ovtick::markKind ("meters-new", ovtick::TickKind::MetersChanged);
         emit metersChanged();
     }
 
@@ -171,8 +253,13 @@ void OvEngine::tick()
                     changed = true;
                 }
             }
+        if (haveIn || haveOut)
+            ovtick::markKind ("fft-block", ovtick::TickKind::FftBlock);
         if (changed)
+        {
+            ovtick::markKind ("spectrum-new", ovtick::TickKind::SpectrumChanged);
             emit spectrumChanged();
+        }
     }
 }
 

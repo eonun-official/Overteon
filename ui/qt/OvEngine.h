@@ -7,6 +7,7 @@
 //  global actions (INIT, load/save).
 // ============================================================
 #include <QObject>
+#include <chrono>
 #include <QVariantMap>
 #include <QVariantList>
 #include <QStringList>
@@ -30,6 +31,17 @@ class OvEngine : public QObject
     Q_PROPERTY(double outR READ outR NOTIFY metersChanged)
     Q_PROPERTY(double harm READ harm NOTIFY metersChanged)
 
+    /// SMOOTHED level, 0..1, for anything that lights up rather than measures:
+    /// the accent glow in the control pits and the meter pod's accent.
+    ///
+    /// These cannot come from `outL`/`inL` directly, and that is what was wrong:
+    /// a QML binding on the raw dB value re-evaluates only when a new
+    /// measurement arrives, so the glow jumped straight from one brightness to
+    /// the next — it never appeared to move.  A light needs its own ballistics,
+    /// the same ones the bars have, on a clock of its own.
+    Q_PROPERTY(double outLight READ outLight NOTIFY lightChanged)
+    Q_PROPERTY(double inLight  READ inLight  NOTIFY lightChanged)
+
     Q_PROPERTY(QVariantList spectrum READ spectrum NOTIFY spectrumChanged)
 
     Q_PROPERTY(QVariantMap presets READ presets NOTIFY presetsChanged)
@@ -49,6 +61,11 @@ public:
     double outL() const { return m_meters.outL; }
     double outR() const { return m_meters.outR; }
     double harm() const { return m_meters.harm; }
+
+    /// 0..1, already ballistic-filtered.  Same mapping the design uses:
+    /// (dB + 60) / 60 clamped, with a rate-derived release.
+    double outLight() const { return m_outLight; }
+    double inLight()  const { return m_inLight; }
     QVariantList spectrum() const { return m_spectrum; }
 
     /// The spectrum table itself, for C++ painters, so a plot does not pull the
@@ -87,6 +104,7 @@ signals:
     /// parameter sets both.
     void paramRevisionChanged (bool scMoved, bool pqMoved);
     void metersChanged();
+    void lightChanged();
     void spectrumChanged();
     void presetsChanged();
     void presetNameChanged();
@@ -111,4 +129,14 @@ private:
     int          m_driveMode = 1, m_limiterMode = 2;
     int          m_tickCount = 0;
     QTimer       m_timer;
+
+    // ---- the light's own clock ------------------------------------------
+    // A separate timer at a fixed display rate, not the data poll: a light has
+    // to keep moving between measurements, and its ballistics must be derived
+    // from the rate they actually run at (see OvEngine::lightTick).
+    QTimer       m_lightTimer;
+    double       m_outLight = 0.0;
+    double       m_inLight  = 0.0;
+    std::chrono::steady_clock::time_point m_lightAt {};
+    void lightTick();
 };

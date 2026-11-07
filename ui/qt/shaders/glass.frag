@@ -53,15 +53,26 @@ void main()
         if (r <= 0.38)      a = mix (0.36, 0.13, r / 0.38);
         else if (r <= 0.78) a = mix (0.13, 0.00, (r - 0.38) / 0.40);
         else                a = 0.0;
-        // Measured, not guessed.  The CSS alpha is .36 at the centre, but the
-        // pod does not render anything like that on the page: with --light at
-        // 0.385 the page's pod is only ~4 luma brighter in its bottom centre
-        // than in its top, while a straight .36 * 0.385 mix of the accent adds
-        // ~21.  Reproducing the CSS number dotted the glass with colour and made
-        // it read as a slab lying over the plot.  The factor below is the ratio
-        // between the two, taken from that measurement.
-        const float kGlowMatch = 0.20;
-        a *= glow * kGlowMatch;          // the layer opacity: var(--light)
+        // ---- strength, measured against the page ------------------------
+        // The gradient above is the page's curve exactly, and comparing the
+        // falloff row by row shows the SHAPE already matches (centre 35 vs the
+        // page's 8, a quarter out 21 vs 4, edge -3 vs -3 — the same profile).
+        // What did not match was the overall level: 4.4x too strong, which is
+        // what "it is too full, not like a glow" describes — the right
+        // silhouette at the wrong brightness reads as a lit panel.
+        //
+        //      row   ours  page
+        //        2     35     8
+        //        6     31     6
+        //       10     24     5
+        //       14     16     2
+        //
+        // 8/35 = 0.229.  Earlier values for this factor: 0.20 (taken while the
+        // glass sampled the wrong rectangle), 1.0 (mine — the plain CSS number,
+        // which is what made it "too full").  This one is a like-for-like
+        // screenshot comparison of the same audio.
+        const float kGlowToScreen = 0.229;
+        a *= glow * kGlowToScreen;       // the layer opacity: var(--light)
         c.rgb = mix (c.rgb, vec3 (glowR, glowG, glowB), clamp (a, 0.0, 1.0));
     }
 

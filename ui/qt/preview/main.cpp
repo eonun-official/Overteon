@@ -2,7 +2,7 @@
 //  overteon-qml-preview — standalone QML viewer for the editor UI.
 //
 //  Runs the exact same QML front end as the plug-in, but against
-//  OvMockSource (same parameter layout, animated meters), so the UI can
+//  OvJackSource (real JACK audio), so the UI can
 //  be developed, screenshotted and compared with web_fx/index.html
 //  without starting a DAW or a plug-in host.
 //
@@ -15,7 +15,8 @@
 //  there; it is also useful on any platform with a broken swap path.
 // ============================================================
 #include "OvEngine.h"
-#include "OvMockSource.h"
+#include "OvJackSource.h"
+#include "OvTick.h"
 #include "OvQmlTypes.h"
 #include "OvEqView.h"
 
@@ -31,6 +32,10 @@
 #include <QScreen>
 #include <QGuiApplication>
 #include <QTimer>
+
+#include <chrono>
+#include <future>
+#include <thread>
 #include <algorithm>
 #include <cmath>
 #include <QFontDatabase>
@@ -132,6 +137,12 @@ namespace
                                   0, 0, 64, 64, 0, vi->depth, InputOutput,
                                   vi->visual, CWColormap | CWOverrideRedirect, &swa);
         XMapWindow (dpy, w);
+        // The window must be MAPPED before it is swapped, or the driver's
+        // swap has nothing to wait for and the first glXSwapBuffers can block
+        // until the server decides otherwise.  Measured: without this sync the
+        // probe occasionally never returned, and the application then never
+        // started at all — the whole UI "hanging on launch" with no message.
+        XSync (dpy, False);
         GLXContext ctx = glXCreateContext (dpy, vi, nullptr, True);
         if (ctx == nullptr) { XCloseDisplay (dpy); return r; }
         glXMakeCurrent (dpy, w, ctx);
@@ -218,7 +229,31 @@ int main (int argc, char** argv)
    #ifdef Q_OS_LINUX
     if (qEnvironmentVariableIsEmpty ("QSG_NO_VSYNC"))
     {
-        const VSyncProbe vs = probeVSync();
+        // The probe must never be able to stop the application from starting.
+        // glXSwapBuffers on a display with no compositor can block
+        // indefinitely — observed: the process sat inside probeVSync() and
+        // printed nothing at all, so "the UI hangs on launch" had no diagnostic
+        // path whatsoever.  It runs on its own thread with a deadline now; if it
+        // is not done in time we assume the display does not pace, which is the
+        // safe branch (QSG_NO_VSYNC=1 plus the driver's own swap interval).
+        VSyncProbe vs;
+        {
+            std::packaged_task<VSyncProbe()> task (probeVSync);
+            auto fut = task.get_future();
+            std::thread th (std::move (task));
+            th.detach();                     // it may never return; let it leak
+            if (fut.wait_for (std::chrono::milliseconds (1500)) ==
+                std::future_status::ready)
+            {
+                vs = fut.get();
+            }
+            else
+            {
+                std::fprintf (stderr, "[preview] the vsync probe did not answer in "
+                                      "1.5 s; assuming the display does not pace\n");
+                vs.paces = false;
+            }
+        }
         if (vs.paces)
         {
             // The driver blocks in glXSwapBuffers until the display's next
@@ -262,8 +297,26 @@ int main (int argc, char** argv)
     //   QT_OPENGL=angle            (Windows)
     // Forcing OpenGL unconditionally is what made the window hang under wine
     // with no fallback.
+    //
+    // RENDER LOOP: threaded, the same as the plug-in.  `basic` renders inside
+    // processEvents() on the GUI thread, so the whole scene and the whole UI
+    // share one core; `threaded` gives Qt a render thread of its own and they
+    // run on two.  Measured with real audio through `--jack`:
+    //
+    //     basic     42.5 % total, 32.7 % of it on the GUI thread
+    //     threaded  38.7 % total, 25.2 % on QSGRenderThread + 5.3 % GUI
+    //
+    // i.e. slightly less work overall AND spread across two cores.  Under wine
+    // there is only a software GL stack, where a render thread can starve the
+    // window it is feeding, so wine keeps `basic`.
     if (qEnvironmentVariableIsEmpty ("QSG_RENDER_LOOP"))
-        qputenv ("QSG_RENDER_LOOP", "basic");
+        qputenv ("QSG_RENDER_LOOP", wine ? "basic" : "threaded");
+
+    // Confirm it took.  Qt reads this when the FIRST QQuickWindow is created,
+    // and silently falls back to the basic loop when the platform cannot host a
+    // render thread, so a value that is set here is not proof that it is used.
+    std::fprintf (stderr, "[preview] render loop requested: %s\n",
+                  qgetenv ("QSG_RENDER_LOOP").constData());
 
 
     // Default window: the design's aspect ratio, sized to the screen so it is
@@ -278,6 +331,7 @@ int main (int argc, char** argv)
     QPointF probe (-1, -1);       // --probe x,y: ask the hit-test about a point
                                   // without moving the real pointer
     bool compat = wine || qEnvironmentVariableIsSet ("ONYXTEON_COMPAT");
+    int tickReadPid = 0;   // --tick-read <pid>
     QStringList presets;          // id=value pairs, applied before the first frame
 
     for (int i = 1; i < argc; ++i)
@@ -321,11 +375,25 @@ int main (int argc, char** argv)
         }
         else if (a == "--freeze")
         {
-            OvMockSource::frozen = true;
+            std::fprintf (stderr, "[preview] --freeze is gone: the metering now "
+                                  "comes from real audio, so there is nothing to pin\n");
+        }
+        else if (a == "--tick")
+        {
+            ovtick::Registry::instance().enabled = true;
+        }
+        else if (a == "--tick-read")
+        {
+            // Reader-only mode: attach to the ring of the pid given as the next
+            // argument and report.  Nothing else is started, so this works even
+            // when the UI is wedged.
+            ovtick::Registry::instance().enabled = true;
+            tickReadPid = (i + 1 < argc) ? std::atoi (argv[++i]) : 0;
         }
         else if (a == "--nosignal")
         {
-            OvMockSource::silent = true;
+            std::fprintf (stderr, "[preview] --nosignal is gone: connect nothing "
+                                  "to the JACK inputs for silence\n");
         }
         else if (a == "--set" && i + 1 < argc)
         {
@@ -382,7 +450,29 @@ int main (int argc, char** argv)
                            ":/res/edix.otf" })
         QFontDatabase::addApplicationFont (QString::fromLatin1 (f));
 
-    auto engine = std::make_unique<OvEngine> (std::make_unique<OvMockSource>());
+    // The preview meters REAL audio: a JACK client whose inputs anything can be
+    // connected to.  The synthesised mock that used to live here is gone — it
+    // could not tell a working analyser from a broken one, and every comparison
+    // made against it was a comparison against a signal that did not exist.
+    // `bench.py -Gs` connects mpv to these ports.
+    auto jackSrc = std::make_unique<OvJackSource> ("onyxpreview");
+    if (! jackSrc->ok())
+    {
+        // There is no fallback source any more — the mock was removed because
+        // every comparison made against it was a comparison against a signal
+        // that did not exist.  So a missing JACK server is a hard error with a
+        // clear message, not a silent dead UI.  (It used to be a SIGSEGV: the
+        // empty source was handed to the engine anyway.)
+        std::fprintf (stderr,
+                      "\n[preview] no JACK client. Start a server first, e.g.\n"
+                      "    jackd -n ovtest -d dummy -r 48000 -p 1024 &\n"
+                      "    JACK_DEFAULT_SERVER=ovtest %s --jack\n"
+                      "Nothing can be metered without one, so this exits.\n",
+                      argv[0]);
+        return 2;
+    }
+    std::unique_ptr<OvSource> src = std::move (jackSrc);
+    auto engine = std::make_unique<OvEngine> (std::move (src));
 
     const QUrl sourceUrl = customQml.isEmpty()
         ? QUrl (QStringLiteral ("qrc:/qml/main.qml"))
@@ -450,7 +540,8 @@ int main (int argc, char** argv)
     // ONYXTEON_NOSIGNAL=1 makes the mock generate silence, so nothing is drawn
     // over the plots and the glass can be measured on a clean background.
     if (qEnvironmentVariableIsSet ("ONYXTEON_NOSIGNAL"))
-        OvMockSource::silent = true;
+        std::fprintf (stderr, "[preview] ONYXTEON_NOSIGNAL is gone: connect "
+                              "nothing to the JACK inputs for silence\n");
 
     // ONYXTEON_CPUFROST=1 forces the QImage glass instead of the GPU shaders.
     view.rootContext()->setContextProperty (
@@ -471,6 +562,56 @@ int main (int argc, char** argv)
     // labelled window-coordinate grid, for reading positions off a screenshot
     view.rootContext()->setContextProperty (
         "ovRuler", qEnvironmentVariableIsSet ("ONYXTEON_RULER"));
+
+    // ---- --tick: publish and consume through a shared-memory ring ----------
+    // The producer side (below) writes one record per event; this timer is the
+    // consumer, and it is the only place that counts or prints.  Keeping the two
+    // apart is the point: the audio callback and the paint path must not print,
+    // allocate, or wait, and the reported rate must not depend on them.
+    if (ovtick::Registry::instance().enabled)
+    {
+        ovtick::Registry& reg = ovtick::Registry::instance();
+        reg.reportEvery = 5.0;
+
+        const int selfPid = (int) ::getpid();
+        bool okGui = reg.openRing (ovtick::Producer::Gui,
+                                   ovtick::Registry::ringNameFor (selfPid, ovtick::Producer::Gui), true);
+        bool okRender = reg.openRing (ovtick::Producer::Render,
+                                      ovtick::Registry::ringNameFor (selfPid, ovtick::Producer::Render), true);
+        if (! okGui || ! okRender)
+            std::fprintf (stderr, "[tick] could not create the shared ring; "
+                                  "counters still work, the reader path does not\n");
+
+        auto* consumer = new QTimer (&view);
+        QObject::connect (consumer, &QTimer::timeout, [&reg] { reg.drainRing(); });
+        consumer->start (100);          // drain often; the report is time-based
+    }
+
+    // ---- --tick: one line per PRESENTED frame ------------------------------
+    // frameSwapped is the only honest answer to "how many frames did the user
+    // see": beforeRendering counts work that may be dropped, and a repaint
+    // counter counts requests.  It is also the number that has to be compared
+    // with `sample`, because the display cannot show more than it is given.
+    if (ovtick::Registry::instance().enabled)
+    {
+        QObject::connect (&view, &QQuickWindow::frameSwapped, [&view] {
+            ovtick::markKind ("frame", ovtick::TickKind::FrameSwapped, 0.0,
+                              ovtick::Producer::Render);
+        });
+        // And the render loop's own sync/swap phases, which separate "Qt is
+        // behind" from "the driver is slow".
+        // These two also run on the render thread, so they must use its ring:
+        // counting them on the GUI thread's ring gave intervals measured from
+        // whenever the GUI thread happened to fold them, which is meaningless.
+        QObject::connect (&view, &QQuickWindow::beforeRendering, [] {
+            ovtick::Registry::instance().push (ovtick::TickKind::FrameSwapped,
+                                               ovtick::Producer::Render);
+        });
+        QObject::connect (&view, &QQuickWindow::afterRendering, [] {
+            ovtick::Registry::instance().push (ovtick::TickKind::FrameSwapped,
+                                               ovtick::Producer::Render);
+        });
+    }
 
     view.setSource (sourceUrl);
 

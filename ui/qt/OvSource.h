@@ -6,7 +6,7 @@
 //  which is fed by an OvSource.  Two implementations exist:
 //
 //    OvJuceSource  — wraps the live InjectorProcessor (both hosts + plugin)
-//    OvMockSource  — static defaults + animated meters (preview app)
+//    OvJackSource  — real audio from a JACK client (preview app)
 //
 //  This header deliberately uses only the C++ standard library so the
 //  preview application does not have to link JUCE.

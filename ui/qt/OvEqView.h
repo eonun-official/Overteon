@@ -261,6 +261,8 @@ private:
     bool   m_dirty = true;      // repaint requested since the last frame
     double m_pendingGlow = -1000.0;
     quint64 m_spectrumStamp = 0, m_lastSpectrumStamp = 0;
+    /// When the last spectrum-driven repaint was issued, for the kPlotHz limit.
+    std::chrono::steady_clock::time_point m_lastPaintAt {};
 
     /// Ballistics for the spectrum fill and the glow bar.
     ///
@@ -278,4 +280,11 @@ private:
     /// presentation.
     float  m_specShown[128] = {};
     std::chrono::steady_clock::time_point m_specShownAt {};
+
+    /// The glow bar's own ballistics: 32 band levels, rate-derived release.
+    double m_glowShown[32] = {};
+    /// True while a band is still falling towards its target; keeps the bar
+    /// drawn until the release finishes instead of freezing mid-fall.
+    bool   m_glowFalling = false;
+    std::chrono::steady_clock::time_point m_glowShownAt {};
 };

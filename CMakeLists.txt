@@ -48,6 +48,13 @@ if(OVERTEON_PREVIEW_ONLY)
     if(UNIX AND NOT APPLE)
         find_package(X11 REQUIRED)
         target_link_libraries(overteon-qml-preview PRIVATE X11::X11)
+        # --jack: the preview as a real JACK client, so the metering can be
+        # driven by actual audio without a plug-in host in the way.
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(JACK REQUIRED jack)
+        target_include_directories(overteon-qml-preview PRIVATE ${JACK_INCLUDE_DIRS})
+        target_link_libraries(overteon-qml-preview PRIVATE ${JACK_LIBRARIES})
+        target_link_directories(overteon-qml-preview PRIVATE ${JACK_LIBRARY_DIRS})
         foreach(_ext X11::Xext Xext)
             if(TARGET ${_ext})
                 target_link_libraries(overteon-qml-preview PRIVATE ${_ext})
@@ -182,7 +189,8 @@ if(OVERTEON_QT_UI)
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
-        ui/qt/OvQmlEditor.cpp)
+        ui/qt/OvQmlEditor.cpp
+        ui/qt/OvQtComponent.cpp)
 
     target_include_directories(HarmonicInjector PRIVATE ui/qt src)
 
@@ -267,6 +275,13 @@ if(OVERTEON_QT_UI)
     if(UNIX AND NOT APPLE)
         find_package(X11 REQUIRED)
         target_link_libraries(overteon-qml-preview PRIVATE X11::X11)
+        # --jack: the preview as a real JACK client, so the metering can be
+        # driven by actual audio without a plug-in host in the way.
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(JACK REQUIRED jack)
+        target_include_directories(overteon-qml-preview PRIVATE ${JACK_INCLUDE_DIRS})
+        target_link_libraries(overteon-qml-preview PRIVATE ${JACK_LIBRARIES})
+        target_link_directories(overteon-qml-preview PRIVATE ${JACK_LIBRARY_DIRS})
         foreach(_ext X11::Xext Xext)
             if(TARGET ${_ext})
                 target_link_libraries(overteon-qml-preview PRIVATE ${_ext})

@@ -1,5 +1,33 @@
 #include "FxProcessor.h"
 
+namespace
+{
+    /// Per-call decay coefficient for a meter that must fall at a fixed RATE.
+    ///
+    /// The old code multiplied by a constant (0.86) on every block.  That makes
+    /// the time constant depend on the BLOCK RATE, i.e. on both the sample rate
+    /// and the host's buffer size:
+    ///
+    ///     48 kHz / 1024   46.9 blocks/s   tau = 141 ms
+    ///     96 kHz / 1024   93.8 blocks/s   tau =  71 ms   <- twice as fast
+    ///     48 kHz /  256  187.5 blocks/s   tau =  35 ms   <- four times as fast
+    ///
+    /// which is exactly why the meters looked like they snapped to each value
+    /// instead of falling: at a high rate the release is over before the next
+    /// frame can show it.  The coefficient is derived from the elapsed time now,
+    /// so 141 ms is 141 ms at any rate and any buffer size.
+    inline float meterDecay (int numSamples, double sampleRate, double tauSeconds)
+    {
+        if (sampleRate <= 0.0 || numSamples <= 0) return 1.0f;
+        const double dt = double (numSamples) / sampleRate;
+        return (float) std::exp (-dt / std::max (1e-4, tauSeconds));
+    }
+
+    constexpr double kMeterTau = 0.1414;   // the 48 kHz / 1024 behaviour, kept
+}
+
+
+
 #if OVERTEON_QT_UI
  #include "OvQmlEditor.h"
 #else
@@ -372,8 +400,9 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             fftInData[(size_t) fftInIdx] = (float) ((L[i] + R[i]) * 0.5);
             if (++fftInIdx >= fftSize) { fftInIdx = 0; fftInReady = true; }
         }
-        meterInL.store (juce::jmax ((float) pl, meterInL.load() * 0.86f));
-        meterInR.store (juce::jmax ((float) pr, meterInR.load() * 0.86f));
+        const float k = meterDecay (n, sr, kMeterTau);
+        meterInL.store (juce::jmax ((float) pl, meterInL.load() * k));
+        meterInR.store (juce::jmax ((float) pr, meterInR.load() * k));
     }
 
     // ---- drive: classic / harmonic injector ----
@@ -497,11 +526,15 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
                     fftData[(size_t) fftIdx] = (float) ((l + r) * 0.5);
                     if (++fftIdx >= fftSize) { fftIdx = 0; fftReady = true; }
                 }
-                meterOutL.store (juce::jmax ((float) pl, meterOutL.load() * 0.86f));
-                meterOutR.store (juce::jmax ((float) pr, meterOutR.load() * 0.86f));
-                meterInL.store (meterInL.load() * 0.92f);
-                meterInR.store (meterInR.load() * 0.92f);
-                harmRatioS *= 0.92;   // no saturator in Schranz -> ring falls to zero
+                const float kOut = meterDecay (n, sr, kMeterTau);
+                meterOutL.store (juce::jmax ((float) pl, meterOutL.load() * kOut));
+                meterOutR.store (juce::jmax ((float) pr, meterOutR.load() * kOut));
+                const float kIn = meterDecay (n, sr, 0.55);
+                meterInL.store (meterInL.load() * kIn);
+                meterInR.store (meterInR.load() * kIn);
+                // same reasoning: the harmonic ratio's fall must be a rate too,
+                // or the ring empties at a different speed in every host
+                harmRatioS *= meterDecay (n, sr, kMeterTau);
                 meterHarm.store ((float) juce::Decibels::gainToDecibels (harmRatioS, -100.0));
                 return;
             }
@@ -806,8 +839,9 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             fftData[(size_t) fftIdx] = (float) ((l + r) * 0.5);
             if (++fftIdx >= fftSize) { fftIdx = 0; fftReady = true; }
         }
-        meterOutL.store (juce::jmax ((float) pl, meterOutL.load() * 0.86f));
-        meterOutR.store (juce::jmax ((float) pr, meterOutR.load() * 0.86f));
+        const float kOut = meterDecay (n, sr, kMeterTau);
+        meterOutL.store (juce::jmax ((float) pl, meterOutL.load() * kOut));
+        meterOutR.store (juce::jmax ((float) pr, meterOutR.load() * kOut));
     }
 }
 

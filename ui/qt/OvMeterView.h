@@ -10,6 +10,8 @@
 // ============================================================
 #include <QQuickPaintedItem>
 #include <QImage>
+
+#include "OvSource.h"   // OvMeters, the latched target
 #include <QSize>
 #include <QVector>
 #include <QPainterPath>
@@ -59,6 +61,10 @@ private:
     /// nothing moved.
     quint64 stateKey() const;
 
+
+    /// The last measurement, latched when it arrived.  The display moves
+    /// towards this at its own rate; see the note in the constructor.
+    OvMeters m_target;
 
     OvEngine* m_engine = nullptr;
 

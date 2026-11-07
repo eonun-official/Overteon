@@ -1,0 +1,6 @@
+<RCC><qresource prefix="/shaders">
+  <file alias="blur.vert.qsb">blur.vert.qsb</file>
+  <file alias="blur.frag.qsb">blur.frag.qsb</file>
+  <file alias="glass.vert.qsb">glass.vert.qsb</file>
+  <file alias="glass.frag.qsb">glass.frag.qsb</file>
+</qresource></RCC>

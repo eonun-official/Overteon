@@ -3,6 +3,7 @@
 #include "OvFrost.h"
 #include "OvEngine.h"
 #include "OvQmlTypes.h"
+#include "OvTick.h"
 
 #include <QPainter>
 #include <cstdio>
@@ -107,24 +108,37 @@ OvMeterView::OvMeterView (QQuickItem* parent) : QQuickPaintedItem (parent)
     for (Channel* c : { &m_outL, &m_outR, &m_inL, &m_inR })
         c->poly = flatten (c->path);
 
-    // ---- repaint when DATA arrives, not on a private clock ----------------
-    // This used to advance on its own 30 Hz timer.  The analyser, however, is
-    // polled by the HOST: measured 11.8 Hz in jalv, so each measurement was
-    // drawn for two or three consecutive frames and then cut to the next one.
-    // The meter looked stuck and then jumped — the "even the VU meter is
-    // laggy" report — and no amount of smoothing hides a 1:3 mismatch between
-    // the data rate and the paint rate.
+    // ---- latching vs. displaying: two clocks, on purpose ------------------
+    // A professional meter has two separate rates and I had collapsed them into
+    // one, twice.
     //
-    // The honest arrangement is one paint per measurement: OvEngine emits
-    // metersChanged when (and only when) the numbers moved, and this repaints
-    // then.  The elapsed time is still passed through so the peak-hold fall is
-    // seconds-based; it simply steps at the data rate instead of pretending to
-    // run faster than the data exists.
-    connect (this, &OvMeterView::advanceRequested, this, [this] {
+    //   LATCH   the measurement arrives at whatever rate the host polls the
+    //           analyser: 11.8 Hz measured in jalv, 60-125 Hz in the preview.
+    //           That value is stored as the TARGET and nothing else.
+    //
+    //   DISPLAY runs at a fixed rate of its own and moves what is on screen
+    //           towards the target with ballistics.  This is where the smooth
+    //           motion comes from, and it is why a hardware meter moves at all
+    //           between two samples that are 85 ms apart.
+    //
+    // Painting only when data arrives (what I did last) cannot show motion
+    // between measurements, and moving towards the target with a 45 ms release
+    // against an 85 ms measurement interval snapped straight to the new value
+    // every time: min(1, 0.085/0.045) == 1. So the bars jumped to exact numbers,
+    // which is exactly what was reported.
+    //
+    // The ballistics below are the standard ones: an instant attack (a
+    // transient must show in the frame it happens) and a release of ~300 ms for
+    // 20 dB, which is the VU/PPM convention; the peak hold and its 10.8 dB/s
+    // fall are the page's own.
+    m_timer.setInterval (1000 / OvTiming::kMeterHz);
+    connect (&m_timer, &QTimer::timeout, this, [this] {
+        ovtick::markKind ("meter-tick", ovtick::TickKind::MetersChanged);
         const auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double> (now - m_last).count();
         m_last = now;
-        dt = std::min (dt, 0.1);          // design clamps dt at .1 s too
+        dt = std::min (dt, 0.1);
+
         const quint64 before = stateKey();
         advance (dt);
         if (stateKey() != before)
@@ -143,10 +157,14 @@ void OvMeterView::setEngine (OvEngine* e)
 
     m_engine = e;
 
-    // One repaint per measurement (see the note in the constructor).
+    // LATCH the measurement.  This handler used to emit advanceRequested() and
+    // let advance() read the source again — but advance() now reads m_target, so
+    // without this assignment the meter would have shown the default silence
+    // forever.  The measurement is stored; the timer below moves the bars
+    // towards it.
     if (m_engine != nullptr)
         connect (m_engine, &OvEngine::metersChanged, this,
-                 [this] { emit advanceRequested(); },
+                 [this] { m_target = m_engine->source().meters(); },
                  Qt::QueuedConnection);
 
     emit engineChanged();
@@ -170,7 +188,10 @@ void OvMeterView::advance (double dt)
     m_clock += dt;
     if (m_engine == nullptr) return;
 
-    const auto m = m_engine->source().meters();
+    // The LATCHED measurement, not a fresh one: reading the source here meant
+    // the "previous" value was also the newest, so the filter had nothing to
+    // filter against.
+    const auto m = m_target;
 
     struct T { Channel* ch; double db; };
     const T list[] { { &m_outL, m.outL }, { &m_outR, m.outR },
@@ -183,16 +204,60 @@ void OvMeterView::advance (double dt)
     {
         const double level = levelToFraction (t.db);
 
-        // Ballistics on the bar itself.  The analyser is polled by the HOST and
-        // in a plug-in that is slow — measured 11.8 Hz in jalv — while this
-        // runs at kMeterHz.  Assigning the raw value made every bar stand still
-        // for several frames and then jump, which reads as "even the VU meter
-        // is stuck".  A short release moves the bar towards the measurement
-        // across frames instead.  Rises are instant so transients still show.
+        // ---- ballistics, the way ZL Audio does it -----------------------
+        // Attack is instant so a transient shows in the frame it happens.
+        //
+        // Release is expressed as "this many decibels in this many seconds" and
+        // the per-frame step is DERIVED from the display rate:
+        //
+        //      n_frames = refresh_rate * decay_seconds
+        //      step     = 1 - (target_ratio)^(1/n_frames)
+        //
+        // which is exactly SpectrumDecayer::setDecaySpeed() in ZLEqualizer's
+        // source/dsp/analyzer/fft_analyzer/spectrum_decayer.hpp.  Deriving it
+        // from the rate matters: a fixed coefficient is a fixed number of
+        // FRAMES, so the same build falls twice as fast at 60 Hz as at 30, and
+        // at a high refresh rate the fall is over before a frame can show it —
+        // which is precisely the "values snap to exact numbers, no smoothing"
+        // that was reported.
+        //
+        // Done in the dB domain because that is where a meter's scale is linear,
+        // so the bar moves at a constant number of dB per second.
         {
-            const double shown = t.ch->level;
-            t.ch->level = level > shown ? level
-                                        : shown + (level - shown) * std::min (1.0, dt / 0.045);
+            constexpr double kDecayDb     = 20.0;    // dB
+            constexpr double kDecaySecond = 0.35;    // seconds for those 20 dB
+            constexpr double kFloorDb     = -60.0;   // the bar's bottom
+
+            const double shownDb = t.ch->level * 60.0 - 60.0;   // 0..1 -> -60..0 dB
+            const double targetDb = level * 60.0 - 60.0;
+
+            if (targetDb >= shownDb)
+            {
+                t.ch->level = level;                            // instant attack
+            }
+            else
+            {
+                // Per-frame step towards the floor, scaled by how far this bar
+                // still has to travel, so a bar near the floor does not stop.
+                // SpectrumDecayer::setDecaySpeed(), verbatim in form:
+                //   n_frames = refresh_rate * decay_seconds
+                //   step     = 1 - (target/start)^(1/n_frames)
+                // The exponent is what makes "20 dB in 0.35 s" mean the same
+                // thing at 30 Hz and at 144 Hz.
+                const double rate    = (dt > 1e-6) ? 1.0 / dt : double (OvTiming::kMeterHz);
+                const double nFrames = std::max (1.0, rate * kDecaySecond);
+                const double start   = std::max (1e-6, shownDb - kFloorDb);
+                const double target  = std::max (0.0,   targetDb - kFloorDb);
+                const double ratio   = std::clamp (target / start, 0.0, 1.0);
+                const double step    = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
+
+                // Exponential towards the floor, which is what a dB-linear meter
+                // does; the target is honoured because the step is sized by the
+                // ratio to it.
+                const double nextDb = shownDb + (shownDb - kFloorDb) * -step;
+                t.ch->level = std::clamp ((std::max (nextDb, targetDb) + 60.0) / 60.0,
+                                          0.0, 1.0);
+            }
         }
 
         if (level >= t.ch->peak)
@@ -206,7 +271,30 @@ void OvMeterView::advance (double dt)
         }
     }
 
-    double f = std::clamp ((double (m.harm) + 48.0) / 48.0, 0.0, 1.0);
+    // The harmonic ring is a METER too: it must move like one.  Mapping the
+    // raw value snapped it between readings — in the preview the source only
+    // changes `harm` when a new block is measured, so the ring sat still and
+    // then jumped.  Same rate-derived release as the bars, slower because it is
+    // a slow musical quantity.
+    double targetHarm = std::clamp ((double (m.harm) + 48.0) / 48.0, 0.0, 1.0);
+    {
+        constexpr double kHarmDecaySec = 0.45;
+        const double rate    = (dt > 1e-6) ? 1.0 / dt : double (OvTiming::kMeterHz);
+        const double nFrames = std::max (1.0, rate * kHarmDecaySec);
+
+        if (targetHarm >= m_harmFrac)
+        {
+            m_harmFrac = targetHarm;                       // instant attack
+        }
+        else
+        {
+            const double start = std::max (1e-6, m_harmFrac);
+            const double ratio = std::clamp (targetHarm / start, 0.0, 1.0);
+            const double step  = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
+            m_harmFrac = std::max (targetHarm, m_harmFrac - m_harmFrac * step);
+        }
+    }
+    double f = m_harmFrac;
     // test hook: ONYXTEON_HARM=0..1 pins the harmonic fraction so the ring's
     // colour ramp can be inspected at known values.
     if (const char* h = std::getenv ("ONYXTEON_HARM"))
@@ -351,6 +439,7 @@ void OvMeterView::drawPod (QPainter* g, PodPass pass)
 
 void OvMeterView::paint (QPainter* g)
 {
+    ovtick::markKind ("paint-meter", ovtick::TickKind::PaintMeter);
     if (std::getenv ("ONYXTEON_FPS") != nullptr)
     {
         static int frames = 0;

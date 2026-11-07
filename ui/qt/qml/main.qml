@@ -228,10 +228,15 @@ Item {
         return p ? Math.round (p.norm * 2) : 1
     }
 
-    readonly property real outLight: Math.max (root.level (engine ? engine.outL : -60),
-                                               root.level (engine ? engine.outR : -60))
-    readonly property real inLight:  Math.max (root.level (engine ? engine.inL : -60),
-                                               root.level (engine ? engine.inR : -60))
+    // SM OOTHED in OvEngine, not mapped here.
+    //
+    // These used to be a binding on the raw dB values, which meant they were
+    // re-evaluated only when a new measurement arrived: the accent glow jumped
+    // from one brightness to the next and never appeared to move.  A light
+    // needs ballistics on its own clock; OvEngine::lightTick provides them and
+    // emits lightChanged at 60 Hz.
+    readonly property real outLight: engine ? engine.outLight : 0
+    readonly property real inLight:  engine ? engine.inLight  : 0
 
     function level (db) { return Math.max (0, Math.min (1, (db + 60) / 60)) }
 

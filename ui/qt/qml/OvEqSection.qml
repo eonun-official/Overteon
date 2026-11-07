@@ -17,7 +17,7 @@ Item {
 
     // .controlpit::before opacity, transition: opacity .1s linear, and the
     // CSS formula level*level*0.36
-    property real glowAmount: meterLight * meterLight * 0.36
+    property real glowAmount: meterLight * meterLight * 0.36   // var(--light) * .36
     // CSS: .controlpit::before { transition: opacity .1s linear }
     Behavior on glowAmount { NumberAnimation { duration: 100; easing.type: Easing.Linear } }
 

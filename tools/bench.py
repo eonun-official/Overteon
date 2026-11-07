@@ -563,6 +563,155 @@ def capture_rms(ports, seconds=1.5):
             "dbfs": 20.0 * np.log10(max(rms, 1e-9)) if rms > 0 else -999.0}
 
 
+def cpu_ticks_cpu(pid, seconds):
+    """CPU % of `pid` measured over `seconds`, from /proc deltas."""
+    a = cpu_ticks(pid)
+    if a is None:
+        return 0.0
+    time.sleep(seconds)
+    b = cpu_ticks(pid)
+    if b is None:
+        return 0.0
+    hz = os.sysconf("SC_CLK_TCK")
+    return (b - a) / hz / seconds * 100.0
+
+
+def run_standalone(args):
+    """`-Gs`: the preview application itself, playing real audio from JACK.
+
+    Third host mode, and the one that isolates the question.  jalv and Carla
+    both drive the editor through their own idle callback, so a slow or uneven
+    pump is indistinguishable from a slow UI.  The preview owns its event loop,
+    renders at its own rate, and with --jack it meters a REAL signal, so:
+
+        -Gs  shows the UI and the metering with no host in the way
+        -Gj  shows the same thing through the slowest host we have
+        -Gc  shows it through one that also allocates the editor's canvas
+
+    If -Gs is smooth and -Gj is not, the difference is the host, and the number
+    to quote is the host's idle rate.
+    """
+    results = {"mode": "standalone"}
+    if not os.path.exists(EXE):
+        print(f"FAIL: build first: {EXE} missing")
+        return 1
+
+    started_jack = not server_up()
+    jack = None
+    if started_jack:
+        print(f"jack          starting a private server '{JACK_SERVER}'")
+        jack = Proc(["jackd", *JACK_ARGS], "jack")
+        if not jack.wait_port(server_up, timeout=15):
+            print("FAIL: jackd did not come up")
+            print(jack.log_text()[-1200:])
+            jack.stop()
+            return 1
+    else:
+        print(f"jack          reusing the server already on '{JACK_SERVER}'")
+
+    preview = play = None
+    try:
+        print("preview       overteon-qml-preview --jack (own event loop)")
+        preview = Proc([EXE, "--size", args.size, "--jack"], "preview",
+                       {"DISPLAY": args.display,
+                        "JACK_DEFAULT_SERVER": JACK_SERVER,
+                        "ONYXTEON_FPS": "1"})
+
+        def ports():
+            return [x for x in jack_ports() if x.startswith("onyxpreview:")]
+        if not preview.wait_port(lambda: len(ports()) >= 2, timeout=30):
+            print("FAIL: the preview did not register its JACK inputs")
+            print((preview.log_text() or "")[-1500:])
+            return finish(results, args)
+        ports_in = sorted(ports())
+        results["preview"] = {"pid": preview.pid, "ports": ports_in}
+        print(f"              {len(ports_in)} inputs")
+
+        flac = args.flac
+        if not os.path.exists(flac):
+            print(f"FAIL: no audio file at {flac}")
+            return finish(results, args)
+        print(f"mpv           {os.path.basename(flac)}")
+        play = Proc(["mpv", "--no-video", "--really-quiet", "--no-terminal",
+                     "--ao=jack", "--jack-name=mpvplay", "--loop-file=inf", flac],
+                    "mpv", {"JACK_DEFAULT_SERVER": JACK_SERVER})
+        if not play.wait_port(lambda: len(jack_ports("mpvplay:")) >= 2, timeout=25):
+            print("FAIL: mpv did not open its JACK port")
+            print((play.log_text() or "")[-1200:])
+            return finish(results, args)
+
+        src = sorted([x for x in jack_ports("mpvplay:") if "out_" in x])
+        made = []
+        for a, b in zip(src, ports_in[:2]):
+            if jc(["jack_connect", a, b]).returncode == 0:
+                made.append((a, b))
+        results["audio"] = {"file": flac,
+                            "connections": [f"{a} -> {b}" for a, b in made]}
+        print(f"connections   {len(made)}: "
+              + ", ".join(f"{a.split(':')[1]}->{b.split(':')[1]}" for a, b in made))
+        if len(made) < 2:
+            print("FAIL: could not connect mpv to the preview")
+            return finish(results, args)
+
+        # ---- the window, and does it move? ------------------------------
+        # find_windows() matches the window TITLE, and with a real JACK client
+        # the title is unchanged but the lookup by name is not reliable here;
+        # the pid is.
+        if not preview.wait_port(
+                lambda: find_windows_by_pid(args.display, preview.pid)
+                        or find_windows(args.display), timeout=30):
+            print("FAIL: the window never appeared")
+            print((preview.log_text() or "")[-1500:])
+            return finish(results, args)
+
+        time.sleep(2)
+        cpu = cpu_ticks_cpu(preview.pid, args.seconds)
+        cores = os.cpu_count() or 1
+        results["live"] = {"cpu": cpu, "seconds": args.seconds}
+        print(f"  preview cpu    {cpu:6.1f} % of one core "
+              f"({cpu / cores:.1f} % of the machine, {cores} cores)")
+
+        # The application's own counters, so a high CPU number can be attributed
+        # to a rate rather than guessed at.
+        txt = preview.log_text()
+        for kind in ("window", "meter", "sc", "pq"):
+            v = [float(x) for x in re.findall(rf"\[fps\] {kind} ([\d.]+)", txt)]
+            if v:
+                results["live"].setdefault("fps", {})[kind] = v[-3:]
+                print(f"  fps {kind:8s} {' '.join(f'{x:.1f}' for x in v[-3:])}")
+
+        shots = []
+        for i in range(6):
+            f = os.path.join(RUN, f"stand_{i}.png")
+            ids = (find_windows_by_pid(args.display, preview.pid)
+                   or find_windows(args.display))
+            shots.append(capture_specific(args.display, ids[-1] if ids else None, f))
+            time.sleep(1.0)
+        best = None
+        for i in range(len(shots) - 1):
+            if shots[i] and shots[i + 1]:
+                d = px_diff(shots[i], shots[i + 1])
+                if best is None or d["changed"] > best["changed"]:
+                    best = d
+        if best is None:
+            print("  ui frames      could not capture the window")
+        else:
+            results["live"]["ui_moving"] = best
+            if best["changed"] <= NOISE_PX:
+                results["live"]["ui_frozen"] = True
+                print(f"  ui frames      FROZEN ({best['changed']} px changed)")
+            else:
+                print(f"  ui frames      {best['changed']} px changed  <-- animating")
+        return finish(results, args)
+
+    finally:
+        for x in (play, preview):
+            if x is not None:
+                x.stop()
+        if jack is not None:
+            jack.stop()
+
+
 def run_carla(args):
     """`-Gc`: the plug-in in carla-single, with its UI and real audio.
 
@@ -1008,9 +1157,11 @@ def main():
     # -G picks the GUI host:  -Gj = jalv.gtk3,  -Gc = carla-single.
     # Short options take their value attached, so both `-Gj` and `-G j` work;
     # the attached form is the one to type.
-    ap.add_argument("-G", dest="gui_host", choices=["j", "c"], metavar="{j,c}",
+    ap.add_argument("-G", dest="gui_host", choices=["j", "c", "s"],
+                    metavar="{j,c,s}",
                     help="-Gj: jalv.gtk3 with the plug-in UI;  "
-                         "-Gc: carla-single with it")
+                         "-Gc: carla-single with it;  "
+                         "-Gs: the standalone preview as a JACK client")
     ap.add_argument("--flac",
                     default=os.path.expanduser("~/wtf/export/K33C - Fixed.flac"),
                     help="audio file mpv plays into the plug-in (--jalv only)")
@@ -1023,6 +1174,8 @@ def main():
 
     if args.gui_host is not None:
         ensure_dir()
+        if args.gui_host == "s":
+            return run_standalone(args)
         if args.gui_host == "c":
             return run_carla(args)
         args.jalv = True          # -Gj is the jalv path with its gtk3 UI
@@ -1156,7 +1309,7 @@ def finish(results, args):
         bad.append(f"live cpu {results['live']['cpu']:.0f}% of a core")
     # jalv mode: the plug-in must stay up and keep up.  A DSP load at or over
     # 100 % means it is missing deadlines, i.e. clicking, whatever the UI shows.
-    if results.get("mode") in ("jalv", "carla"):
+    if results.get("mode") in ("jalv", "carla", "standalone"):
         if results.get("live", {}).get("alive") is False:
             bad.append("a process died during the run")
         dsp = results.get("live", {}).get("dsp_load")

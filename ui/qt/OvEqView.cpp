@@ -3,6 +3,7 @@
 #include "OvEngine.h"
 #include "OvQmlTypes.h"
 #include "OvParam.h"
+#include "OvTick.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -29,6 +30,7 @@ namespace
 #include <cstdlib>
 #include <utility>
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <vector>
 
@@ -209,12 +211,23 @@ void OvEqView::setEngine (OvEngine* e)
             if (m_prefix == QStringLiteral ("sc") ? scMoved : pqMoved)
                 update();
         });
-        // One repaint per new FFT, in the frame it arrives.  Previously this
-        // only bumped a stamp and a private timer decided when to paint, which
-        // decoupled the paint rate from the data rate — the source of the
-        // stutter.  requestUpdate keeps Qt from batching it into a later frame.
+        // One repaint per new FFT — but rate limited to kPlotHz.
+        //
+        // The data arrives at the host's rate (11.8 Hz measured in jalv), so a
+        // repaint per FFT is already slower than this; the limit exists for the
+        // PREVIEW, where the same signal can arrive far more often.  Without it
+        // two 1040x333 plots were re-rendered and re-uploaded 125 times a
+        // second (measured through `bench.py -Gs`: sc 125 fps, pq 125 fps,
+        // window 158 fps, 109 % of one core).  That is 5 MB of texture per
+        // frame for data that had not changed.
         connect (m_engine, &OvEngine::spectrumChanged, this, [this] {
             ++m_spectrumStamp;
+            using clk = std::chrono::steady_clock;
+            const auto now = clk::now();
+            if (m_lastPaintAt != clk::time_point()
+                && now - m_lastPaintAt < std::chrono::milliseconds (OvTiming::kPlotMs))
+                return;                              // the timer will pick it up
+            m_lastPaintAt = now;
             m_lastSpectrumStamp = m_spectrumStamp;
             update();
         });
@@ -513,6 +526,13 @@ struct OvPaintTimer
 
 void OvEqView::paint (QPainter* g)
 {
+    // One tick per actual paint of this plot, so `--tick` can show that the two
+    // EQ halves are not repainting at the same rate (they were not: 21 vs 94 Hz
+    // was measured, which nothing in the code explained).
+    const bool isSc = (m_prefix == QStringLiteral ("sc"));
+    ovtick::markKind (isSc ? "paint-sc" : "paint-pq",
+                      isSc ? ovtick::TickKind::PaintSc : ovtick::TickKind::PaintPq);
+
     OvPaintTimer _p (m_prefix == QStringLiteral ("sc") ? "sc" : "pq");
     if (std::getenv ("ONYXTEON_FPS") != nullptr)
     {
@@ -801,23 +821,29 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     // The host polls the analyser at ~12 Hz (measured 11.8 in jalv) while this
     // paints at up to 60, so raw bins would be held for five frames and then
     // cut to an unrelated picture.  Each bin therefore gets an instant attack
-    // and an exponential release towards the newest value; the time constant is
-    // short enough that a real drop is visible within ~100 ms and long enough
-    // that the motion spans frames instead of jumping between them.
+    // and a rate-derived release towards the newest value.
     //
-    // This is presentation only: `spec` above is what the analyser said.
+    // The release is expressed as "this many dB in this many seconds" and the
+    // per-frame step is derived from the DISPLAY rate, the way ZL Audio does it
+    // (SpectrumDecayer::setDecaySpeed): step = 1 - (target/start)^(1/n_frames)
+    // with n_frames = refresh_rate * decay_seconds.  A fixed coefficient is a
+    // fixed number of FRAMES, so it falls faster the higher the refresh rate and
+    // at 60 Hz is over before a frame can show it.
+    //
+    // The previous version computed exp(-dt/tau) and then never used it — the
+    // bin was assigned the raw target, so every measurement landed as an exact
+    // value.  That is why the fill and the glow bar showed numbers, not motion.
     {
         using clk = std::chrono::steady_clock;
         const auto now = clk::now();
-        double dt = 0.016;
+        double dt = 1.0 / double (OvTiming::kPlotHz);
         if (m_specShownAt != clk::time_point())
             dt = std::clamp (std::chrono::duration<double> (now - m_specShownAt).count(),
-                             0.001, 0.20);
+                             0.0005, 0.20);
         m_specShownAt = now;
 
-        const double tau    = 0.085;                  // seconds
-        const double decay  = std::exp (-dt / tau);
-        const double rising = 1.0;                    // instant attack
+        constexpr double kFloor   = 0.0;      // the table's own bottom
+        constexpr double kDecaySec = 0.30;    // seconds to fall the full scale
 
         float raw[128] = {};
         if (m_engine != nullptr)
@@ -832,14 +858,27 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
             }
         }
 
+        const double rate    = (dt > 1e-6) ? 1.0 / dt : double (OvTiming::kPlotHz);
+        const double nFrames = std::max (1.0, rate * kDecaySec);
+
         for (int i = 0; i < 128; ++i)
         {
-            const double shown = m_specShown[i] * decay;
+            const double shown  = m_specShown[i];
             const double target = raw[i];
-            // attack when the analyser is above what is displayed, release otherwise
-            m_specShown[i] = float (target > shown
-                                        ? shown + (target - shown) * rising
-                                        : shown);
+
+            if (target >= shown)
+            {
+                m_specShown[i] = float (target);          // instant attack
+            }
+            else
+            {
+                const double start = std::max (1e-6, shown - kFloor);
+                const double goal  = std::max (0.0, target - kFloor);
+                const double ratio = std::clamp (goal / start, 0.0, 1.0);
+                const double step  = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
+                const double next  = shown + (shown - kFloor) * -step;
+                m_specShown[i] = float (std::max (next, target));
+            }
             spec[i] = m_specShown[i];
         }
     }
@@ -908,7 +947,11 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     // smoothed values made the bar's cache key change on every repaint: the
     // cache never hit and two 160x8 images were rebuilt with exp()/pow() per
     // pixel at 150 fps.  That cost 40 % of a core in the preview app.
-    paintGlowBar (g, w, h, accent, specRaw);
+    // The SMOOTHED array: the bar is under a 3 px blur so fine detail is
+    // invisible anyway, but it must move over frames like everything else.
+    // Its cache key is taken from the smoothed levels, so it still only
+    // rebuilds when the shape actually changed.
+    paintGlowBar (g, w, h, accent, spec);
 
     OV_MARK ("curves");
     OV_MARK ("overlay");
@@ -1160,14 +1203,60 @@ void OvEqView::paintGlowBar (QPainter* g, double w, double h,
         double sum = 0.0;
         for (int i = i0; i < i1; ++i) sum += std::clamp (double (spec[i]), 0.0, 1.0);
         double l = sum / double (i1 - i0);
+
+        // ---- ballistics, per band --------------------------------------
+        // The bar used to read the RAW bins (`specRaw` was passed in), so it had
+        // no smoothing at all: every new FFT moved it straight to a new shape.
+        // It gets the same rate-derived release as the spectrum fill, in dB
+        // terms, so "how far it reaches from the lit edge" moves over frames.
+        {
+            using clk = std::chrono::steady_clock;
+            const auto now = clk::now();
+            double dt = 1.0 / double (OvTiming::kPlotHz);
+            if (m_glowShownAt != clk::time_point())
+                dt = std::clamp (std::chrono::duration<double> (now - m_glowShownAt).count(),
+                                 0.0005, 0.20);
+            m_glowShownAt = now;
+
+            constexpr double kDecaySec = 0.35;
+            const double rate    = (dt > 1e-6) ? 1.0 / dt : double (OvTiming::kPlotHz);
+            const double nFrames = std::max (1.0, rate * kDecaySec);
+
+            const double shown = m_glowShown[b];
+            if (l >= shown)
+            {
+                m_glowShown[b] = l;                       // instant attack
+            }
+            else
+            {
+                m_glowFalling = true;
+                const double start = std::max (1e-6, shown);
+                const double ratio = std::clamp (l / start, 0.0, 1.0);
+                const double step  = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
+                m_glowShown[b] = std::max (l, shown - shown * step);
+            }
+            l = m_glowShown[b];
+        }
+
+        // Has the release finished?  Checked here, where the value is known,
+        // not from the incoming peak (see the note above).
+        {
+            bool anyFalling = false;
+            for (int b = 0; b < kBands; ++b)
+                if (m_glowShown[b] > 0.002) anyFalling = true;
+            m_glowFalling = anyFalling;
+        }
         // Display curve.  The table is (dB + 85) / 85, so a signal 20 dB down
         // sits at 0.76 and would glow almost as brightly as a full-scale one;
         // squaring turns that into something that reads as loudness.
         band[b] = l * l;
     }
 
-    // One smoothing pass: 32 bands over 640 px is 20 px each, and a single
-    // square-wave harmonic landing in one band should not make a bump.
+    // Four smoothing passes.  One was nowhere near enough: 32 bands over 640 px
+    // is 20 px each, so a single [1 2 1]/4 pass only reaches halfway into its
+    // neighbours and the modulation still read as facets rather than as a pool
+    // of light.  Four passes approximate a Gaussian of about one band's width.
+    for (int pass = 0; pass < 4; ++pass)
     {
         double tmp[kBands];
         for (int b = 0; b < kBands; ++b)
@@ -1175,7 +1264,6 @@ void OvEqView::paintGlowBar (QPainter* g, double w, double h,
                    + 0.25 * band[std::min (kBands - 1, b + 1)];
         for (int b = 0; b < kBands; ++b) band[b] = tmp[b];
     }
-
     // ---- overall loudness vs. spectral shape -----------------------------
     // Two different things, and both have to show:
     //   * the whole blob's intensity follows the section's level, so silence
@@ -1186,18 +1274,67 @@ void OvEqView::paintGlowBar (QPainter* g, double w, double h,
     // the section is quiet; mixing that with the absolute peak gives the level.
     double peak = 0.0;
     for (int b = 0; b < kBands; ++b) peak = std::max (peak, band[b]);
+    // NOTE: the falling flag is cleared inside the per-band loop below, once
+    // every band has actually reached its target.  Clearing it here on `peak`
+    // was wrong: peak reads 0 the moment the audio goes silent, which cleared
+    // the flag while the bars were still at full height, the gate below then
+    // returned, and the ballistics never ran again — the bar froze permanently
+    // on its last image instead of falling to nothing.
     const double loud = std::clamp (peak, 0.0, 1.0);
-    if (loud < 0.002) return;                     // nothing playing: no light
 
+    // Nothing playing: draw nothing, but do NOT return while the ballistics
+    // still have something to fall.  Returning here ended the release mid-way
+    // and left the bar frozen on its last image — measured as three or four
+    // completely static frame pairs in a row, in the middle of a passage where
+    // the spectrum above it was still moving.
+    // Do not return while the release still has something to show.  The gate
+    // used to fire on the way DOWN as well, cutting the fall short and leaving
+    // the last image on screen — three consecutive static captures in a passage
+    // where the audio was merely quiet.  `m_glowFalling` is set whenever a bar
+    // is above its target, so the release is always allowed to finish.
+    if (loud < 0.002 && ! m_glowFalling) { return; }   // nothing to draw, nothing falling
+
+    // Never divide by a tiny peak: band/peak with peak at 1e-6 multiplies the
+    // residue of the release into full-scale noise, and at exactly 0 it produces
+    // NaN, which makes the whole path invalid and nothing is drawn at all — read
+    // from outside as "the glow bar is frozen".
     double rel[kBands];
-    for (int b = 0; b < kBands; ++b) rel[b] = band[b] / peak;
+    const double norm = (peak > 1e-4) ? peak : 1.0;
+    for (int b = 0; b < kBands; ++b) rel[b] = std::clamp (band[b] / norm, 0.0, 1.0);
 
-    // ---- cache -----------------------------------------------------------
-    // The bar only depends on the 32 band levels and on the geometry, and the
-    // spectrum arrives at ~15 Hz while the plot repaints at up to 120.
+    // The relative shape gets the same four passes: it decides the brightness
+    // modulation, and one pass left visible steps between adjacent bands.
+    for (int pass = 0; pass < 4; ++pass)
+    {
+        double tmp[kBands];
+        for (int b = 0; b < kBands; ++b)
+            tmp[b] = 0.25 * rel[std::max (0, b - 1)] + 0.5 * rel[b]
+                   + 0.25 * rel[std::min (kBands - 1, b + 1)];
+        for (int b = 0; b < kBands; ++b) rel[b] = tmp[b];
+    }
+
+    // ---- cache key -------------------------------------------------------
+    // Built from the SMOOTHED levels, which is what is actually drawn.  An
+    // earlier version keyed on them but returned before running the ballistics,
+    // so a cache hit froze the displayed value until the key happened to
+    // change — measured: the glow bar was static on 6 of 13 frame pairs while
+    // the VU and the spectrum moved on all of them.
+    //
+    // The ballistics have to run on EVERY paint (they advance with time), so
+    // they are computed above this point and the key is only about the image.
     quint64 key = 1469598103934665603ull;
     auto mixIn = [&key] (quint64 v) { key = (key ^ v) * 1099511628211ull; };
-    for (int b = 0; b < kBands; ++b) mixIn (quint64 (band[b] * 65535.0 + 0.5));
+    // Full precision, not quantised to 1/65535: a release step during a quiet
+    // passage is smaller than that, so the key did not change and the cache
+    // held a stale image — measured as 2-3 completely static frames out of 13
+    // while the spectrum and the VU moved on every one.
+    for (int b = 0; b < kBands; ++b)
+    {
+        std::uint32_t bits = 0;
+        const float fv = float (band[b]);
+        std::memcpy (&bits, &fv, sizeof bits);      // C++17: no bit_cast
+        mixIn (quint64 (bits));
+    }
     mixIn (quint64 (pitW * 16.0));
     mixIn (quint64 (barH * 16.0) ^ (m_headerTop ? 0x9e37u : 0u));
     mixIn (quint64 (accent.rgb()));
@@ -1212,7 +1349,18 @@ void OvEqView::paintGlowBar (QPainter* g, double w, double h,
     // Built at half the bar's size and stretched: the glass blurs it, so 160x8
     // already carries more detail than can survive, and this runs on every plot
     // repaint (up to 120 Hz).
-    const int cols = 160, rows = std::max (8, int (barH / 2));
+    // ---- resolution ------------------------------------------------------
+    // The image IS the shape here, so its size is a quality setting, not a
+    // performance one.  It used to be 160x8 stretched over 640x32 — a 4x
+    // upscale in both axes, which put a step every four pixels on every edge no
+    // matter how smooth the maths was.  The shape is sampled once per device
+    // pixel now.
+    //
+    // (This is cheap: it runs only when the cache key changes, which is when the
+    // band levels or the geometry moved, not on every paint.)
+    const double devScale = (w > 0.0) ? (width() / w) : 1.0;
+    const int cols = std::max (64, int (std::lround (pitW * devScale)));
+    const int rows = std::max (8, int (std::lround (barH * devScale)));
     if (m_glowBar.width() != cols || m_glowBar.height() != rows)
         m_glowBar = QImage (cols, rows, QImage::Format_ARGB32_Premultiplied);
     QImage& bar = m_glowBar;
@@ -1230,33 +1378,98 @@ void OvEqView::paintGlowBar (QPainter* g, double w, double h,
         {
             const double fx = (x + 0.5) / double (cols);
 
-            // Band level at this column.  Smootherstep between the two
-            // neighbouring band centres: f*f*f*(f*(6f-15)+10).  smoothstep
-            // (3f^2-2f^3) is only C1 — its second derivative jumps at every
-            // control point, and that kink survives a 3 px blur as a facet.
-            // smootherstep is C2, so the curve is glassy all the way across.
+            // ---- monotone cubic (PCHIP) between band centres ----------
+            // smootherstep was here and it was the wrong curve for this job.
+            // It forces the slope to ZERO at every control point, so 32 bands
+            // with any difference between neighbours become a row of separate
+            // bumps joined by flat-topped steps — beads on a string.  Blurring
+            // that softens the edges but keeps the beads, which is exactly the
+            // "the shape is too sharp" report.
+            //
+            // A monotone cubic keeps the slope continuous across each control
+            // point and is guaranteed not to overshoot, so the curve runs
+            // THROUGH the band values instead of flattening at each of them.
+            // This is the standard PCHIP construction (Fritsch-Carlson).
             const double bt = fx * (kBands - 1);
             const int    bi = std::min (kBands - 2, int (bt));
             const double bf = bt - double (bi);
-            const double bw = bf * bf * bf * (bf * (bf * 6.0 - 15.0) + 10.0);
-            const double rl = rel[bi] + (rel[bi + 1] - rel[bi]) * bw;
+
+            // Slopes at the two ends of this interval, from the three-point
+            // differences, then limited so no overshoot can occur.
+            auto slope = [&rel] (int i) -> double
+            {
+                const int n = kBands;
+                if (i <= 0)     return rel[1] - rel[0];
+                if (i >= n - 1) return rel[n - 1] - rel[n - 2];
+                const double d0 = rel[i] - rel[i - 1];
+                const double d1 = rel[i + 1] - rel[i];
+                if (d0 * d1 <= 0.0) return 0.0;             // a local extremum
+                return 0.5 * (d0 + d1);                     // central difference
+            };
+
+            const double m0 = slope (bi);
+            const double m1 = slope (bi + 1);
+            const double h00 = (2.0 * bf + 1.0) * (1.0 - bf) * (1.0 - bf);
+            const double h10 = bf * (1.0 - bf) * (1.0 - bf);
+            const double h01 = bf * bf * (3.0 - 2.0 * bf);
+            const double h11 = bf * bf * (bf - 1.0);
+            const double rl = std::clamp (h00 * rel[bi] + h10 * m0
+                                        + h01 * rel[bi + 1] + h11 * m1,
+                                          0.0, 1.0);
 
             // Per-band brightness: a loud band is near full, a quiet one a
             // third of that.  A floor is kept so the blob still reads as one
             // pool of light rather than breaking into separate patches.
             const double lv = (0.30 + 0.70 * rl) * (0.35 + 0.65 * loud);
 
-            // Vertical reach: a louder band carries further from the edge, so
-            // the silhouette follows the spectrum.  0.55 is the page's ellipse
-            // at --light = 1.
-            const double reach = 0.55 * (0.35 + 0.65 * rl);
+            // ---- the falloff ------------------------------------------
+            // The page is a RADIAL GRADIENT, not a Gaussian:
+            //
+            //   radial-gradient(ellipse 70% 160% at 50% 0%,
+            //                   accent .36 0%, accent .13 38%, accent 0 78%)
+            //
+            // i.e. alpha falls LINEARLY to .13 at 38 % of the radius and then
+            // linearly to zero at 78 % — and stays zero beyond.  A Gaussian
+            // exp(-(d/reach)^2) looks similar in shape but its tail dies too
+            // fast: at 32 px tall it leaves only a few pixels of transition and
+            // the blob reads as a filled rectangle with a soft rim, which is the
+            // "too full, not like a glow" report.  The gradient's long linear
+            // run is what makes it look like light.
+            //
+            // In the page's own normalised radius `r`: 0 at the centre (the lit
+            // edge), 1 at the ellipse's edge.  The vertical half-axis is 160 %
+            // of the bar's height and the horizontal is 70 % of the pit's width,
+            // so `r` mixes both — that is what gives the corners their round
+            // falloff instead of a hard cut.
+            const double cx = (fx - 0.5) / 0.70;         // 0 at the centre
+            const double cy = d / 1.60;                  // 0 at the lit edge
+            const double r  = std::sqrt (cx * cx + cy * cy);
 
-            // The elliptical falloff, plus the page's horizontal ellipse
-            // (70% of the width, so the ends of the pit are dimmer).
-            const double hx = std::exp (-std::pow ((fx - 0.5) / 0.42, 2.0));
-            const double a  = lv * hx * std::exp (-std::pow (d / reach, 2.0));
+            double prof;
+            if (r <= 0.38)      prof = 0.36 + (0.13 - 0.36) * (r / 0.38);
+            else if (r <= 0.78) prof = 0.13 + (0.00 - 0.13) * ((r - 0.38) / 0.40);
+            else                prof = 0.0;
 
-            const double al = std::clamp (a * 0.95, 0.0, 1.0);
+            // The level modulates the BRIGHTNESS of that profile, not its
+            // extent, so the shape stays the page's ellipse at every level.
+            const double a = lv * prof / 0.36;           // normalised to 1 at the centre
+
+            // Same factor as the GPU shader (see kGlowToScreen in glass.frag),
+            // so the CPU fallback and the GPU path produce the same picture.
+            //
+            // This is the glow that goes INTO the plot image; in the normal
+            // (GPU glass) build the pod's glow is drawn by the shader on top of
+            // this and this particular one is covered up.  It still has to be
+            // right, because ONYXTEON_CPUFROST=1 is the fallback for machines
+            // without working GL.
+            //
+            // 0.229 — measured, see the long note in glass.frag for the table
+            // and for why the earlier values (0.20, 1.0, 0.119, 0.0307) were
+            // each wrong.
+            // `a` is already normalised to 1 at the centre (prof / 0.36), so
+            // this single factor sets the on-screen strength.
+            constexpr double kGlowPeakAlpha = 0.229;
+            const double al = std::clamp (a * kGlowPeakAlpha, 0.0, 1.0);
             line[x] = al < 0.004 ? 0u
                     : qRgba (int (acc.red() * al), int (acc.green() * al),
                              int (acc.blue() * al), int (255 * al));
