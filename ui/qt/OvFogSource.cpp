@@ -126,8 +126,35 @@ void OvFogSource::paint (QPainter* g)
             m_top->paintOverflowFog (&cg, m_top->mapToItem (this, QPointF (0, 0)));
         if (m_bottom != nullptr)
             m_bottom->paintOverflowFog (&cg, m_bottom->mapToItem (this, QPointF (0, 0)));
+
+        if (std::getenv ("ONYXTEON_FOGDEBUG") != nullptr)
+        {
+            int nz = 0;
+            for (int y = 0; y < m_cache.height(); y += 2)
+            {
+                const auto* ln = reinterpret_cast<const QRgb*> (m_cache.constScanLine (y));
+                for (int x = 0; x < m_cache.width(); x += 2)
+                    if (qAlpha (ln[x])) ++nz;
+            }
+            std::fprintf (stderr,
+                "[fogsrc] %dx%d  top origin (%.1f,%.1f) edge %.1f  "
+                "bottom origin (%.1f,%.1f) edge %.1f  nonzero %d\n",
+                m_cache.width(), m_cache.height(),
+                m_top ? m_top->mapToItem (this, QPointF (0, 0)).x() : 0.0,
+                m_top ? m_top->mapToItem (this, QPointF (0, 0)).y() : 0.0,
+                m_top ? m_top->fogEdge() : 0.0,
+                m_bottom ? m_bottom->mapToItem (this, QPointF (0, 0)).x() : 0.0,
+                m_bottom ? m_bottom->mapToItem (this, QPointF (0, 0)).y() : 0.0,
+                m_bottom ? m_bottom->fogEdge() : 0.0,
+                nz);
+        }
     }
     m_cacheKey = key;
+
+    // ONYXTEON_FOGDUMP=<path>: write the strokes out, so they can be looked at
+    // directly instead of inferred from the composited window.
+    if (const char* dump = std::getenv ("ONYXTEON_FOGDUMP"))
+        m_cache.save (QString::fromLocal8Bit (dump));
 
     ++m_revision;
     emit revisionChanged();

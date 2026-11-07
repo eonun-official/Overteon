@@ -47,10 +47,23 @@ void main()
     vec2  texel = 1.0 / vec2 (ts);
     vec2  dir   = axis > 0.5 ? vec2 (0.0, texel.y) : vec2 (texel.x, 0.0);
 
-    // t is 0 at the plot edges and 1 at the fog's far end, in either direction.
+    // t is 0 at the plot edges and 1 at the fog's far end, in either direction:
+    // the distance OUTWARD from the nearest edge, normalised by the reach.
+    //
+    //   |y - fogMid|  distance from the seam centre
+    //   fogGap        how far that centre is from the edges (the padding)
+    //   fogRange      how far the fog reaches past them
+    //
+    // So the distance past the edge is (|y - fogMid| - fogGap), and it is this
+    // way round — subtracting fogGap from the distance, not the reverse.  The
+    // reverse clamps to 0 for every pixel outside the gap, which is every
+    // pixel the fog is drawn on: sigma then stayed at its minimum and the alpha
+    // ramp at 1, so the fog came out sharp and unfaded.  That is exactly what
+    // "it never blurs and never fades" looked like.
+    //
     // Irrelevant when sigmaSlope and alphaMul are both 0, which is the glass's
     // case (it passes fogMid 0, fogGap 0, fogRange 1 and ignores the result).
-    float t = clamp ((fogGap - abs (vTex.y - fogMid)) / max (fogRange, 1e-5),
+    float t = clamp ((abs (vTex.y - fogMid) - fogGap) / max (fogRange, 1e-5),
                      0.0, 1.0);
 
     vec4 c = ovDualGaussAxis (src, vTex, dir, sigma + sigmaSlope * t);

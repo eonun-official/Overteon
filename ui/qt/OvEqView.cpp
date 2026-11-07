@@ -1151,6 +1151,26 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
                  + (curveY[(size_t) j] - curveY[(size_t) i]) * (t - i);
         };
         buildPath (totalAt, path);
+        if (std::getenv ("ONYXTEON_FOGDEBUG") != nullptr)
+        {
+            double ymin = 1e9, ymax = -1e9, first = 0.0, last = 0.0;
+            for (size_t i = 0; i < curveY.size(); ++i)
+            {
+                ymin = std::min (ymin, curveY[i]);
+                ymax = std::max (ymax, curveY[i]);
+            }
+            if (! curveY.empty()) { first = curveY.front(); last = curveY.back(); }
+            std::fprintf (stderr, "[fogcurve] maxdB %.2f  gains:", 
+                          totalMagAt (350.0));
+            for (int i = 0; i < 5; ++i)
+                std::fprintf (stderr, " %d[t%d g%.1f f%.0f]", i, m_bands[i].type,
+                              m_bands[i].gain, m_bands[i].freq);
+            std::fprintf (stderr, "\n[fogcurve] %s elems %d edge %.1f dir %.0f range %.1f "
+                                  "lo %.1f hi %.1f | curveY %.1f..%.1f (ends %.1f/%.1f) "
+                                  "plot %.1f..%.1f\n",
+                          qPrintable (m_prefix), path.elementCount(), edge, dir, kRange,
+                          lo, hi, ymin, ymax, first, last, top, plot.bottom());
+        }
         g->setPen (QPen (accent, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         g->drawPath (path);
     }
