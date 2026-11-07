@@ -3,6 +3,7 @@
 #include <QPainter>
 #include <QQuickWindow>
 #include <QTimer>
+#include <chrono>
 
 #include <cstdio>
 #include <cstdlib>

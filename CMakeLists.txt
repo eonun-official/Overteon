@@ -36,14 +36,18 @@ if(OVERTEON_PREVIEW_ONLY)
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
-        ui/qt/OvFogSource.cpp
+        ui/qt/OvFogSource.cpp ui/qt/OvFrameProbe.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
         ui/qt/ov_ui.qrc)
     target_include_directories(overteon-qml-preview PRIVATE ui/qt)
     target_link_libraries(overteon-qml-preview PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets
+        # OvEqView is a QQuickFramebufferObject and paints with a
+        # QOpenGLPaintDevice: GL tessellates the paths instead of the CPU
+        # rasterising them into an image.
+        Qt6::OpenGL)
 
     # the preview checks for a compositing manager before Qt starts
     if(UNIX AND NOT APPLE)
@@ -194,7 +198,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvParam.cpp
         ui/qt/OvJuceSource.cpp
         ui/qt/OvEqView.cpp
-        ui/qt/OvFogSource.cpp
+        ui/qt/OvFogSource.cpp ui/qt/OvFrameProbe.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
@@ -291,7 +295,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
-        ui/qt/OvFogSource.cpp
+        ui/qt/OvFogSource.cpp ui/qt/OvFrameProbe.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
@@ -300,7 +304,11 @@ if(OVERTEON_QT_UI)
 
     target_include_directories(overteon-qml-preview PRIVATE ui/qt)
     target_link_libraries(overteon-qml-preview PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets
+        # OvEqView is a QQuickFramebufferObject and paints with a
+        # QOpenGLPaintDevice: GL tessellates the paths instead of the CPU
+        # rasterising them into an image.
+        Qt6::OpenGL)
 
     # the preview checks for a compositing manager before Qt starts
     if(UNIX AND NOT APPLE)
@@ -332,7 +340,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
-        ui/qt/OvFogSource.cpp
+        ui/qt/OvFogSource.cpp ui/qt/OvFrameProbe.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp)

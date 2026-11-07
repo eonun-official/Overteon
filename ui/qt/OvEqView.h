@@ -13,7 +13,7 @@
 //  the painter rather than with a ShaderEffectSource keeps it deterministic —
 //  sampling a QQuickPaintedItem through a texture gives garbage.
 // ============================================================
-#include <QQuickPaintedItem>
+#include <QQuickFramebufferObject>
 #include <QTimer>
 #include <QString>
 #include <QImage>
@@ -23,7 +23,23 @@
 
 class OvEngine;
 
-class OvEqView : public QQuickPaintedItem
+//  GPU-backed.
+//
+//  This was a QQuickPaintedItem: every frame it rasterised the whole plot into
+//  a QImage on the CPU — grid, spectrum path, five curves, two gradients — and
+//  then uploaded 2.4 MB of it as a texture.  Measured at 1.4 ms of CPU per plot
+//  per frame, 2 plots, 108 fps: about 30 % of a core purely to draw two curves.
+//
+//  A QQuickFramebufferObject fixes that without rewriting the drawing: Qt 6
+//  still ships QOpenGL2PaintEngineEx, so a QPainter on a QOpenGLPaintDevice
+//  tessellates paths, gradients and glyphs into GL commands.  The drawing code
+//  is unchanged and the picture is identical; what changes is that the
+//  rasterisation happens on the GPU and nothing is uploaded per frame.
+//
+//  (Qt's RHI path has no QPainter backend, so "the same QPainter code on the
+//  GPU" is only available through GL.  The rest of the UI — the glass, the fog
+//  — is ShaderEffect and therefore already RHI.)
+class OvEqView : public QQuickFramebufferObject
 {
     Q_OBJECT
 
@@ -82,7 +98,27 @@ public:
     double glow() const { return m_glow; }
     void setGlow (double);
 
-    void paint (QPainter*) override;
+    void paint (QPainter*);
+    /// QQuickFramebufferObject entry point; the renderer lives in OvEqView.cpp.
+    Renderer* createRenderer() const override;
+    /// Called on the RENDER thread with the finished frame, for the CPU seam
+    /// glass.  Only used when wantImage() is set.
+    void setContentImage (const QImage& img);
+
+    /// Build contentImage()/unfrostedImage() as well.
+    ///
+    /// Only the CPU seam glass needs them, and on this path producing them
+    /// means reading the framebuffer back to the CPU — the very cost this class
+    /// no longer pays.  QML sets this when it falls back to OvSeamFrost.
+    /// Frames this plot actually painted in the last second, measured inside
+    /// paint() itself.  ONYXTEON_SOLO shows it, so the number describes THIS
+    /// widget rather than the window it happens to be in.
+    Q_PROPERTY(double paintFps READ paintFps NOTIFY paintFpsChanged)
+    double paintFps() const { return m_paintFps; }
+
+    Q_PROPERTY(bool wantImage READ wantImage WRITE setWantImage NOTIFY wantImageChanged)
+    bool wantImage() const { return m_wantImage; }
+    void setWantImage (bool on);
 
     /// Centre of band `index` (0..4) in item coordinates, after refreshing
     /// the geometry from the current parameter values.
@@ -134,6 +170,8 @@ signals:
     void fogGeometryChanged();
     /// m_content was just re-rendered; the seam glass has to rebuild.
     void contentChanged();
+    void wantImageChanged();
+    void paintFpsChanged();
     void engineChanged();
     void prefixChanged();
     void accentChanged();
@@ -246,6 +284,8 @@ private:
 
     bool m_spectrumGate = false;
     std::chrono::steady_clock::time_point m_glowPainted {};
+    bool   m_wantImage = false;
+    double m_paintFps = 0.0;
     QImage m_content;        // the plot, rendered off-screen
     QImage m_unfrosted;      // the plot before paintFrost() touched it
     std::chrono::steady_clock::time_point m_lastMoveTime;

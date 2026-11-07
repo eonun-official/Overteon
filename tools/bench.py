@@ -411,10 +411,29 @@ def shots_from_exe(size="1040x772", display=":3"):
 #  and stopped by PID, the same rule as the rest of this file.
 # --------------------------------------------------------------------------
 JACK_SERVER = "ovtest"
-JACK_ARGS = ["-n", JACK_SERVER, "-d", "dummy", "-r", "48000", "-p", "1024"]
-LV2_URI = "https://eonun.com/plugins/OnyxTEON"
-LV2_BUNDLE = os.path.join(ROOT, "build", "HarmonicInjector_artefacts",
-                          "Release", "LV2", "OnyxTEON.lv2")
+
+# VirtualGL: run the UI on the real GPU while its window lives on the test
+# display.
+#
+# Every number this file produced was measured on an Xephyr display, which
+# renders OpenGL through llvmpipe — a SOFTWARE rasteriser.  Same binary, same
+# audio, same window size, measured back to back:
+#
+#     llvmpipe     2 fps,  0 % of one core   (blocked in software rasterisation)
+#     VirtualGL   77 fps,  9 % of one core
+#
+# So "the UI is 2 fps" was never the UI; it was the display.  When vglrun and a
+# real :0 are available the GUI goes through it, and VGL_DISPLAY names the GPU's
+# X server while --display still decides where the window appears.
+def vgl():
+    """(prefix_argv, env_extra) that put the GUI on the real GPU."""
+    if os.environ.get("OVERTEON_NO_VGL") or not shutil.which("vglrun"):
+        return [], {}
+    gpu = os.environ.get("VGL_DISPLAY", ":0")
+    sock = "/tmp/.X11-unix/X" + gpu.lstrip(":").split(".")[0]
+    if not os.path.exists(sock):
+        return [], {}
+    return ["vglrun", "-d", gpu], {"VGL_DISPLAY": gpu}
 
 
 class Proc:
@@ -576,6 +595,39 @@ def cpu_ticks_cpu(pid, seconds):
     return (b - a) / hz / seconds * 100.0
 
 
+def hold_until_closed(args, proc, label):
+    """Wait for the user to close the window instead of timing out.
+
+    `--hold` exists because a measurement window is the wrong shape when the
+    question is "does this look right": the numbers are already printed by the
+    time this is called, and a fixed --seconds cuts the run off in the middle of
+    whatever you were looking at.
+
+    It waits on the WINDOW, not on the process.  Closing a window is not the
+    same as the process exiting — a Qt app can keep running with no window, and
+    then this would never return — so the test is "the pid still has a mapped
+    window on the display", polled once a second.  Ctrl-C still works: the
+    caller's finally: block tears everything down either way.
+    """
+    print(f"\n--hold: {label} is running.  Close its window to finish.")
+    wins = None
+    try:
+        while True:
+            if proc.proc.poll() is not None:
+                print("  the process exited")
+                break
+            ids = find_windows_by_pid(args.display, proc.pid)
+            if ids:
+                wins = ids
+            elif wins:
+                print("  the window closed")
+                break
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("\n  interrupted")
+    return 0
+
+
 def run_standalone(args):
     """`-Gs`: the preview application itself, playing real audio from JACK.
 
@@ -612,10 +664,14 @@ def run_standalone(args):
     preview = play = None
     try:
         print("preview       overteon-qml-preview --jack (own event loop)")
-        preview = Proc([EXE, "--size", args.size, "--jack"], "preview",
+        vgl_argv, vgl_env = vgl()
+        if vgl_argv:
+            print(f"gpu           {vgl_argv[0]} -d {vgl_env['VGL_DISPLAY']} "
+                  f"(real GPU; the window stays on {args.display})")
+        preview = Proc(vgl_argv + [EXE, "--size", args.size, "--jack"], "preview",
                        {"DISPLAY": args.display,
                         "JACK_DEFAULT_SERVER": JACK_SERVER,
-                        "ONYXTEON_FPS": "1"})
+                        "ONYXTEON_FPS": "1", **vgl_env})
 
         def ports():
             return [x for x in jack_ports() if x.startswith("onyxpreview:")]
@@ -702,6 +758,11 @@ def run_standalone(args):
                 print(f"  ui frames      FROZEN ({best['changed']} px changed)")
             else:
                 print(f"  ui frames      {best['changed']} px changed  <-- animating")
+        # --hold: everything above has been measured and printed; now leave the
+        # window up until it is closed by hand, instead of tearing it down on a
+        # timer.  The teardown below still runs afterwards, in the same order.
+        if args.hold:
+            hold_until_closed(args, preview, "the preview")
         return finish(results, args)
 
     finally:
@@ -755,10 +816,13 @@ def run_carla(args):
     carla = play = None
     try:
         print("carla         carla-single lv2 (its own window manager for the UI)")
-        carla = Proc(["carla-single", "lv2", LV2_URI], "carla",
+        vgl_argv, vgl_env = vgl()
+        if vgl_argv:
+            print(f"gpu           {vgl_argv[0]} -d {vgl_env['VGL_DISPLAY']}")
+        carla = Proc(vgl_argv + ["carla-single", "lv2", LV2_URI], "carla",
                      {"JACK_DEFAULT_SERVER": JACK_SERVER,
                       "LV2_PATH": os.path.expanduser("~/.lv2"),
-                      "DISPLAY": args.display})
+                      "DISPLAY": args.display, **vgl_env})
 
         # Carla registers the ports under the plug-in name, not a short client
         # name, so they are looked up by the plug-in's own name.
@@ -827,6 +891,10 @@ def run_carla(args):
             return finish(results, args)
         _, wid, ew, eh = carla_editor()
         print(f"  ui window      {wid}  {ew}x{eh}")
+
+        if args.hold:
+            hold_until_closed(args, carla, "carla-single")
+            return finish(results, args)
 
         # The host's canvas is the parent of that window; the editor must fill
         # it.  A mismatch is the device-vs-logical pixel bug.
@@ -943,7 +1011,13 @@ def run_jalv(args):
         jalv_argv.append(LV2_URI)
         print(f"jalv          {binary}{' with the plug-in UI' if args.ui else ' headless'}"
               + (f" on {args.display}" if args.ui else ""))
-        jalv = Proc(jalv_argv, "jalv", jalv_env)
+        if args.ui:
+            vgl_argv, vgl_env = vgl()
+            if vgl_argv:
+                print(f"gpu           {vgl_argv[0]} -d {vgl_env['VGL_DISPLAY']}")
+        else:
+            vgl_argv, vgl_env = [], {}
+        jalv = Proc(vgl_argv + jalv_argv, "jalv", {**jalv_env, **vgl_env})
         if not jalv.wait_port(lambda: len(jack_ports("onyx:")) > 2, timeout=25):
             print("FAIL: the plug-in did not register its JACK ports")
             print((jalv.log_text() or "")[-2000:])
@@ -1055,6 +1129,9 @@ def run_jalv(args):
             results["jalv"]["ui_window"] = on_screen
             print(f"  ui window      {'opened' if on_screen else 'DID NOT OPEN'}"
                   f" on {args.display}")
+            if args.hold and on_screen:
+                hold_until_closed(args, jalv, "jalv.gtk3")
+                return finish(results, args)
             if not on_screen:
                 results["jalv"]["ui_missing"] = True
             else:
@@ -1170,6 +1247,12 @@ def main():
     ap.add_argument("--no-audio", action="store_true",
                     help="skip mpv (--jalv only): the negative control that "
                          "proves the signal check can fail")
+    ap.add_argument("--hold", action="store_true",
+                    help="after the window is up, wait until you close it "
+                         "yourself instead of measuring for --seconds and "
+                         "quitting.  Everything is torn down in the same order "
+                         "as a timed run, so the audio and the JACK server go "
+                         "away with it.")
     args = ap.parse_args()
 
     if args.gui_host is not None:
@@ -1332,4 +1415,12 @@ def finish(results, args):
 
 
 if __name__ == "__main__":
+    # Line-buffered: bench is run interactively, and with its output redirected
+    # to a file the default block buffering showed NOTHING until the process
+    # ended — which made a perfectly healthy --hold run look like a hang.
+    try:
+        sys.stdout.reconfigure (line_buffering=True)
+        sys.stderr.reconfigure (line_buffering=True)
+    except Exception:
+        pass
     sys.exit(main())

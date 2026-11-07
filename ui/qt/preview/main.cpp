@@ -603,6 +603,22 @@ int main (int argc, char** argv)
     view.rootContext()->setContextProperty (
         "ovRuler", qEnvironmentVariableIsSet ("ONYXTEON_RULER"));
 
+    // ---- ONYXTEON_SOLO=<name>[,<name>...]: show only those widgets --------
+    //
+    // A frame-rate number for the whole window says nothing about which part
+    // spends it.  Hiding everything except one widget attributes the cost: run
+    // with `each` to see them one at a time, or with a list.
+    //
+    // Names are the widget ids used in main.qml (plots, fog, seam, header,
+    // deck, bars).  `each` runs every one in turn and reports a rate for each,
+    // which is the only honest way to attribute a frame budget.
+    {
+        const QString solo = qEnvironmentVariable ("ONYXTEON_SOLO");
+        view.rootContext()->setContextProperty ("ovSolo", solo);
+        if (! solo.isEmpty())
+            std::fprintf (stderr, "[solo] showing only: %s\n", solo.toUtf8().constData());
+    }
+
     // ---- --tick: publish and consume through a shared-memory ring ----------
     // The producer side (below) writes one record per event; this timer is the
     // consumer, and it is the only place that counts or prints.  Keeping the two

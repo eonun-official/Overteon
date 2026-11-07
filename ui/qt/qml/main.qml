@@ -81,6 +81,29 @@ Item {
         return Math.round (designPx * fitScale) / fitScale
     }
 
+    // ---- ONYXTEON_SOLO: show only the named widgets ----------------------
+    //
+    // A frame rate for the whole window cannot say WHERE the time goes.  This
+    // lets a run hide everything except one widget, so the cost can be
+    // attributed instead of guessed:
+    //
+    //     ONYXTEON_SOLO=plots      only the two EQ plots
+    //     ONYXTEON_SOLO=fog        only the overflow fog
+    //     ONYXTEON_SOLO=seam       only the seam glass
+    //     ONYXTEON_SOLO=deck       only the bottom strip
+    //
+    // Empty means "everything", which is the normal case.
+    readonly property var soloList: {
+        const s = (typeof ovSolo !== "undefined") ? String (ovSolo) : ""
+        if (!s) return null
+        return s.split (",").map (x => x.trim()).filter (x => x.length > 0)
+    }
+    /// Is this widget allowed to be visible?  Invisible names are hidden, and
+    /// the rest of the UI goes with them so nothing else is drawing.
+    function soloed (name) {
+        return soloList === null || soloList.indexOf (name) >= 0
+    }
+
     // ONYXTEON_NOFOG=1: the fog off, for a reference capture.
     property bool anyFog: ! ((typeof ovNoFog !== "undefined") && ovNoFog)
 
@@ -140,6 +163,7 @@ Item {
             // renders as a washed-out slab.
             Item {
                 id: plotLayer
+                visible: root.soloed ("plots")
         objectName: "plotLayer"
                 anchors.fill: parent
 
@@ -160,6 +184,9 @@ Item {
                     accent: OvTheme.sc
                     headerTop: true
                     glow: root.outLight * root.outLight   // --light = level^2
+                    // The CPU seam glass reads this half's pixels back; the
+                    // GPU one samples the texture and needs no readback.
+                    wantImage: root.cpuFrost
                 }
 
                 OvEqView {
@@ -173,6 +200,7 @@ Item {
                     accent: OvTheme.pq
                     headerTop: false
                     glow: root.inLight * root.inLight
+                    wantImage: root.cpuFrost
                 }
 
                 // ONE surface for both halves.  Two would be two textures and
@@ -191,8 +219,10 @@ Item {
                 // on a different sub-pixel offset at every window size and the
                 // fog crawls against the plot while a window is dragged.
                 OvEqFogGpu {
+                    id: eqFogItem
                     objectName: "eqFog"
                     enabled: root.anyFog
+                    visible: root.anyFog && root.soloed ("fog")
                     topView: scView
                     bottomView: pqView
                     fitScale: root.fitScale
@@ -215,19 +245,27 @@ Item {
             // #hdr::before — the elliptical frost on the seam.
             // GPU version; OvSeamFrost (below) is the verified CPU fallback.
             OvGpuGlass {
+                id: seamGlass
                 dbgName: "seam"
                 enabled: root.anyFrost && ! root.cpuFrost
+                visible: root.anyFrost && ! root.cpuFrost && root.soloed ("seam")
                 width: 550
                 height: 68
                 x: (parent.width - width) / 2
                 y: parent.height / 2 - height / 2
                 source: plotLayer
                 ellipse: true
+
+                OvFrameProbe {
+                    id: probeSeam
+                    objectName: "probe-seam"
+                    width: 0; height: 0
+                }
             }
 
             OvSeamFrost {
-                visible: root.cpuFrost
                 id: seamFrost
+                visible: root.cpuFrost && root.soloed ("seam")
                 width: 550
                 height: 68
                 x: (parent.width - width) / 2
@@ -239,6 +277,7 @@ Item {
             // the bars, controls and tooltips sit above the plots
             Item {
                 id: eqLayer
+                visible: root.soloed ("bars")
                 anchors.fill: parent
 
                 OvEqSection {
@@ -275,6 +314,14 @@ Item {
             }
 
             OvHeader {
+                id: headerItem
+                OvFrameProbe { id: probeHeader; objectName: "probe-header"
+                               width: 0; height: 0 }
+                // Hidden by opacity, not by visible: the header lays itself out
+                // from its own height, and collapsing it would move the plots.
+                // The cost of a transparent item is ~0; the cost of a moved
+                // layout is a wrong measurement.
+                opacity: root.soloed ("header") ? 1 : 0
                 x: 0
                 y: parent.height / 2 - height / 2
                 width: parent.width
@@ -296,6 +343,10 @@ Item {
             Rectangle { width: parent.width; height: 1; color: OvTheme.line }
 
             OvDeck {
+                id: deckItem
+                OvFrameProbe { id: probeDeck; objectName: "probe-deck"
+                               width: 0; height: 0 }
+                visible: root.soloed ("deck")
                 anchors.fill: parent
                 anchors.topMargin: 1
                 engine: root.engine
@@ -335,6 +386,49 @@ Item {
 
     Keys.onEscapePressed: { OvMenu.close(); about.close() }
     focus: true
+    // ---- ONYXTEON_SOLO read-out ------------------------------------------
+    // Each row is a widget's OWN rate, taken from that widget: the plots count
+    // inside paint(), the fog inside its own paint.  Widgets that are pure QML
+    // (the seam glass, the header, the deck) have no paint callback to count in,
+    // so they are shown as measured-by-window instead — labelled, because
+    // presenting the window is not the same as redrawing that item.
+    // The probes, by the name they are reported under.
+    readonly property var probes: ({
+        "seam":   probeSeam,
+        "header": probeHeader,
+        "deck":   probeDeck
+    })
+
+    readonly property var soloRows: {
+        if (soloList === null) return []
+        const rows = []
+        const want = (n) => soloList.indexOf ("each") >= 0 || soloList.indexOf (n) >= 0
+        if (want ("plots")) {
+            rows.push ({ name: "sc plot", fps: scView.paintFps })
+            rows.push ({ name: "pq plot", fps: pqView.paintFps })
+        }
+        if (want ("fog"))
+            rows.push ({ name: "fog", fps: eqFogItem ? eqFogItem.paintFps : null,
+                         note: eqFogItem ? "" : "not created" })
+        // The QML-only widgets mark their own frames through an OvFrameProbe:
+        // the scene graph calls into it for every frame that widget's subtree
+        // is rendered, which is that widget's rate rather than the window's.
+        for (const n of ["seam", "header", "deck", "bars"]) {
+            if (!want (n)) continue
+            const p = probes[n]
+            rows.push ({ name: n, fps: p ? p.fps : null,
+                         note: p ? "" : "no probe" })
+        }
+        return rows
+    }
+
+    OvSoloHud {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 8
+        rows: root.soloRows
+    }
+
     // ---------------------------------------------------------------------------
     //  ONYXTEON_RULER=1 overlay: a labelled grid in WINDOW coordinates, drawn on
     //  top of everything.  A screenshot then shows exactly where each element sits

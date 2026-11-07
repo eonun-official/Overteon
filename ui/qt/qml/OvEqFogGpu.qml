@@ -42,6 +42,9 @@ Item {
 
     visible: enabled && topView !== null && bottomView !== null
 
+    /// The surface's own paint rate, for ONYXTEON_SOLO.
+    readonly property alias paintFps: srcItem.paintFps
+
     readonly property int devW: Math.max (2, Math.round (width  * dpr))
     readonly property int devH: Math.max (2, Math.round (height * dpr))
 
@@ -67,17 +70,25 @@ Item {
 
     ShaderEffectSource {
         id: srcTex
-        // NOT DRAWN.  hideSource hides the ITEM it captures, not this capture
-        // itself — a ShaderEffectSource draws its content unless told not to.
-        // Leaving it visible composited the raw, razor-sharp strokes on top of
-        // their own blurred copy, so the fog looked like a hard line no matter
-        // what the shader did.  It only shows up for ONYXTEON_FOGRAW.
-        visible: root.raw
+        // NOT DRAWN — but still rendered.
+        //
+        // Two facts collide here: a ShaderEffectSource draws its own texture
+        // wherever it sits, so leaving it on screen composites the raw, sharp
+        // strokes over their blurred copy (the fog then looks like a hard line
+        // whatever the shader does); but setting `visible: false` stops it
+        // rendering at all, and the fog disappears completely — measured, 0
+        // pixels of difference against ONYXTEON_NOFOG.
+        //
+        // hideSource only hides the ITEM being captured.  So the capture stays
+        // visible and is parked off-screen, where being drawn cannot be seen.
+        // ONYXTEON_FOGRAW parks it back at 0 to show the raw strokes on purpose.
+        x: root.raw ? 0 : -100000
+        y: 0
+        visible: true
         sourceItem: srcItem
         hideSource: true
         live: true
         smooth: true
-        x: 0; y: 0
         width: root.width
         height: root.height
         sourceRect: Qt.rect (0, 0, root.width, root.height)

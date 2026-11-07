@@ -14,6 +14,9 @@
 #include <QLinearGradient>
 #include <QtMath>
 #include <QQuickWindow>
+#include <QOpenGLFramebufferObject>
+#include <QOpenGLFramebufferObjectFormat>
+#include <QOpenGLPaintDevice>
 #include <QRadialGradient>
 #include <QLinearGradient>
 #include <QVector>
@@ -137,7 +140,7 @@ namespace
     }
 }
 
-OvEqView::OvEqView (QQuickItem* parent) : QQuickPaintedItem (parent)
+OvEqView::OvEqView (QQuickItem* parent) : QQuickFramebufferObject (parent)
 {
     // Geometry changed: rebuild the picture NOW, and tell the fog.
     //
@@ -168,7 +171,8 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickPaintedItem (parent)
     setAcceptHoverEvents (true);
     setAcceptedMouseButtons (Qt::LeftButton | Qt::RightButton);
     setAntialiasing (true);
-    setOpaquePainting (true);
+    // The framebuffer is opaque: the plot always fills its own rect.
+    setFlag (QQuickItem::ItemHasContents, true);
 
     // Repaint only when something the plot draws has changed.
     //
@@ -569,6 +573,88 @@ struct OvPaintTimer
     }
 };
 
+// ---------------------------------------------------------------------------
+//  The renderer: keeps one QOpenGLPaintDevice and runs the view's paint() into
+//  the item's framebuffer with it.
+//
+//  A QOpenGLPaintDevice is what makes this GPU work rather than a copy of the
+//  CPU path.  Qt 6 still provides QOpenGL2PaintEngineEx, so paths, gradients,
+//  rounded caps and glyphs are tessellated into GL commands here instead of
+//  being rasterised into a QImage and uploaded.
+// ---------------------------------------------------------------------------
+class OvEqFboRenderer : public QQuickFramebufferObject::Renderer
+{
+public:
+    explicit OvEqFboRenderer (OvEqView* v) : m_view (v) {}
+
+    QOpenGLFramebufferObject* createFramebufferObject (const QSize& size) override
+    {
+        QOpenGLFramebufferObjectFormat f;
+        f.setAttachment (QOpenGLFramebufferObject::CombinedDepthStencil);
+        f.setSamples (0);          // the drawing is already antialiased by QPainter
+        return new QOpenGLFramebufferObject (size, f);
+    }
+
+    void render() override
+    {
+        QOpenGLFramebufferObject* fbo = framebufferObject();
+        if (fbo == nullptr || m_view == nullptr) return;
+
+        const QSize px = fbo->size();
+        if (m_dev.width() != px.width() || m_dev.height() != px.height())
+            m_dev.setSize (px);
+
+        QPainter p;
+        if (! p.begin (&m_dev)) return;
+        p.setRenderHint (QPainter::Antialiasing, true);
+        p.setRenderHint (QPainter::TextAntialiasing, true);
+        // The device is in DEVICE pixels; the drawing code works in item
+        // pixels, exactly as it did when it owned an image of that size.
+        const qreal dpr = m_view->window() != nullptr
+                        ? m_view->window()->devicePixelRatio() : 1.0;
+        p.scale (dpr, dpr);
+        m_view->paint (&p);
+        p.end();
+
+        // The CPU seam glass needs pixels, not a texture.  Read back only when
+        // it is actually on screen — this is the cost the class no longer pays.
+        if (m_view->wantImage())
+        {
+            const QImage img = fbo->toImage();
+            if (! img.isNull()) m_view->setContentImage (img);
+        }
+    }
+
+private:
+    OvEqView* m_view = nullptr;
+    QOpenGLPaintDevice m_dev;
+};
+
+QQuickFramebufferObject::Renderer* OvEqView::createRenderer() const
+{
+    return new OvEqFboRenderer (const_cast<OvEqView*> (this));
+}
+
+void OvEqView::setWantImage (bool on)
+{
+    if (m_wantImage == on) return;
+    m_wantImage = on;
+    emit wantImageChanged();
+    update();
+}
+
+// Read the framebuffer back for the CPU seam glass.  Called from the render
+// thread, so the painters below are the only thing touching the image.
+// Called from the render thread with the finished frame.
+void OvEqView::setContentImage (const QImage& img)
+{
+    m_content   = img;
+    m_unfrosted = img;      // the plot is drawn without this half's glass now
+    // Queued: the seam glass lives on the GUI thread.
+    QMetaObject::invokeMethod (this, [this] { emit contentChanged(); },
+                               Qt::QueuedConnection);
+}
+
 void OvEqView::paint (QPainter* g)
 {
     // One tick per actual paint of this plot, so `--tick` can show that the two
@@ -579,19 +665,25 @@ void OvEqView::paint (QPainter* g)
                       isSc ? ovtick::TickKind::PaintSc : ovtick::TickKind::PaintPq);
 
     OvPaintTimer _p (m_prefix == QStringLiteral ("sc") ? "sc" : "pq");
-    if (std::getenv ("ONYXTEON_FPS") != nullptr)
+
+    // This widget's own rate, counted where it actually paints.  Published to
+    // QML continuously (it is a few bytes per second) so ONYXTEON_SOLO can show
+    // it; printed only when asked.
     {
         static int frames = 0;
         static auto t0 = std::chrono::steady_clock::now();
         ++frames;
-        const auto now = std::chrono::steady_clock::now();
-        const double dt = std::chrono::duration<double> (now - t0).count();
+        const double dt = std::chrono::duration<double> (
+            std::chrono::steady_clock::now() - t0).count();
         if (dt >= 1.0)
         {
-            std::fprintf (stderr, "[fps] %s %.1f fps\n",
-                          m_prefix.toStdString().c_str(), frames / dt);
+            m_paintFps = frames / dt;
+            emit paintFpsChanged();
+            if (std::getenv ("ONYXTEON_FPS") != nullptr)
+                std::fprintf (stderr, "[fps] %s %.1f fps\n",
+                              m_prefix.toStdString().c_str(), m_paintFps);
             frames = 0;
-            t0 = now;
+            t0 = std::chrono::steady_clock::now();
         }
     }
 
@@ -601,50 +693,28 @@ void OvEqView::paint (QPainter* g)
     const double w = width(), h = height();
     const QColor accent (m_accent);
 
-    // The off-screen buffer is a plain device-pixel image: devicePixelRatio
-    // left at 1.0 on purpose.  QQuickPaintedItem hands us a painter that
-    // ALREADY carries the device-pixel-ratio transform (measured: m11 = 1.302
-    // on this display), so tagging the buffer with that same ratio made the
-    // blit scale the scene twice — the plot came out 1.302x too large and was
-    // clipped by the item's bounds, which is why only three of the five EQ
-    // nodes were visible on a scaled display and all five were fine at dpr 1.
-    // Both rects are now explicit, so there is nothing left to interpret.
-    const qreal dpr = window() != nullptr ? window()->devicePixelRatio() : 1.0;
-    const int pw = int (std::lround (w * dpr)), ph = int (std::lround (h * dpr));
-    if (m_content.width() != pw || m_content.height() != ph)
-        m_content = QImage (std::max (1, pw), std::max (1, ph),
-                            QImage::Format_ARGB32_Premultiplied);
-
     const bool prof = std::getenv ("ONYXTEON_PROFILE") != nullptr;
     const auto tRender0 = std::chrono::steady_clock::now();
-    {
-        QPainter cg (&m_content);
-        cg.setRenderHint (QPainter::Antialiasing, true);
-        cg.setRenderHint (QPainter::TextAntialiasing, true);
-        cg.scale (dpr, dpr);
-        paintContent (&cg, w, h, m_plot.top(), m_plot.bottom(), accent);
-    }
 
-    // Snapshot the plot BEFORE the glass goes on.  The seam glass samples this
-    // image, and in the page FrostEngine samples the raw canvases
-    // (grid/spec/curve/overflow), never the composited page — so handing it
-    // m_content after paintFrost() below would blur a picture that already had
-    // this half's control-pit frost painted into it.  That double frost is
-    // what made the seam look coloured compared with the page.
-    m_unfrosted = m_content;
+    // ---- draw, on the GPU ------------------------------------------------
+    //
+    // This used to rasterise into an off-screen QImage and then blit it.  The
+    // painter handed in now belongs to a QOpenGLPaintDevice, so the same calls
+    // become GL commands: no image, no upload, no CPU rasterisation.  The
+    // drawing code below is untouched — that is the whole point of going
+    // through the paint engine rather than writing shaders for the plot.
+    paintContent (g, w, h, m_plot.top(), m_plot.bottom(), accent);
 
     const double msRender = std::chrono::duration<double, std::milli> (
         std::chrono::steady_clock::now() - tRender0).count();
 
-    // How long after the mouse move did this frame reach the painter?  This is
-    // the number that decides whether a drag feels attached to the cursor;
-    // frame rate alone does not answer it.
+    // How long after the mouse move did this frame reach the painter?
     if (prof && m_lastMoveTime != std::chrono::steady_clock::time_point())
     {
         static double sumLat = 0; static int latN = 0; static double worst = 0;
         const double lat = std::chrono::duration<double, std::milli> (
                                std::chrono::steady_clock::now() - m_lastMoveTime).count();
-        if (lat < 500.0)        // ignore the gap after the drag ended
+        if (lat < 500.0)
         {
             sumLat += lat; ++latN; worst = std::max (worst, lat);
             if (latN % 30 == 0)
@@ -658,34 +728,33 @@ void OvEqView::paint (QPainter* g)
 
     if (std::getenv ("ONYXTEON_HITTEST") != nullptr)
     {
-        std::fprintf (stderr, "[paint] %s size=%.1fx%.1f dpr=%.2f nodes:",
-                      m_prefix.toStdString().c_str(), w, h, dpr);
+        std::fprintf (stderr, "[paint] %s size=%.1fx%.1f nodes:",
+                      m_prefix.toStdString().c_str(), w, h);
         for (int i = 0; i < 5; ++i)
             std::fprintf (stderr, " %d(%.1f,%.1f)", i, m_bands[i].x, m_bands[i].y);
-        std::fprintf (stderr, " content=%dx%d\n", m_content.width(), m_content.height());
+        std::fprintf (stderr, "\n");
     }
-
-    const auto tBlit0 = std::chrono::steady_clock::now();
-    g->setRenderHint (QPainter::SmoothPixmapTransform, true);
-    g->drawImage (QRectF (0, 0, w, h), m_content,
-                  QRectF (0, 0, m_content.width(), m_content.height()));
-    const double msBlit = std::chrono::duration<double, std::milli> (
-        std::chrono::steady_clock::now() - tBlit0).count();
 
     if (prof)
     {
-        static double sumRender = 0, sumBlit = 0; static int cnt = 0;
-        sumRender += msRender; sumBlit += msBlit;
+        static double sumRender = 0; static int cnt = 0;
+        sumRender += msRender;
         if (++cnt % 60 == 0) {
-            std::fprintf (stderr, "[split] %s render=%.2fms blit=%.2fms\n",
-                          m_prefix.toStdString().c_str(), sumRender / 60, sumBlit / 60);
-            sumRender = sumBlit = 0;
+            std::fprintf (stderr, "[split] %s render=%.2fms (GPU)\n",
+                          m_prefix.toStdString().c_str(), sumRender / 60);
+            sumRender = 0;
         }
     }
 
-    // Tell the seam glass that this half changed.  Queued by the receiver, so
-    // this cannot re-enter paint() and spin.
-    emit contentChanged();
+    // Tell the seam glass and the fog that this half changed.
+    //
+    // QUEUED, not a direct emit: paint() now runs wherever the scene graph
+    // renders — on the render thread in a threaded loop, which is what the
+    // plug-in uses.  The receivers call QQuickItem::update(), which is only
+    // legal on the GUI thread, so a direct signal here would drive the fog's
+    // repaint from the wrong thread.
+    QMetaObject::invokeMethod (this, [this] { emit contentChanged(); },
+                               Qt::QueuedConnection);
 }
 
 namespace

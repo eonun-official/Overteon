@@ -32,8 +32,12 @@ class OvFogSource : public QQuickPaintedItem
     Q_OBJECT
     Q_PROPERTY(OvEqView* topView    READ topView    WRITE setTopView    NOTIFY viewChanged)
     Q_PROPERTY(OvEqView* bottomView READ bottomView WRITE setBottomView NOTIFY viewChanged)
+    /// Frames this surface actually painted in the last second — its own rate,
+    /// not the window's.
+    Q_PROPERTY(double paintFps READ paintFps NOTIFY paintFpsChanged)
 
 public:
+    double paintFps() const { return m_paintFps; }
     explicit OvFogSource (QQuickItem* parent = nullptr);
 
     OvEqView* topView() const    { return m_top.data(); }
@@ -46,6 +50,7 @@ public:
 signals:
     void viewChanged();
     void revisionChanged();
+    void paintFpsChanged();
 
 private:
     void subscribe (OvEqView* v);
@@ -60,5 +65,6 @@ private:
     QPointer<OvEqView> m_top, m_bottom;
     QImage  m_cache;            // the strokes, at device resolution
     quint64 m_cacheKey = 0;     // what the cache was built from
+    double  m_paintFps = 0.0;
 
 };
