@@ -541,6 +541,7 @@ int main (int argc, char** argv)
                 prm->setValue (pv.mid (eq + 1).toDouble());
         }
 
+        widget->setMinimumSize (520, 386);   // half the design size
         widget->resize (w, h);
         widget->show();
 
@@ -840,6 +841,11 @@ int main (int argc, char** argv)
                                   q->objectName().toStdString().c_str(), q->width(), q->height());
         });
     }
+
+    // A floor, so the UI cannot be dragged down to an unreadable sliver.  Half
+    // the design size (1040x772, see OvTheme.designW/H) is still a legible
+    // layout; below that the 550 px seam glass and the header stop fitting.
+    view.setMinimumSize (QSize (520, 386));
 
     view.resize (w, h);
 

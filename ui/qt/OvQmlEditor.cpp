@@ -121,6 +121,11 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
     {
         const auto want = targetSize();
         setResizable (true, true);
+        // How far the host may stretch the editor.  The UI scales uniformly and
+        // fills the frame it is given (main.qml), so any size works — these
+        // limits only stop a host from dragging it down to something unreadable
+        // or up to a size that costs more than it shows.
+        setResizeLimits (OvThemeWidth / 2, OvThemeHeight / 2, 4096, 4096);
         setSize (want.x, want.y);
     }
 

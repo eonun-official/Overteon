@@ -26,13 +26,39 @@ Item {
     // ONYXTEON_NOFROST: no glass of any kind, for reference captures.
     property bool anyFrost: ! ((typeof ovNoFrost !== "undefined") && ovNoFrost)
 
-    width: 1040
-    height: 772
+    // The root fills the window, whatever size it is.
+    //
+    // A constant 1040x772 was the design size, and the view was supposed to
+    // overwrite it (SizeRootObjectToView).  It does not always: with --size, or
+    // when a host resizes the editor, the root stayed at the design size while
+    // the window was smaller, and the UI was a cropped slab in the corner —
+    // resizing the window changed nothing but the crop.  Binding to the parent
+    // (the window's contentItem, which Qt does keep at window size) makes the
+    // root follow the window by construction.
+    width: (parent && parent.width > 0) ? parent.width : OvTheme.designW
+    height: (parent && parent.height > 0) ? parent.height : OvTheme.designH
 
     Rectangle { anchors.fill: parent; color: OvTheme.bg }
 
-    readonly property real scaleFit: Math.min (width / OvTheme.designW,
-                                              height / OvTheme.designH)
+    // The design box is the window divided by the fit scale.
+    //
+    // Two things have to be true at once: nothing is ever cut off, and nothing
+    // is ever letterboxed.  scaleFit alone (min of the two ratios) guarantees
+    // the first — the design is scaled until one axis exactly fits — but it
+    // leaves the other axis short, and the window showed a strip of body
+    // background beside the UI.  Growing the design box by 1/scaleFit in BOTH
+    // axes fills the window exactly: the width and height that 1040x772 does
+    // not cover become extra room for the fluid regions (the two EQ plots, the
+    // deck strip), while every control keeps its exact proportions because the
+    // scale itself never changes per-axis.  No non-uniform stretch, so no
+    // distorted glyphs and no stretched knob rings.
+    //
+    // Concretely, at 1040x772 scale is 1 and the box is exactly the design; at
+    // 1200x820 the box becomes 1130x772 and the plots are 90 px wider; at
+    // 700x480 the box becomes 1126x772 and the deck stays put while the plots
+    // grow.
+    readonly property real fitScale: Math.max (1e-6,
+        Math.min (width / OvTheme.designW, height / OvTheme.designH))
 
     // menus are plain items parented here (see OvMenu): Qt Popup would ignore
     // the design scale and appear at the wrong size and position
@@ -42,7 +68,7 @@ Item {
     // returned; this reports what is drawn.
     readonly property string geomText: {
         let t = "root " + width.toFixed(0) + "x" + height.toFixed(0)
-              + "  scaleFit " + scaleFit.toFixed(3)
+              + "  fitScale " + fitScale.toFixed(3)
               + "  design " + design.width.toFixed(0) + "x" + design.height.toFixed(0)
               + "  dscale " + design.scale.toFixed(3)
         t += "\nplotLayer " + plotLayer.width.toFixed(0) + "x" + plotLayer.height.toFixed(0)
@@ -59,11 +85,14 @@ Item {
     Item {
         id: design
         objectName: "design"
-        width: OvTheme.designW
-        height: OvTheme.designH
-        anchors.centerIn: parent
-        scale: root.scaleFit
-        transformOrigin: Item.Center
+        width: root.width / root.fitScale
+        height: root.height / root.fitScale
+        x: 0
+        y: 0
+        scale: root.fitScale
+        // Top-left, not centre: the box covers the window exactly, and centring
+        // an exact fit only invites a half-pixel seam between the two edges.
+        transformOrigin: Item.TopLeft
 
         readonly property real deckH: OvTheme.deckH
         readonly property real eqH: height - deckH
