@@ -2,11 +2,18 @@
 layout(location = 0) in vec4 qt_Vertex;
 layout(location = 1) in vec2 qt_MultiTexCoord0;
 layout(location = 0) out vec2 vTex;
+// Must match blur.frag exactly: Qt fills a std140 block by uniform name, so any
+// difference in layout puts later fields at offsets it never writes.
 layout(std140, binding = 0) uniform buf {
     mat4  qt_Matrix;
     float qt_Opacity;
     float sigma;
     float axis;
+    float sigmaSlope;
+    float alphaMul;
+    float fogMid;
+    float fogGap;
+    float fogRange;
 };
 void main()
 {

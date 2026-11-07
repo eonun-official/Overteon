@@ -15,6 +15,8 @@
         <file alias="OvHeader.qml">qml/OvHeader.qml</file>
         <file alias="OvDeck.qml">qml/OvDeck.qml</file>
         <file alias="OvGpuGlass.qml">qml/OvGpuGlass.qml</file>
+        <file alias="OvEqFogGpu.qml">qml/OvEqFogGpu.qml</file>
+        <file alias="OvBlur.qml">qml/OvBlur.qml</file>
         <file alias="OvAbout.qml">qml/OvAbout.qml</file>
     </qresource>
     <qresource prefix="/res">

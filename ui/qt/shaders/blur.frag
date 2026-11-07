@@ -1,6 +1,19 @@
 #version 440
-// One axis of a separable Gaussian — the same dual-Gaussian construction the
-// CPU path runs, one direction per pass.
+// One axis of the dual Gaussian.  The kernel itself is ovDualGaussAxis() in
+// blurfunc.glsl, spliced in above by CMake — the glass and the EQ fog call the
+// same function, so there is one blur in this project, not two.
+//
+// This pass also carries what the fog needs and the glass does not use:
+//
+//   sigmaSlope   added to sigma over the height of the surface, so one pass can
+//                have a blur that grows with distance.  The fog needs exactly
+//                that; a CSS canvas can only fake it with twelve separate
+//                strokes, which is why the design has twelve bands and why
+//                those bands showed their hand-over as slabs.
+//   alphaMul     multiplies in the fog's fade, (1 - t) ^ 1.15.  Zero for glass.
+//
+// Both default to 0, and with sigmaSlope = 0 the result is bit-for-bit the
+// plain dual Gaussian the glass has always used.
 //
 // The texel size is taken from textureSize(src, 0) rather than from a uniform.
 // A uniform worked in isolation but not in the editor, where Qt's name-based
@@ -13,25 +26,39 @@ layout(std140, binding = 0) uniform buf {
     mat4  qt_Matrix;
     float qt_Opacity;
     float sigma;
-    float axis;       // 0 = horizontal pass, 1 = vertical
+    float axis;        // 0 = horizontal pass, 1 = vertical
+    float sigmaSlope;  // extra sigma over the surface's height, for the fog
+    float alphaMul;    // 1 on a pass that applies the fog's fade, 0 otherwise
+    // The fog's gradient runs outward from the seam, where the two plots meet:
+    // the upper plot's curve escapes down from its bottom edge and the lower
+    // one's escapes up from its top edge, and the two edges are a few tens of
+    // pixels apart.  So the distance that matters is measured from the SEAM
+    // centre, minus the half-gap between the two edges.  One value for the
+    // whole surface — which is what lets both halves share one texture.
+    float fogMid;      // seam centre, as a fraction of the surface's height
+    float fogGap;      // half the gap between the two plot edges, same units
+    float fogRange;    // the fog's reach, same units
 };
 layout(binding = 1) uniform sampler2D src;
 
 void main()
 {
-    vec2 texel = 1.0 / vec2 (textureSize (src, 0));
-    vec2 dir   = axis > 0.5 ? vec2 (0.0, texel.y) : vec2 (texel.x, 0.0);
+    ivec2 ts    = textureSize (src, 0);
+    vec2  texel = 1.0 / vec2 (ts);
+    vec2  dir   = axis > 0.5 ? vec2 (0.0, texel.y) : vec2 (texel.x, 0.0);
 
-    float s    = max (sigma, 0.001);
-    int   r    = int (ceil (3.0 * s));
-    vec4  sum  = texture (src, vTex);
-    float wsum = 1.0;
-    for (int i = 1; i <= r; ++i)
-    {
-        float w = exp (-float (i * i) / (2.0 * s * s));
-        sum  += (texture (src, vTex + dir * float (i)) +
-                 texture (src, vTex - dir * float (i))) * w;
-        wsum += 2.0 * w;
-    }
-    fragColor = (sum / wsum) * qt_Opacity;
+    // t is 0 at the plot edges and 1 at the fog's far end, in either direction.
+    // Irrelevant when sigmaSlope and alphaMul are both 0, which is the glass's
+    // case (it passes fogMid 0, fogGap 0, fogRange 1 and ignores the result).
+    float t = clamp ((fogGap - abs (vTex.y - fogMid)) / max (fogRange, 1e-5),
+                     0.0, 1.0);
+
+    vec4 c = ovDualGaussAxis (src, vTex, dir, sigma + sigmaSlope * t);
+
+    if (alphaMul > 0.5)
+        c *= pow (max (0.0, 1.0 - t), 1.15);
+
+    // The source is premultiplied and a Gaussian keeps it that way, which is
+    // what ShaderEffect expects.
+    fragColor = c * qt_Opacity;
 }

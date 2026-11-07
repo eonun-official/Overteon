@@ -36,7 +36,7 @@ if(OVERTEON_PREVIEW_ONLY)
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
-        ui/qt/OvEqFog.cpp
+        ui/qt/OvFogSource.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
@@ -194,7 +194,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvParam.cpp
         ui/qt/OvJuceSource.cpp
         ui/qt/OvEqView.cpp
-        ui/qt/OvEqFog.cpp
+        ui/qt/OvFogSource.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
@@ -230,16 +230,37 @@ if(OVERTEON_QT_UI)
     # Qt 6 cannot compile GLSL at run time, so the sources are baked to .qsb
     # and shipped in their own resource bundle (rcc needs literal paths, so a
     # ${VAR} entry in ov_ui.qrc would not work).
+    # The dual-Gaussian kernel lives in ONE file (blurfunc.glsl) and is spliced
+    # into the fragment shaders that call it.  qsb has no #include, so the
+    # splice happens here: the function is inserted after the #version line.
+    # One definition means the glass and the EQ fog cannot drift apart.
+    set(_ov_blurfunc "${CMAKE_CURRENT_SOURCE_DIR}/ui/qt/shaders/blurfunc.glsl")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_ov_blurfunc})
+    file(READ ${_ov_blurfunc} _ov_blurfunc_src)
+
     set(OVERTEON_SHADER_QSBS "")
     foreach(_sh
         ui/qt/shaders/blur.vert  ui/qt/shaders/blur.frag
         ui/qt/shaders/glass.vert ui/qt/shaders/glass.frag)
         get_filename_component(_shname ${_sh} NAME)
         set(_qsb "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/${_shname}.qsb")
+        set(_src "${CMAKE_CURRENT_SOURCE_DIR}/${_sh}")
+
+        if(_shname STREQUAL "blur.frag")
+            # strip the shader's own #version line, prepend the function behind
+            # a single #version — GLSL requires it to be the first statement.
+            file(READ ${_src} _body)
+            string(REGEX REPLACE "^#version[^\n]*\n" "" _body "${_body}")
+            set(_src "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/${_shname}.glsl")
+            file(WRITE ${_src} "#version 440\n${_ov_blurfunc_src}\n${_body}")
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                         ${CMAKE_CURRENT_SOURCE_DIR}/${_sh})
+        endif()
+
         add_custom_command(OUTPUT ${_qsb}
             COMMAND /usr/lib/qt6/bin/qsb --glsl 100,120,150,300es,310es,320,330,410,440
-                    -o ${_qsb} ${CMAKE_CURRENT_SOURCE_DIR}/${_sh}
-            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_sh}
+                    -o ${_qsb} ${_src}
+            DEPENDS ${_src} ${_ov_blurfunc}
             COMMENT "qsb ${_shname}")
         list(APPEND OVERTEON_SHADER_QSBS ${_qsb})
     endforeach()
@@ -270,7 +291,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
-        ui/qt/OvEqFog.cpp
+        ui/qt/OvFogSource.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
@@ -311,7 +332,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
         ui/qt/OvEqView.cpp
-        ui/qt/OvEqFog.cpp
+        ui/qt/OvFogSource.cpp
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp)

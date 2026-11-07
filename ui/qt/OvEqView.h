@@ -41,12 +41,35 @@ public:
 
     QString prefix() const { return m_prefix; }
 
-    /// Paint the overflow fog — the curve continuing past the plot edge in 12
-    /// graded bands, each blurrier and fainter.  Drawn by OvEqFog into a surface
-    /// that spans the whole EQ zone, so `origin` is where this view's (0,0)
-    /// lands in that surface.  Public because that is a different object.
+    /// Paint the outgoing curve — the part past the plot edge — as plain
+    /// strokes.  No blur and no fading: OvFogSource paints this into a texture
+    /// and fogfx.frag applies the distance-dependent blur and alpha on the GPU.
+    /// `origin` is where this view's (0,0) lands in the target's coordinates.
     void paintOverflowFog (QPainter* g, const QPointF& origin);
+
+    /// Where the fog starts and which way it goes, in this view's pixels.
+    /// Q_PROPERTYs so QML can place the fog surface without duplicating the
+    /// plot layout (fogEdge is plot().bottom() or plot().top(), which depends
+    /// on the padding rule).
+    Q_PROPERTY(double fogEdge  READ fogEdge  NOTIFY fogGeometryChanged)
+    Q_PROPERTY(double fogDir   READ fogDir   NOTIFY fogGeometryChanged)
+    Q_PROPERTY(double fogRange READ fogRange NOTIFY fogGeometryChanged)
+    double fogEdge() const;
+    double fogDir() const;
+    double fogRange() const;
     void setPrefix (const QString&);
+
+    /// How much this view is enlarged on its way to the window: 1.0 at the
+    /// design size, 2.0 when the window is twice as large.  The overflow fog
+    /// divides by it, because the fog's reach and blur profile are a fixed
+    /// treatment rather than geometry that belongs to the design.
+    double displayScale() const;
+
+    /// Everything the overflow fog's strokes are drawn from, as one number: the
+    /// five bands, the dB range, which half this is.  The fog rebuilds only when
+    /// this changes, so a repaint request that would produce the same picture
+    /// costs one comparison instead of a full path build and a repaint.
+    quint64 curveSignature() const;
 
     QString accent() const { return m_accent; }
     void setAccent (const QString&);
@@ -107,6 +130,8 @@ public:
     void hoverLeaveEvent (QHoverEvent*) override;
 
 signals:
+    /// Emitted when the plot geometry moved, so the fog surface can follow.
+    void fogGeometryChanged();
     /// m_content was just re-rendered; the seam glass has to rebuild.
     void contentChanged();
     void engineChanged();
@@ -152,11 +177,6 @@ private:
     void endDrag();
     double plotRangeDb() const;
     double inactiveOpacity() const;
-    /// How much this view is enlarged on its way to the window: 1.0 at the
-    /// design size, 2.0 when the window is twice as large.  The overflow fog
-    /// divides by it, because the fog's reach and its blur profile are a fixed
-    /// treatment rather than geometry that belongs to the design.
-    double displayScale() const;
     int nodeAt (const QPointF& pos) const;
 
     // ---- painting helpers ------------------------------------------

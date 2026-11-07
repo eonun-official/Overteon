@@ -580,6 +580,14 @@ int main (int argc, char** argv)
         "ovCpuFrost", qEnvironmentVariableIsSet ("ONYXTEON_CPUFROST"));
     view.rootContext()->setContextProperty (
         "ovNoFrost", qEnvironmentVariableIsSet ("ONYXTEON_NOFROST"));
+    // ONYXTEON_NOFOG=1 turns the EQ overflow fog off as well, for a capture
+    // that has to contain none of it.
+    view.rootContext()->setContextProperty (
+        "ovNoFog", qEnvironmentVariableIsSet ("ONYXTEON_NOFOG"));
+    // ONYXTEON_FOGRAW=1 shows the fog's strokes before the blur, for checking
+    // what the source contains on its own.
+    view.rootContext()->setContextProperty (
+        "ovFogRaw", qEnvironmentVariableIsSet ("ONYXTEON_FOGRAW"));
     view.rootContext()->setContextProperty (
         "ovGlassSigma", qEnvironmentVariable("ONYXTEON_GLASSSIGMA", "1.0").toDouble());
     // Logical-to-device ratio the QML glass chain must render at.  Taken from

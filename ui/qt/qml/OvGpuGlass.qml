@@ -95,70 +95,24 @@ Item {
         onTriggered: root.updateSrcOrigin()
     }
 
-    // ---- capture the region under the glass ------------------------------
-    ShaderEffectSource {
-        id: capture
-        width: root.devW; height: root.devH
-        sourceItem: root.source
+    // ---- the blur itself -------------------------------------------------
+    // The chain lives in OvBlur.qml, which the EQ overflow fog uses as well: one
+    // construction, so the two cannot disagree about what a blur is.  Non-linear
+    // sigma stays here, because it is a property of the glass, not of blurring.
+    OvBlur {
+        id: chain
+        source: root.source
         sourceRect: Qt.rect (root.srcOrigin.x, root.srcOrigin.y,
                              root.capW, root.capH)
-        textureSize: Qt.size (root.devW, root.devH)
-        live: true
-        recursive: false
-        smooth: true
-        visible: false
-    }
-
-    // ---- horizontal pass -------------------------------------------------
-    ShaderEffect {
-        id: passH
-        x: 0; y: 0
-        width: root.devW; height: root.devH
-        visible: false                    // intermediate, read by afterH
-        property variant src: capture
-        property real sigma: root.sigmaEff
-        property real axis: 0.0
-        vertexShader:   "qrc:/shaders/blur.vert.qsb"
-        fragmentShader: "qrc:/shaders/blur.frag.qsb"
-    }
-
-    ShaderEffectSource {
-        id: afterH
-        width: root.devW; height: root.devH
-        sourceItem: passH
-        textureSize: Qt.size (root.devW, root.devH)
-        live: true
-        smooth: true
-        visible: false
-    }
-
-    // ---- vertical pass ---------------------------------------------------
-    ShaderEffect {
-        id: passV
-        x: 0; y: 0
-        width: root.devW; height: root.devH
-        visible: false
-        property variant src: afterH
-        property real sigma: root.sigmaEff
-        property real axis: 1.0
-        vertexShader:   "qrc:/shaders/blur.vert.qsb"
-        fragmentShader: "qrc:/shaders/blur.frag.qsb"
-    }
-
-    ShaderEffectSource {
-        id: blurred
-        width: root.devW; height: root.devH
-        sourceItem: passV
-        textureSize: Qt.size (root.devW, root.devH)
-        live: true
-        smooth: true
-        visible: false
+        texW: root.devW
+        texH: root.devH
+        sigma: root.sigmaEff
     }
 
     // ---- finish: saturate, veil, shape, glow -----------------------------
     ShaderEffect {
         anchors.fill: parent
-        property variant src: blurred
+        property variant src: chain.output
         property real veil: root.veil
         property real glow: root.glow
         property real isEllipse: root.ellipse ? 1.0 : 0.0

@@ -60,6 +60,34 @@ Item {
     readonly property real fitScale: Math.max (1e-6,
         Math.min (width / OvTheme.designW, height / OvTheme.designH))
 
+    // How far the EQ overflow fog reaches past the plot edge, in design-box
+    // pixels.  224 is the page's `range`; dividing by the fit scale keeps it
+    // 224 screen px at every window size — the reach and the blur profile are
+    // a treatment, not layout, the same reasoning as the seam band below.
+    readonly property real fogRange: 224 / fitScale
+
+    // Snap a length in the design box's pixels to whole SCREEN pixels.
+    //
+    // The design box is scaled by a fractional fitScale, so a plot edge at
+    // 309.4 design px lands at 331.06 screen px — a different sub-pixel offset
+    // at every window size, which made the fog's edges crawl against the plot's
+    // while a window was being dragged.  Rounding in screen space and dividing
+    // back puts them on the pixel grid the plot is actually drawn on.
+    //
+    // Declared on the root on purpose: a function defined on a nested item is
+    // NOT visible to that item's children (QML resolves unqualified names
+    // against the component root), which silently made the bindings undefined.
+    function snapPx (designPx) {
+        return Math.round (designPx * fitScale) / fitScale
+    }
+
+    // ONYXTEON_NOFOG=1: the fog off, for a reference capture.
+    property bool anyFog: ! ((typeof ovNoFog !== "undefined") && ovNoFog)
+
+    // The seam frost's height ON SCREEN, in logical pixels: 68 at 1:1, and 68
+    // at every other window size too.  See the OvGpuGlass below for why.
+    readonly property real seamBandH: 68 / fitScale
+
     // menus are plain items parented here (see OvMenu): Qt Popup would ignore
     // the design scale and appear at the wrong size and position
     // Ground truth, straight from QML, for the --hud window: the size the
@@ -147,18 +175,40 @@ Item {
                     glow: root.inLight * root.inLight
                 }
 
-                // The overflow fog, in ONE surface for both halves.
+                // ONE surface for both halves.  Two would be two textures and
+                // two chains, and those do not present in the same frame while
+                // a window is dragged: the upper half shows a new frame and the
+                // lower one the previous one, and that mismatch IS the tearing
+                // at the crossing.  One surface cannot disagree with itself.
                 //
-                // The page's two .eqOverflow canvases are not per section: they
-                // live in #eqzone with inset:0, so a curve leaving the top plot
-                // carries on across the middle of the UI.  Drawn here — above
-                // both plots, and inside the layer the glass samples — which is
-                // the page's stacking order too.
-                OvEqFog {
+                // It spans the seam, half a reach each way; the gradient runs
+                // outward from the middle in both directions, because the two
+                // plot edges ARE the seam — the upper curve escapes down from
+                // its bottom edge, the lower escapes up from its top edge.
+                //
+                // The position is snapped to whole SCREEN pixels: the design box
+                // is scaled by a fractional fitScale, so an unsnapped edge lands
+                // on a different sub-pixel offset at every window size and the
+                // fog crawls against the plot while a window is dragged.
+                OvEqFogGpu {
                     objectName: "eqFog"
-                    anchors.fill: parent
+                    enabled: root.anyFog
                     topView: scView
                     bottomView: pqView
+                    fitScale: root.fitScale
+                    range: root.fogRange
+                    // Half the distance between the two plot edges.  Both
+                    // halves use the same padding rule, so it is that padding.
+                    edgeGap: Math.max (0, (scView.height + pqView.fogEdge
+                                            - scView.fogEdge) / 2)
+                    // A reach each way, less the gap the two edges already
+                    // cover: from (edge - reach) on one side to
+                    // (edge + reach) on the other.
+                    width: parent.width
+                    height: root.snapPx (root.fogRange * 2 - edgeGap * 2)
+                    y: root.snapPx ((scView.fogEdge
+                                     + scView.height + pqView.fogEdge) / 2
+                                    - root.fogRange + edgeGap)
                 }
             }
 

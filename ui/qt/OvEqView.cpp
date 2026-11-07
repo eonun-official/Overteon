@@ -139,6 +139,13 @@ namespace
 
 OvEqView::OvEqView (QQuickItem* parent) : QQuickPaintedItem (parent)
 {
+    // The fog surface is positioned from fogEdge()/fogRange(), which are derived
+    // from the plot layout — so it has to be told when that layout changes.
+    QObject::connect (this, &QQuickItem::widthChanged,  this,
+                      [this] { emit fogGeometryChanged(); });
+    QObject::connect (this, &QQuickItem::heightChanged, this,
+                      [this] { emit fogGeometryChanged(); });
+
     setAcceptHoverEvents (true);
     setAcceptedMouseButtons (Qt::LeftButton | Qt::RightButton);
     setAntialiasing (true);
@@ -1044,137 +1051,66 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
     if (w < 2.0 || h < 2.0) return;
 
     // Compute the layout here rather than reading m_plot: that member is only
-    // filled by paint(), and OvEqFog may well ask for the fog before this view
-    // has painted once.  Reading it gave an empty rect, the function returned
-    // immediately, and the fog was never drawn at all — the curve then ended
-    // flat at the plot edge, which is what the screenshot showed.
+    // filled by paint(), and the fog is asked for before this view has painted
+    // once.  Reading it gave an empty rect, the function returned immediately,
+    // and the fog was never drawn at all.
     gatherBands();
     QRectF plot;
     double rangeDb = 0.0;
     layoutGeometry (plot, rangeDb);
 
-    const double top = plot.top(), bottom = plot.bottom();
-    if (bottom - top < 4.0) return;
+    const double top = plot.top();
+    if (plot.bottom() - top < 4.0) return;
 
     const QColor accent (m_accent);
     const int curveStep = 2;
-    const auto& curveY = totalCurveY (w, h, top, bottom, curveStep);
+    const auto& curveY = totalCurveY (w, h, top, plot.bottom(), curveStep);
     if (curveY.empty()) return;
 
-    constexpr int    kSteps = 12;
-    // The reach of the fog and its blur profile are a TREATMENT, not geometry:
-    // they were tuned at the design size and must not grow with the window.
-    //
-    // They used to be plain design pixels, so a window at 1.5x turned the fog
-    // into 1.5x the smear — a band that reads as a glass edge at 1040x772 read
-    // as a haze at 1560x1158.  Dividing by the scale we are about to be drawn
-    // at cancels that: the fog reaches the SAME number of screen pixels past
-    // the plot edge at every window size, and its twelve bands fade over the
-    // same screen distance with the same sigmas.  The curve inside it still
-    // scales, because the curve is the plot.
-    const double kRangeCss = 224.0;                  // CSS range, design px
-    const double s         = displayScale();
-    const double kRange    = kRangeCss / s;          // in this view's units
-    const double bandW = kRange / kSteps;
-    const double edge  = m_headerTop ? bottom : top;
-    const double dir   = m_headerTop ? 1.0 : -1.0;    // outward from the plot
-    const double dim   = inactiveOpacity();
-    const double ratio = window() != nullptr ? window()->devicePixelRatio() : 1.0;
+    const double edge = fogEdge();
+    const double dir  = fogDir();
+    const double kRange = fogRange();
 
     const double lo = std::min (edge, edge + dir * kRange);
     const double hi = std::max (edge, edge + dir * kRange);
 
-    // Sample y(x) at the page's 3 px step; file each segment under the band that
-    // matches how far past the edge it is.
-    auto buildFog = [&] (auto&& yAt, QPainterPath* paths, bool* used)
+    // Sample y(x) at the page's 3 px step and keep only the part that is past
+    // the edge.  ONE path — no per-band split, no per-band blur.
+    //
+    // The twelve graded bands were the design's way of FAKING a blur that grows
+    // with distance: twelve separate strokes, each with its own canvas filter.
+    // Reproducing that with twelve off-screen images and twelve CPU Gaussians
+    // did reproduce it — including the part that should never have been
+    // visible: a band is a hard-edged slice, so wherever the curve handed over
+    // from one band to the next there was a step, and the seam region showed
+    // them as stacked slabs.  On the GPU the same falloff is a continuous
+    // function of distance (see fogfx.frag), so there is nothing to step
+    // between.
+    auto buildPath = [&] (auto&& yAt, QPainterPath& path)
     {
         auto clampY = [&] (double y) { return std::clamp (y, lo, hi); };
 
         double prevX = 0.0;
         double prevY = clampY (yAt (0.0));
+        bool  open = false;
         for (double x = 3.0; ; x += 3.0)
         {
             const double xx = std::min (x, w);
             const double yy = clampY (yAt (xx));
             const double mid = (prevY + yy) * 0.5;
             const double outward = dir > 0 ? (mid - edge) : (edge - mid);
-            if (outward > 0.0 && outward < kRange)
+            if (outward > 0.0)
             {
-                const int k = std::min (kSteps - 1, int (outward / bandW));
-                paths[k].moveTo (prevX, prevY);
-                paths[k].lineTo (xx, yy);
-                used[k] = true;
+                if (! open) { path.moveTo (prevX, prevY); open = true; }
+                path.lineTo (xx, yy);
+            }
+            else
+            {
+                open = false;       // back inside the plot: start a new run
             }
             prevX = xx;
             prevY = yy;
             if (xx >= w) break;
-        }
-    };
-
-    // Every band except k = 0 goes through a real Gaussian blur; k = 0 is the
-    // page's `filter = "none"`.
-    auto strokeFog = [&] (QPainterPath* paths, const bool* used,
-                          const QColor& colour, double lineWidth)
-    {
-        for (int k = 0; k < kSteps; ++k)
-        {
-            if (! used[k]) continue;
-
-            QColor c = colour;
-            c.setAlphaF (colour.alphaF() * dim
-                         * std::pow (1.0 - double (k) / double (kSteps), 1.15));
-            const QPen pen (c, lineWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-
-            if (k == 0)
-            {
-                g->setPen (pen);
-                g->setBrush (Qt::NoBrush);
-                g->drawPath (paths[k]);
-                continue;
-            }
-
-            // Same division as kRange: the blur profile is a treatment with a
-            // fixed size on screen, so it must not be multiplied by the window
-            // scale as well.  lineWidth is deliberately NOT divided — the fog
-            // has to continue the curve's stroke, which does scale, or there
-            // would be a width step right at the plot edge.
-            const double sigma  = (0.4 + k * 0.55) / s;  // CSS px
-            const double margin = 3.0 * sigma;
-
-            // No brightness compensation for the blur.  A Gaussian keeps total
-            // energy, so a blurry band is dimmer at its peak than a sharp one —
-            // and the browser's blur() does exactly the same.  Boosting the
-            // layer first made the far bands BRIGHTER than the page (measured
-            // max(R-G) at k=9: 23 against the page's 3).
-
-            // Blur only this band's rectangle plus a 3-sigma margin: a band is
-            // one stripe of the curve, so this is a few thousand pixels rather
-            // than a full-surface pass.
-            QRectF box = paths[k].boundingRect()
-                             .adjusted (-margin, -margin, margin, margin);
-            if (box.isEmpty()) continue;
-
-            const int bwi = std::max (1, int (std::lround (box.width()  * ratio)));
-            const int bhi = std::max (1, int (std::lround (box.height() * ratio)));
-
-            QImage layer (bwi, bhi, QImage::Format_ARGB32_Premultiplied);
-            layer.fill (Qt::transparent);
-            {
-                QPainter lp (&layer);
-                lp.setRenderHint (QPainter::Antialiasing, true);
-                lp.scale (ratio, ratio);
-                lp.translate (-box.left(), -box.top());
-                lp.setPen (pen);
-                lp.setBrush (Qt::NoBrush);
-                lp.drawPath (paths[k]);
-            }
-
-            // The layer is in DEVICE pixels, so sigma is too.
-            const QImage blurred = OvFrost::dualGaussian (layer, sigma * ratio);
-
-            g->setPen (Qt::NoPen);
-            g->drawImage (box, blurred,
-                          QRectF (0, 0, blurred.width(), blurred.height()));
         }
     };
 
@@ -1184,31 +1120,27 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
 
     // ---- the five band curves, .22 accent, 1 px --------------------------
     {
-        QPainterPath paths[kSteps];
-        bool used[kSteps] = {};
-
+        QPainterPath path;
         for (int i = 0; i < 5; ++i)
         {
             const auto& b = m_bands[i];
             if (! b.active) continue;
-            buildFog ([&] (double x)
-                      {
-                          return toY (bandMagAt (b, fromX (x, w)),
-                                      h, rangeDb, top, bottom);
-                      },
-                      paths, used);
+            buildPath ([&] (double x)
+                       {
+                           return toY (bandMagAt (b, fromX (x, w)),
+                                       h, rangeDb, top, plot.bottom());
+                       },
+                       path);
         }
-
         QColor bandColour = accent;
         bandColour.setAlphaF (0.22f);
-        strokeFog (paths, used, bandColour, 1.0);
+        g->setPen (QPen (bandColour, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        g->drawPath (path);
     }
 
     // ---- the total curve, accent, 2 px -----------------------------------
     {
-        QPainterPath paths[kSteps];
-        bool used[kSteps] = {};
-
+        QPainterPath path;
         auto totalAt = [&] (double x)
         {
             const double t = std::clamp (x / double (curveStep), 0.0,
@@ -1218,26 +1150,66 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
             return curveY[(size_t) i]
                  + (curveY[(size_t) j] - curveY[(size_t) i]) * (t - i);
         };
-
-        buildFog (totalAt, paths, used);
-        if (std::getenv ("ONYXTEON_FOGDEBUG") != nullptr)
-        {
-            // The numbers a screenshot cannot settle: what the fog's reach and
-            // its finest blur actually come out at ON SCREEN.  Both must be the
-            // same at every window size; only the view-space values may change.
-            std::fprintf (stderr,
-                          "[fog] %s scale:%.4f  reach:%.2f viewpx = %.2f screenpx"
-                          "  band:%.2f  sigma11:%.2f screenpx\n",
-                          m_prefix.toStdString().c_str(), s, kRange, kRange * s,
-                          bandW * s, (0.4 + (kSteps - 1) * 0.55));
-            std::fprintf (stderr, "[fog] %s used:", m_prefix.toStdString().c_str());
-            for (int k = 0; k < kSteps; ++k) std::fprintf (stderr, " %d", (int) used[k]);
-            std::fprintf (stderr, "\n");
-        }
-        strokeFog (paths, used, accent, 2.0);
+        buildPath (totalAt, path);
+        g->setPen (QPen (accent, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        g->drawPath (path);
     }
 
     g->restore();
+}
+
+// ---------------------------------------------------------------------------
+//  The geometry the GPU pass needs, in this view's own pixels.
+//
+//  fogEdge  the plot edge the curve escapes from
+//  fogDir   +1 when it escapes downward (this half's header is on top),
+//           -1 when it escapes upward
+//  fogRange how far it reaches.  Deliberately divided by displayScale(): the
+//           reach and the blur profile are a TREATMENT tuned at the design
+//           size, not geometry, so they keep the same size on screen at every
+//           window size.  The curve inside still scales, because that is the
+//           plot.
+// ---------------------------------------------------------------------------
+quint64 OvEqView::curveSignature() const
+{
+    const_cast<OvEqView*> (this)->gatherBands();
+    QRectF plot;
+    double rangeDb = 0.0;
+    layoutGeometry (plot, rangeDb);
+
+    quint64 h = 1469598103934665603ull;
+    auto mix = [&h] (quint64 v) { h = (h ^ v) * 1099511628211ull; };
+    auto mixd = [&mix] (double d) { mix (quint64 (qint64 (std::llround (d * 256.0)))); };
+
+    mix (quint64 (m_headerTop ? 1 : 0));
+    mixd (rangeDb);
+    for (const auto& b : m_bands)
+    {
+        mix (quint64 (b.type));
+        mix (quint64 (b.active ? 1 : 0));
+        mixd (std::log (std::max (1e-3, b.freq)));
+        mixd (b.gain);
+        mixd (b.q);
+    }
+    return h;
+}
+
+double OvEqView::fogEdge() const
+{
+    QRectF plot;
+    double rangeDb = 0.0;
+    layoutGeometry (plot, rangeDb);
+    return m_headerTop ? plot.bottom() : plot.top();
+}
+
+double OvEqView::fogDir() const
+{
+    return m_headerTop ? 1.0 : -1.0;
+}
+
+double OvEqView::fogRange() const
+{
+    return 224.0 / displayScale();
 }
 
 void OvEqView::paintOverlay (QPainter* g, double w, double h,
