@@ -167,12 +167,88 @@ string mockBackendScript ()
   const functions = ["applyInit", "savePreset", "loadPreset", "listPresets",
                      "loadPresetAt", "openExternal"];
 
+  // ---------------------------------------------------------------------------
+  //  Remembering what the user changed
+  // ---------------------------------------------------------------------------
+  // Without this, every change was lost on reload: the page always started from
+  // the defaults, so a state worth looking at had to be re-typed — or, worse,
+  // encoded into the URL by hand — before anything could be compared.  The
+  // server now holds the state it was given and restores it on the next load.
+  //
+  // Three sources, most specific first:
+  //
+  //   * the URL (?sc1Freq=115&...), so a link reproduces an exact state and a
+  //     comparison run is reproducible from the address bar;
+  //   * localStorage, which is what "holds its parameters when changed" means —
+  //     a reload, or a new tab on the same page, comes back to the same values;
+  //   * the defaults.
+  //
+  // Keyed by PATHNAME because /original and /current are two different front
+  // ends served from one origin, and they must not overwrite each other's state.
+  const STORE_KEY = "overteon.params:" + location.pathname;
+
+  function normOfValue (p, v) {
+    return (p.kind === "c")
+        ? Math.max (0, Math.min (1, Math.round (v) / (choiceCount (p) - 1)))
+        : Math.pow (Math.max (0, Math.min (1, (v - p.lo) / (p.hi - p.lo))), p.skew);
+  }
+
+  function ensureChoiceCount (p) { return p.choices.length; }
+
+  function loadStored () {
+    try {
+      const raw = localStorage.getItem (STORE_KEY);
+      if (!raw) return {};
+      const o = JSON.parse (raw);
+      return (o && typeof o === "object") ? o : {};
+    } catch (e) {
+      return {};                      // private mode, quota, corrupt JSON
+    }
+  }
+
+  // Write as VALUES, not normalised numbers: the value is what the page and the
+  // Qt preview's --set both speak, so a stored file can be read by a human and
+  // pasted into a URL.
+  let saveTimer = null;
+  function saveStored () {
+    if (saveTimer !== null) return;
+    saveTimer = setTimeout (function () {
+      saveTimer = null;
+      try {
+        const o = {};
+        for (const id in P) if (P[id].norm !== P[id].defNorm) o[id] = valueOfParam (P[id]);
+        if (Object.keys (o).length === 0) localStorage.removeItem (STORE_KEY);
+        else localStorage.setItem (STORE_KEY, JSON.stringify (o));
+      } catch (e) { /* quota or no storage: not fatal */ }
+    }, 200);
+  }
+
+  // Keep the address bar in step, so a state can be shared by copying the URL.
+  // replaceState rather than pushState: this is not navigation and must not fill
+  // the back history with one entry per knob turn.
+  function syncUrl () {
+    try {
+      const qs = [];
+      for (const id in P) if (P[id].norm !== P[id].defNorm)
+        qs.push (encodeURIComponent (id) + "=" + valueOfParam (P[id]));
+      if (FROZEN) qs.push ("freeze=1");
+      if (mT) qs.push ("t=" + mT[1]);
+      const url = location.pathname + (qs.length ? "?" + qs.join("&") : "");
+      history.replaceState (null, "", url);
+    } catch (e) { /* some embeddings refuse; the page still works */ }
+  }
+
   function handleInvoke(payload) {
     const { name, params, resultId } = payload;
     let result = true;
 
     if (name === "applyInit") {
       for (const id in P) P[id].target = P[id].defNorm;
+      // INIT means "back to defaults", so the remembered state has to go too —
+      // leaving it would restore the old values on the next reload and make
+      // INIT look like it had done nothing.
+      try { localStorage.removeItem (STORE_KEY); } catch (e) {}
+      syncUrl();
     } else if (name === "listPresets") {
       result = JSON.stringify(presets);
     } else if (name === "loadPresetAt") {
@@ -210,6 +286,12 @@ string mockBackendScript ()
           const lin = (payload.value - p.lo) / (p.hi - p.lo);
           p.norm = Math.pow(Math.min(1, Math.max(0, lin)), p.skew);
         }
+        // The user changed something: hold it, and reflect it in the URL.
+        // p.target follows too, otherwise the easing loop below would drag the
+        // value straight back to where the target still pointed.
+        p.target = p.norm;
+        saveStored();
+        syncUrl();
         emit(eventId, { eventType: "valueChanged", value: valueOfParam(p) });
       }
     },
@@ -236,9 +318,11 @@ string mockBackendScript ()
   const FROZEN  = /[?&]freeze=1/.test(location.search);
   const mT      = /[?&]t=([0-9.]+)/.exec(location.search);
 
+
   // ?pq1Freq=595&pq1Gain=-7.2 sets parameters by name, the same way the Qt
   // preview's --set does.  Without this a comparison could only ever run the
   // defaults, and the defaults are all 0 dB — a flat curve tests nothing.
+  const urlIds = new Set();
   (function applyUrlParams () {
     const qs = location.search.replace(/^[?]/, "").split("&");
     for (const kv of qs) {
@@ -251,7 +335,34 @@ string mockBackendScript ()
       p.target = p.norm = (p.kind === "c")
           ? Math.max(0, Math.min(1, Math.round(v) / (p.choices.length - 1)))
           : Math.pow(Math.max(0, Math.min(1, (v - p.lo) / (p.hi - p.lo))), p.skew);
+      urlIds.add (k);
     }
+  })();
+
+  // Restore what was last changed, unless the URL already said otherwise for
+  // that parameter — a link must always win over whatever this browser happens
+  // to remember, or a shared comparison URL would silently show something else.
+  (function applyStored () {
+    const stored = loadStored();
+    for (const id in stored) {
+      const p = P[id];
+      if (!p) continue;                       // a parameter that no longer exists
+      const v = parseFloat(stored[id]);
+      if (!isFinite(v)) continue;
+      if (urlIds.has (id)) continue;          // the URL said it explicitly
+      p.target = p.norm = normOfValue (p, v);
+    }
+  })();
+
+  // A link is a setting too: seed the store from whatever the URL asked for, so
+  // a reload without the query string still comes back to that state and the
+  // address bar can be simplified to the bare page.
+  (function seedFromUrl () {
+    let any = false;
+    for (const id in P) if (P[id].norm !== P[id].defNorm) any = true;
+    if (!any) return;
+    saveStored();
+    syncUrl();
   })();
   const PINNED  = FROZEN ? 1.0 : (mT ? parseFloat(mT[1]) : null);
 
