@@ -617,7 +617,7 @@ namespace {
 // detached rather than left drawn as nothing.
 bool applyTexture (QQuickWindow* win, QSGImageNode* node, const QImage& img,
                    const QString& key, QString& haveKey, QImage& keep,
-                   const QRectF& rect)
+                   const QRectF& rect, QVector<QSGTexture*>& retired)
 {
     if (node == nullptr || win == nullptr) return false;
     if (img.isNull() || rect.isEmpty())
@@ -769,6 +769,19 @@ void OvEqView::setWantImage (bool on)
 
 QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 {
+#define OV_NODE_TIMING 0
+#if OV_NODE_TIMING
+    const auto _t0 = std::chrono::steady_clock::now();
+    double _msLayers = 0.0;
+#endif
+    // Free what the PREVIOUS frame retired.  A texture replaced during the sync
+    // phase may still be referenced by the batch the renderer is finishing, so
+    // it gets one frame of grace.  Without any of this the uploads accumulated:
+    // every drag frame leaked a 1040x333 texture and the window slowed down as
+    // it ran, which is the "it gets slower the longer I drag" report.
+    if (window() != nullptr)
+        for (QSGTexture* t : m_texRetired) delete t;
+    m_texRetired.clear();
     if (std::getenv ("ONYXTEON_NODERATE"))
     {
         static int n = 0;
@@ -814,6 +827,10 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 
     OvEqView::Layers L;
     buildLayers (L);
+#if OV_NODE_TIMING
+    _msLayers = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - _t0).count();
+#endif
 
     if (m_sgRoot == nullptr)
     {
@@ -845,12 +862,12 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 
     // ---- background ------------------------------------------------------
     {
-        const QImage& img = ! L.background.isNull() ? L.background
-                                                   : backgroundImage (width(), height(),
-                                                                      m_plot.top(), m_plot.bottom(),
-                                                                      QColor (m_accent));
-        slot (m_sgBg, applyTexture (window(), m_sgBg, img, L.bgKey,
-                                    m_texKeyBg, m_texImgBg, full));
+        // Only a NULL image means "unchanged"; buildLayers() hands back pixels
+        // solely for a layer whose cache key moved, so an idle frame uploads
+        // nothing at all.
+        if (! L.background.isNull())
+            slot (m_sgBg, applyTexture (window(), m_sgBg, L.background, L.bgKey,
+                                        m_texKeyBg, m_texImgBg, full, m_texRetired));
     }
 
     // ---- spectrum (the only thing that changes per frame) ----------------
@@ -904,17 +921,15 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
                                       have ? m_glowBar : QImage(),
                                       have ? QString::number (m_glowKey) : QString(),
                                       m_texKeyGlow, m_texImgGlow,
-                                      have ? dest : QRectF()));
+                                      have ? dest : QRectF(), m_texRetired));
     }
 
     // ---- overlay ---------------------------------------------------------
     {
-        const QImage& img = ! L.overlay.isNull() ? L.overlay
-                                                : overlayImage (width(), height(),
-                                                                m_plot.top(), m_plot.bottom(),
-                                                                QColor (m_accent));
-        slot (m_sgOverlay, applyTexture (window(), m_sgOverlay, img, L.overlayKey,
-                                         m_texKeyOv, m_texImgOv, full));
+        if (! L.overlay.isNull())
+            slot (m_sgOverlay, applyTexture (window(), m_sgOverlay, L.overlay,
+                                             L.overlayKey, m_texKeyOv, m_texImgOv, full,
+                                             m_texRetired));
     }
 
     // Tell the glass and the fog that this plot produced a new picture.
@@ -932,6 +947,16 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     QMetaObject::invokeMethod (this, [this] { emit contentChanged(); },
                                Qt::QueuedConnection);
 
+#if OV_NODE_TIMING
+    {
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - _t0).count();
+        if (ms > 4.0)
+            std::fprintf (stderr, "[nodet] %s %.1f ms (layers %.1f)\n",
+                          qPrintable (m_prefix), ms, _msLayers);
+    }
+#endif
+    (void) 0;
     QSGNode* root = m_sgRoot;
     return root;
 }
@@ -1564,9 +1589,25 @@ void OvEqView::fogSegments (const QPointF& origin, QVector<FogSegment>& out)
             const double mid = (prevY + yy) * 0.5;
             const double outward = dir > 0 ? (mid - edge) : (edge - mid);
             if (outward > 0.0)
+            {
+                // FADE HERE, before any blur — not in the shader afterwards.
+                //
+                // The painter version multiplied each band's alpha by
+                // (1 - k/12)^1.15 and THEN blurred it, so the fade itself is
+                // smoothed along with the stroke.  Applying the same ramp to the
+                // blurred result instead gives every output pixel the weight of
+                // ITS OWN position, including energy blurred in from much further
+                // out — where the fade is nearly zero but the incoming stroke was
+                // at full alpha.  Measured: 1.30x too bright across the whole
+                // crossing, which is exactly the "the fog does not match" report.
+                const double t = std::clamp (outward / std::max (1e-6, kRange), 0.0, 1.0);
+                QColor c = colour;
+                c.setAlphaF (colour.alphaF() * std::pow (1.0 - t, 1.15));
+
                 out.push_back ({ QPointF (origin.x() + prevX, origin.y() + prevY),
                                  QPointF (origin.x() + xx,    origin.y() + yy),
-                                 colour, width });
+                                 c, width });
+            }
             prevX = xx;
             prevY = yy;
             if (xx >= w) break;

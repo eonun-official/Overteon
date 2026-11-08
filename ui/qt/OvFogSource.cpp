@@ -1,12 +1,11 @@
 #include "OvFogSource.h"
 
-#include <QSGGeometryNode>
-#include <QSGVertexColorMaterial>
+#include <QPainter>
 #include <QQuickWindow>
+#include <QSGImageNode>
 #include <QTimer>
 
 #include <chrono>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include "OvEqView.h"
@@ -15,7 +14,6 @@
 OvFogSource::OvFogSource (QQuickItem* parent) : QQuickItem (parent), m_tick (this)
 {
     setFlag (QQuickItem::ItemHasContents, true);
-    setAntialiasing (true);
 
     // Safety net only.  The real trigger is the plots' contentChanged; this
     // catches a revision that did not cross OvEngine's change threshold.
@@ -58,13 +56,9 @@ void OvFogSource::subscribe (OvEqView* v)
     });
     connect (v, &OvEqView::fogGeometryChanged, this, [this] { markDirty(); });
 
-    // Repaint WHENEVER THE PLOTS REPAINT.
-    //
-    // Driving this from the parameter signal alone made it update about twice a
-    // second while everything around it ran at 60-80: a parameter revision is
-    // not the same event as "the curve on screen changed".  contentChanged is
-    // emitted at the end of every plot repaint, which is the cadence this has to
-    // match; the signature check then decides whether anything really moved.
+    // Repaint WHENEVER THE PLOTS REPAINT.  The parameter signal alone made this
+    // update about twice a second while everything around it ran at 60-80: a
+    // parameter revision is not the same event as "the curve on screen changed".
     connect (v, &OvEqView::contentChanged, this, [this] { markDirty(); });
 
     if (auto* e = v->engine())
@@ -98,21 +92,17 @@ quint64 OvFogSource::signature() const
     return h;
 }
 
-// ---------------------------------------------------------------------------
-//  The geometry.
-//
-//  Every segment of the outgoing curve becomes a quad (two triangles), with the
-//  colour carried per vertex.  QSGVertexColorMaterial is Qt's own material for
-//  exactly this and works on every RHI backend, so nothing here knows or cares
-//  whether the backend is GL.
-//
-//  Overlapping quads at the joins double-blend slightly; it is invisible on a
-//  1-2 px line that a 6 px Gaussian is about to blur.
-// ---------------------------------------------------------------------------
 QSGNode* OvFogSource::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 {
-    // This surface's own frame rate: this is called once per frame in which the
-    // item is rendered.
+    // Free what the previous frame retired: a texture replaced during the sync
+    // phase may still be referenced by the batch the renderer is finishing, so it
+    // gets one frame of grace.  QSGImageNode does not own its texture.
+    for (QSGTexture* t : m_retired) delete t;
+    m_retired.clear();
+
+    if (window() == nullptr) return old;
+
+    // Count this surface's own frames.
     {
         static int frames = 0;
         static auto t0 = std::chrono::steady_clock::now();
@@ -124,109 +114,58 @@ QSGNode* OvFogSource::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
             m_paintFps = frames / dt;
             frames = 0; t0 = std::chrono::steady_clock::now();
             if (std::getenv ("ONYXTEON_FOGRATE") != nullptr)
-                std::fprintf (stderr, "[fogr] geometry %.1f/s\n", m_paintFps);
+                std::fprintf (stderr, "[fogr] repaint %.1f/s\n", m_paintFps);
         }
     }
 
+    if (old == nullptr)
+    {
+        m_node = nullptr;
+        m_texKey = QUuid();
+        m_builtKey = 0;
+    }
+
+    if (m_node == nullptr)
+    {
+        m_node = window()->createImageNode();
+        m_node->setFiltering (QSGTexture::Linear);
+        m_node->setTextureCoordinatesTransform (QSGImageNode::NoTransform);
+    }
+
     const quint64 key = signature();
-    if (key == m_builtKey && old != nullptr)
-        return old;
-
-    QVector<OvEqView::FogSegment> segs;
-    if (m_top != nullptr)
+    if (key != m_builtKey || m_img.isNull())
     {
-        QVector<OvEqView::FogSegment> part;
-        m_top->fogSegments (m_top->mapToItem (this, QPointF (0, 0)), part);
-        segs += part;
+        const double dpr = window()->devicePixelRatio();
+        const int pw = std::max (1, int (std::lround (width()  * dpr)));
+        const int ph = std::max (1, int (std::lround (height() * dpr)));
+
+        if (m_img.width() != pw || m_img.height() != ph)
+            m_img = QImage (pw, ph, QImage::Format_ARGB32_Premultiplied);
+        m_img.fill (Qt::transparent);
+
+        {
+            QPainter g (&m_img);
+            g.setRenderHint (QPainter::Antialiasing, true);
+            g.scale (dpr, dpr);
+            // Both halves into ONE surface, so the fog cannot be a frame apart
+            // from itself while a window is dragged.
+            if (m_top != nullptr)
+                m_top->paintOverflowFog (&g, m_top->mapToItem (this, QPointF (0, 0)));
+            if (m_bottom != nullptr)
+                m_bottom->paintOverflowFog (&g, m_bottom->mapToItem (this, QPointF (0, 0)));
+        }
+
+        // Upload.  The image is kept as a member because
+        // createTextureFromImage commits the pixels during the render pass.
+        if (QSGTexture* old = m_node->texture()) m_retired.push_back (old);
+        m_keep = m_img;
+        m_node->setTexture (window()->createTextureFromImage (m_keep));
+        m_builtKey = key;
+
+        ++m_revision;
+        emit revisionChanged();
     }
-    if (m_bottom != nullptr)
-    {
-        QVector<OvEqView::FogSegment> part;
-        m_bottom->fogSegments (m_bottom->mapToItem (this, QPointF (0, 0)), part);
-        segs += part;
-    }
 
-    QSGGeometryNode* node = static_cast<QSGGeometryNode*> (old);
-    if (node == nullptr)
-    {
-        node = new QSGGeometryNode;
-        auto* geom = new QSGGeometry (QSGGeometry::defaultAttributes_ColoredPoint2D(),
-                                      int (std::max<qsizetype> (6, segs.size() * 6)));
-        geom->setDrawingMode (QSGGeometry::DrawTriangles);
-        node->setGeometry (geom);
-        node->setFlag (QSGNode::OwnsGeometry);
-        node->setMaterial (new QSGVertexColorMaterial);
-        node->setFlag (QSGNode::OwnsMaterial);
-    }
-
-    QSGGeometry* geom = node->geometry();
-    if (geom->vertexCount() < segs.size() * 6)
-        geom->allocate (int (std::max<qsizetype> (6, segs.size() * 6)));
-
-    auto* v = geom->vertexDataAsColoredPoint2D();
-    int n = 0;
-    for (const auto& s : segs)
-    {
-        const double dx = s.b.x() - s.a.x();
-        const double dy = s.b.y() - s.a.y();
-        const double len = std::hypot (dx, dy);
-        if (len < 1e-6) continue;
-        // ANTIALIASED EDGES.
-        //
-        // QSGGeometry has no antialiasing of its own — setAntialiasing() only
-        // reaches QPainter, which this class does not use — so a quad's edges
-        // come out hard and the fog looked jagged.  Each quad is drawn 1 device
-        // pixel wider than the stroke with its edge vertices fully transparent;
-        // the GPU interpolates the alpha across that skirt, which is what a
-        // coverage-based rasteriser would have produced.
-        //
-        // The skirt is in ITEM units and one device pixel is 1/dpr of one, so the
-        // widening is divided back out.
-        const double dpr  = window() != nullptr ? window()->devicePixelRatio() : 1.0;
-        const double skirt = 0.5 / std::max (1.0, dpr);
-        const double hw = s.width * 0.5 + skirt;
-        const double nx = -dy / len * hw;
-        const double ny =  dx / len * hw;
-
-        const QPointF p0 (s.a.x() + nx, s.a.y() + ny);
-        const QPointF p1 (s.b.x() + nx, s.b.y() + ny);
-        const QPointF p2 (s.b.x() - nx, s.b.y() - ny);
-        const QPointF p3 (s.a.x() - nx, s.a.y() - ny);
-
-        // The SEGMENT'S OWN COLOUR, premultiplied.  This used to be (a, a, a) —
-        // a grey whose brightness was the alpha — because FogSegment carried no
-        // colour at all, which is why the crossing had no colour.
-        const float a = std::clamp (float (s.color.alphaF()), 0.0f, 1.0f);
-        const uchar A = uchar (std::clamp (int (a * 255.0f + 0.5f), 0, 255));
-        const uchar R = uchar (std::clamp (int (s.color.redF()   * a * 255.0f + 0.5f), 0, 255));
-        const uchar G = uchar (std::clamp (int (s.color.greenF() * a * 255.0f + 0.5f), 0, 255));
-        const uchar B = uchar (std::clamp (int (s.color.blueF()  * a * 255.0f + 0.5f), 0, 255));
-        auto put = [&] (const QPointF& p) {
-            v[n].set (float (p.x()), float (p.y()), R, G, B, A);
-            ++n;
-        };
-        put (p0); put (p1); put (p2);
-        put (p0); put (p2); put (p3);
-    }
-    geom->setVertexCount (n);
-    node->markDirty (QSGNode::DirtyGeometry);
-
-    if (std::getenv ("ONYXTEON_FOGDEBUG") != nullptr)
-        std::fprintf (stderr, "[foggeo] segs %d verts %d item %.1fx%.1f key %llu\n",
-                      int (segs.size()), n, width(), height(),
-                      (unsigned long long) key);
-
-    m_builtKey = key;
-    ++m_built;
-
-    // EVERY rebuild, not every sixtieth.
-    //
-    // The signal is what tells the blur chain downstream that the strokes
-    // changed; emitting it on a counter meant a drag updated the geometry on
-    // every frame but the chain was only woken once every 60 builds, so the
-    // crossing stayed on whatever picture it had when the counter last wrapped.
-    // Measured symptom: dragging an EQ node updates the curve but the fog does
-    // not move at all.
-    emit revisionChanged();
-    return node;
+    m_node->setRect (QRectF (0, 0, width(), height()));
+    return old != nullptr ? old : m_node;
 }

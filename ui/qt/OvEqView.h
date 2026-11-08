@@ -20,6 +20,7 @@
 #include <vector>
 #include <QVector>
 #include <QSGGeometryNode>
+#include <QSGTexture>
 #include <QSGImageNode>
 #include <QColor>
 #include <chrono>
@@ -296,6 +297,13 @@ private:
     // The images the textures are uploaded from.  They must outlive the upload,
     // which happens later in the render pass, so they are kept here.
     QImage  m_texImgBg, m_texImgGlow, m_texImgOv;
+    // Textures replaced this frame, freed at the START of the next one.
+    //
+    // QSGImageNode::setTexture() does NOT take ownership, so every replaced
+    // texture has to be deleted by hand or it leaks — and the old one cannot be
+    // freed immediately, because the previous frame's batch may still be in
+    // flight.  One frame of grace is the standard remedy.
+    QVector<QSGTexture*> m_texRetired;
     bool    m_spAttached = true;
     /// Blit the cached glow image through the trapezoid clip.
     void drawGlowImage (QPainter* g, double pitX, double barY,

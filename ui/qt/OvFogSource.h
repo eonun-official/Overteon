@@ -1,26 +1,33 @@
 #pragma once
 // ============================================================
-//  OvFogSource — the outgoing EQ curve, as RHI geometry.
+//  OvFogSource — the outgoing EQ curve, as a cached texture.
 //
-//  Both halves' curves past the plot edge, emitted as triangles through
-//  QQuickItem::updatePaintNode.  Qt renders that with whatever RHI backend is
-//  active — GL, D3D11, Vulkan or Metal — so there is no GL dependency and no
-//  per-frame upload.
+//  Both halves' curves past the plot edge, painted ONCE per curve change into a
+//  device-resolution QImage and handed to the scene graph as a texture.  The blur
+//  and the fade are blur.frag, which is a ShaderEffect and therefore already
+//  backend-agnostic, so nothing here depends on OpenGL.
 //
-//  Why not QPainter: Qt 6 has only two QPainter engines, raster (CPU) and
-//  QOpenGL2PaintEngineEx (GL).  A QPainter that rasterises on the GPU therefore
-//  forces OpenGL, which is why the first attempt had to be a
-//  QQuickFramebufferObject.  The fog is only two polylines, so it does not need
-//  a paint engine at all: each segment becomes a quad, and Qt Quick draws it on
-//  every backend.
+//  Why QPainter for the strokes: they need ANTIALIASING.  QSGGeometry has none —
+//  setAntialiasing() only reaches QPainter — so a quad-built stroke comes out
+//  with hard edges and, once blurred by a small sigma, keeps a bright sharp core
+//  instead of the reference's soft one.  A skirt of partial-alpha vertices was
+//  tried and helped, but a proper coverage rasteriser is what the reference used
+//  and what this draws with.
 //
-//  The blur and the fade are still blur.frag, which is a ShaderEffect and thus
-//  already RHI.  This item supplies the shape; that shader supplies the look.
+//  Painting into an image is a CPU cost, so it is CACHED on a signature of
+//  everything the strokes depend on: both plots' curve signatures, the size, and
+//  the display scale.  A still curve costs one comparison; a drag costs one
+//  rasterisation per frame, which is the same work the QPainter reference did and
+//  measured 58 fps on the real GPU.
 // ============================================================
 #include <QQuickItem>
 #include <QTimer>
 #include <QPointer>
-#include <QSGGeometry>
+#include <QImage>
+#include <QSGTexture>
+#include <QSGImageNode>
+#include <QVector>
+#include <QUuid>
 
 // The Q_PROPERTY(OvEqView*) below needs the type to be COMPLETE for moc's
 // metatype registration.
@@ -31,8 +38,7 @@ class OvFogSource : public QQuickItem
     Q_OBJECT
     Q_PROPERTY(OvEqView* topView    READ topView    WRITE setTopView    NOTIFY viewChanged)
     Q_PROPERTY(OvEqView* bottomView READ bottomView WRITE setBottomView NOTIFY viewChanged)
-    /// Frames this surface actually produced in the last second — its own rate,
-    /// not the window's.
+    /// Frames this surface actually repainted in the last second.
     Q_PROPERTY(double paintFps READ paintFps NOTIFY paintFpsChanged)
 
 public:
@@ -58,18 +64,20 @@ private:
     void unsubscribe (OvEqView* v);
     void markDirty();
 
-    /// Everything the geometry depends on, as one number.  Rebuilding ~2000
-    /// vertices per frame for a picture that did not change was most of what
-    /// made this surface slow; one comparison is not.
+    /// Everything the strokes depend on, as one number.
     quint64 signature() const;
 
     QTimer m_tick;
     int    m_revision = 0;
     QPointer<OvEqView> m_top, m_bottom;
 
-    // Render-thread state.
-    quint64 m_builtKey = 0;
-    quint64 m_built = 0;
-    double  m_paintFps = 0.0;
-    bool    m_dirty = true;
+    // ---- render-thread state --------------------------------------------
+    QSGImageNode* m_node   = nullptr;
+    QUuid         m_texKey;             // identifies the current texture
+    quint64       m_builtKey = 0;
+    QImage        m_img;                // the strokes, device resolution
+    QImage        m_keep;               // outlives the texture upload
+    QVector<QSGTexture*> m_retired;     // freed one frame later
+    double        m_paintFps = 0.0;
+    bool          m_dirty = true;
 };

@@ -123,7 +123,10 @@ Item {
                   ? ((root.height / 2 - root.edgeGap) / root.height) : 1.0
         sigma: 0.4
         sigmaSlope: 6.05
-        fade: true
+        // false: the fade is already in the stroke alphas (fogSegments applies
+        // it before the blur, like the painter version did).  Applying it again
+        // here would square the ramp.
+        fade: false
 
         // LIVE ONLY WHILE THE STROKES CHANGE.
         //
