@@ -1,3 +1,4 @@
+#include "OvEnv.h"
 #include "OvEqView.h"
 #include "OvFrost.h"
 #include "OvEngine.h"
@@ -222,7 +223,7 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickItem (parent)
         }
         if (std::exchange (m_dirty, false))
         {
-            if (std::getenv ("ONYXTEON_NODECOUNT"))
+            if (ovEnvFlag ("ONYXTEON_NODECOUNT"))
             {
                 static int k = 0;
                 if (k++ < 30)
@@ -264,7 +265,7 @@ void OvEqView::setEngine (OvEngine* e)
         // window 158 fps, 109 % of one core).  That is 5 MB of texture per
         // frame for data that had not changed.
         connect (m_engine, &OvEngine::spectrumChanged, this, [this] {
-            if (std::getenv ("ONYXTEON_NODECOUNT"))
+            if (ovEnvFlag ("ONYXTEON_NODECOUNT"))
             {
                 static int k = 0;
                 if (k++ < 3) std::fprintf (stderr, "[nc] %s spectrumChanged\n",
@@ -563,7 +564,7 @@ struct OvPaintTimer
     const char* name;
     explicit OvPaintTimer (const char* n) : name (n)
     {
-        if (std::getenv ("ONYXTEON_PROFILE")) t0 = std::chrono::steady_clock::now();
+        if (ovEnvFlag ("ONYXTEON_PROFILE")) t0 = std::chrono::steady_clock::now();
         else t0 = std::chrono::steady_clock::time_point();
     }
     ~OvPaintTimer()
@@ -796,7 +797,7 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     // drag frame leaked a 1040x333 texture and the window slowed down as it ran.
     for (QSGTexture* t : m_texRetired) delete t;
     m_texRetired.clear();
-    if (std::getenv ("ONYXTEON_NODERATE"))
+    if (ovEnvFlag ("ONYXTEON_NODERATE"))
     {
         static int n = 0;
         static auto t0 = std::chrono::steady_clock::now();
@@ -837,7 +838,7 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     }
     if (window() == nullptr) return old;
 
-    if (std::getenv ("ONYXTEON_NONODE")) return old;
+    if (ovEnvFlag ("ONYXTEON_NONODE")) return old;
 
     OvEqView::Layers L;
     buildLayers (L);
@@ -894,7 +895,7 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     // zero vertices.
     {
         auto* sp = static_cast<SpectrumNode*> (m_sgSpectrum);
-        const int n = std::getenv ("ONYXTEON_ONLYBG")
+        const int n = ovEnvFlag ("ONYXTEON_ONLYBG")
                     ? sp->rebuild (QVector<QPointF>(), 0.0, 1.0, L.accent)
                     : sp->rebuild (L.spectrum, L.spectrumBottom, L.spectrumTop, L.accent);
         if (n > 0 && ! m_spAttached)
@@ -984,7 +985,7 @@ void OvEqView::paint (QPainter* g)
         {
             m_paintFps = frames / dt;
             emit paintFpsChanged();
-            if (std::getenv ("ONYXTEON_FPS") != nullptr)
+            if (ovEnvFlag ("ONYXTEON_FPS"))
                 std::fprintf (stderr, "[fps] %s %.1f fps\n",
                               m_prefix.toStdString().c_str(), m_paintFps);
             frames = 0;
@@ -998,7 +999,7 @@ void OvEqView::paint (QPainter* g)
     const double w = width(), h = height();
     const QColor accent (m_accent);
 
-    const bool prof = std::getenv ("ONYXTEON_PROFILE") != nullptr;
+    const bool prof = ovEnvFlag ("ONYXTEON_PROFILE");
     const auto tRender0 = std::chrono::steady_clock::now();
 
     // ---- draw, on the GPU ------------------------------------------------
@@ -1031,7 +1032,7 @@ void OvEqView::paint (QPainter* g)
         }
     }
 
-    if (std::getenv ("ONYXTEON_HITTEST") != nullptr)
+    if (ovEnvFlag ("ONYXTEON_HITTEST"))
     {
         std::fprintf (stderr, "[paint] %s size=%.1fx%.1f nodes:",
                       m_prefix.toStdString().c_str(), w, h);
@@ -1098,7 +1099,7 @@ namespace
     SectionClock g_sections;
 }
 
-#define OV_MARK(label) do { if (std::getenv ("ONYXTEON_PROFILE")) g_sections.mark (label); } while (0)
+#define OV_MARK(label) do { if (ovEnvFlag ("ONYXTEON_PROFILE")) g_sections.mark (label); } while (0)
 
 const std::vector<double>& OvEqView::totalCurveY (double w, double h,
                                                  double top, double bottom, int step)
@@ -1585,7 +1586,7 @@ void OvEqView::buildLayers (Layers& out)
         float specRaw[128] = {};
         advanceSpectrum (spec, specRaw);
 
-        if (std::getenv ("ONYXTEON_SPECDBG"))
+        if (ovEnvFlag ("ONYXTEON_SPECDBG"))
         {
             static int n = 0;
             if (++n % 30 == 0)
@@ -1608,7 +1609,27 @@ void OvEqView::buildLayers (Layers& out)
 
         out.spectrumBottom = bottom;
         out.spectrumTop    = top;
-        out.spectrum.reserve (128 * 6);
+        out.spectrum.reserve (128 * 6 + 2);
+
+        // ---- the two anchors the plot's axis needs ----------------------
+        //
+        // The frequency axis runs 5 Hz .. 24 kHz (kFMin/kFMax, the same as the
+        // design), but the analyser only produces 20 Hz .. 20 kHz — 128 bins
+        // over three decades.  Those are different ranges, and the fill has to
+        // say what it means in the strip outside the data:
+        //
+        //   5 .. 20 Hz    x = 0 .. 170 px      no measurement
+        //   20k .. 24 kHz x = 1017 .. 1040 px  no measurement
+        //
+        // The design's path starts with `moveTo(0, pb)` and ends with
+        // `lineTo(W, pb)` — from the plot floor at the axis ends up to the
+        // first/last bin.  That reads as the spectrum descending into the
+        // floor.  This geometry started AT the first bin instead, so both ends
+        // were a vertical cliff: measured, the fill covered x = 170 .. 1017 and
+        // nothing outside it, and the edge at exactly 20 Hz looked like the
+        // graph had been cut in half.
+        out.spectrum.push_back (QPointF (0.0, bottom));
+
         const int kSub = 5;                   // 5 segments per span is plenty
         for (int i = 0; i < 127; ++i)
         {
@@ -1632,6 +1653,8 @@ void OvEqView::buildLayers (Layers& out)
             }
         }
         out.spectrum.push_back (QPointF (xs[127], ys[127]));
+        // ...and the mirror at the top of the axis (see the anchors above).
+        out.spectrum.push_back (QPointF (w, bottom));
     }
 }
 
@@ -1639,7 +1662,7 @@ void OvEqView::fogSegments (const QPointF& origin, QVector<FogSegment>& out)
 {
     out.clear();
     if (m_engine == nullptr) return;
-    if (std::getenv ("ONYXTEON_NOFOG") != nullptr) return;
+    if (ovEnvFlag ("ONYXTEON_NOFOG")) return;
 
     const double w = width(), h = height();
     if (w < 2.0 || h < 2.0) return;
@@ -1907,7 +1930,7 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
     }
 
     // The GPU glass in QML owns this surface now unless the CPU path is forced.
-    if (std::getenv ("ONYXTEON_CPUFROST") != nullptr)
+    if (ovEnvFlag ("ONYXTEON_CPUFROST"))
         paintFrost (g, m_content, w, h, accent);
 }
 
@@ -1932,7 +1955,7 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
 bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
                               const float* spec, QRectF& dest)
 {
-    if (std::getenv ("ONYXTEON_NOGLOW") != nullptr) return false;
+    if (ovEnvFlag ("ONYXTEON_NOGLOW")) return false;
     if (w < 8.0 || h < OvThemeBarHeight) return false;
 
     //   .controlpit{ left:50%; width:640px; height:32px; transform:translateX(-50%) }
@@ -2017,7 +2040,7 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
             if (m_glowShown[b] > 0.002) { anyFalling = true; }
         }
         m_glowFalling = anyFalling;
-        if (std::getenv ("ONYXTEON_GLOWDBG"))
+        if (ovEnvFlag ("ONYXTEON_GLOWDBG"))
         {
             static int n = 0;
             if (++n % 10 == 0)
@@ -2436,7 +2459,7 @@ QImage OvEqView::gaussianBlur (const QImage& src, double sigma, double sat)
 void OvEqView::paintFrost (QPainter* g, const QImage& content,
                            double w, double h, const QColor& accent)
 {
-    if (std::getenv ("ONYXTEON_NOFROST") != nullptr) return;
+    if (ovEnvFlag ("ONYXTEON_NOFROST")) return;
     if (content.isNull()) return;
 
     // The content image is in DEVICE pixels but is deliberately left untagged
@@ -2480,7 +2503,7 @@ void OvEqView::paintFrost (QPainter* g, const QImage& content,
         Q_UNUSED (scale);
     }
 
-    if (std::getenv ("ONYXTEON_FROSTDEBUG") != nullptr)
+    if (ovEnvFlag ("ONYXTEON_FROSTDEBUG"))
     {
         std::fprintf (stderr, "[frost] %s strip=%.0fx%.0f capture=%dx%d dpr=%.2f\n",
                       m_prefix.toStdString().c_str(), strip.width(), strip.height(),
@@ -2609,7 +2632,7 @@ int OvEqView::nodeAt (const QPointF& pos) const
 
 void OvEqView::mousePressEvent (QMouseEvent* e)
 {
-    if (std::getenv ("ONYXTEON_HITTEST"))
+    if (ovEnvFlag ("ONYXTEON_HITTEST"))
         std::fprintf (stderr, "[eqpress] %s at (%.0f,%.0f) accepted=%d\n",
                       qPrintable (m_prefix), e->position().x(), e->position().y(),
                       int (acceptedMouseButtons()));
@@ -2621,7 +2644,7 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
 
     refreshNodePositions();
 
-    if (std::getenv ("ONYXTEON_HITTEST") != nullptr)
+    if (ovEnvFlag ("ONYXTEON_HITTEST"))
     {
         std::fprintf (stderr, "[hit] %s size=%.1fx%.1f press=(%.1f,%.1f) nodes:",
                       m_prefix.toStdString().c_str(), width(), height(),

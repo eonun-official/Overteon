@@ -668,13 +668,20 @@ def run_standalone(args):
         if vgl_argv:
             print(f"gpu           {vgl_argv[0]} -d {vgl_env['VGL_DISPLAY']} "
                   f"(real GPU; the window stays on {args.display})")
-        preview = Proc(vgl_argv + [EXE, "--size", args.size, "--jack"], "preview",
+        preview = Proc(vgl_argv + [EXE, "--size", args.size, "--jack",
+                                   "--jack-name", args.jack_name], "preview",
                        {"DISPLAY": args.display,
                         "JACK_DEFAULT_SERVER": JACK_SERVER,
                         "ONYXTEON_FPS": "1", **vgl_env})
 
+        # The client is named explicitly, so this cannot pick up another
+        # preview's ports.  JACK appends nothing when the name is free; when it
+        # is taken it renames the SECOND client to "<name>-01", which is why a
+        # silently wrong connection is possible at all.
+        want = args.jack_name + ":"
+
         def ports():
-            return [x for x in jack_ports() if x.startswith("onyxpreview:")]
+            return [x for x in jack_ports() if x.startswith(want)]
         if not preview.wait_port(lambda: len(ports()) >= 2, timeout=30):
             print("FAIL: the preview did not register its JACK inputs")
             print((preview.log_text() or "")[-1500:])
@@ -688,24 +695,34 @@ def run_standalone(args):
             print(f"FAIL: no audio file at {flac}")
             return finish(results, args)
         print(f"mpv           {os.path.basename(flac)}")
+        # The player is named after this run too.  "mpvplay" is what a human
+        # types by hand, so listing "mpvplay:" finds THEIR player as well as
+        # ours and the zip() below connects whichever sorted first.
+        play_name = args.jack_name + "_src"
         play = Proc(["mpv", "--no-video", "--really-quiet", "--no-terminal",
-                     "--ao=jack", "--jack-name=mpvplay", "--loop-file=inf", flac],
+                     "--ao=jack", f"--jack-name={play_name}", "--loop-file=inf", flac],
                     "mpv", {"JACK_DEFAULT_SERVER": JACK_SERVER})
-        if not play.wait_port(lambda: len(jack_ports("mpvplay:")) >= 2, timeout=25):
+        # ONE output is normal: a mono file gives mpv a single port.
+        if not play.wait_port(lambda: len(jack_ports(play_name + ":")) >= 1, timeout=25):
             print("FAIL: mpv did not open its JACK port")
             print((play.log_text() or "")[-1200:])
             return finish(results, args)
 
-        src = sorted([x for x in jack_ports("mpvplay:") if "out_" in x])
+        src = sorted([x for x in jack_ports(play_name + ":") if "out_" in x])
+        # A MONO source has one output and the preview has two inputs.  zip()
+        # stopped at one, so a mono file could never satisfy the check below and
+        # the bench failed with "could not connect" on perfectly good audio.
+        # JACK allows one output to feed several inputs, so cycle instead.
         made = []
-        for a, b in zip(src, ports_in[:2]):
+        for i, b in enumerate(ports_in[:2]):
+            a = src[i % len(src)]
             if jc(["jack_connect", a, b]).returncode == 0:
                 made.append((a, b))
         results["audio"] = {"file": flac,
                             "connections": [f"{a} -> {b}" for a, b in made]}
         print(f"connections   {len(made)}: "
               + ", ".join(f"{a.split(':')[1]}->{b.split(':')[1]}" for a, b in made))
-        if len(made) < 2:
+        if len(made) < min(2, len(ports_in)):
             print("FAIL: could not connect mpv to the preview")
             return finish(results, args)
 
@@ -841,15 +858,20 @@ def run_carla(args):
             print(f"FAIL: no audio file at {flac}")
             return finish(results, args)
         print(f"mpv           {os.path.basename(flac)}")
+        # The player is named after this run too.  "mpvplay" is what a human
+        # types by hand, so listing "mpvplay:" finds THEIR player as well as
+        # ours and the zip() below connects whichever sorted first.
+        play_name = args.jack_name + "_src"
         play = Proc(["mpv", "--no-video", "--really-quiet", "--no-terminal",
-                     "--ao=jack", "--jack-name=mpvplay", "--loop-file=inf", flac],
+                     "--ao=jack", f"--jack-name={play_name}", "--loop-file=inf", flac],
                     "mpv", {"JACK_DEFAULT_SERVER": JACK_SERVER})
-        if not play.wait_port(lambda: len(jack_ports("mpvplay:")) >= 2, timeout=25):
+        # ONE output is normal: a mono file gives mpv a single port.
+        if not play.wait_port(lambda: len(jack_ports(play_name + ":")) >= 1, timeout=25):
             print("FAIL: mpv did not open its JACK port")
             print((play.log_text() or "")[-1200:])
             return finish(results, args)
 
-        src = sorted([x for x in jack_ports("mpvplay:") if "out_" in x])
+        src = sorted([x for x in jack_ports(play_name + ":") if "out_" in x])
         made = []
         for x, d in zip(src, ports_in[:2]):
             if jc(["jack_connect", x, d]).returncode == 0:
@@ -1244,6 +1266,13 @@ def main():
                     help="audio file mpv plays into the plug-in (--jalv only)")
     ap.add_argument("--seconds", type=float, default=6.0,
                     help="measurement window in seconds (--jalv only)")
+    ap.add_argument("--jack-name", default="onyxpreview",
+                    help="JACK client name for the preview (-Gs). Two previews "
+                         "on one server CANNOT share it: JACK silently renames "
+                         "the second to name-01, so the ports this bench then "
+                         "connects belong to the OTHER process and this one "
+                         "meters silence — which reads exactly like a broken "
+                         "analyser and is not.")
     ap.add_argument("--no-audio", action="store_true",
                     help="skip mpv (--jalv only): the negative control that "
                          "proves the signal check can fail")
