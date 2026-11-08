@@ -171,7 +171,20 @@ QSGNode* OvFogSource::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
         const double dy = s.b.y() - s.a.y();
         const double len = std::hypot (dx, dy);
         if (len < 1e-6) continue;
-        const double hw = s.width * 0.5;
+        // ANTIALIASED EDGES.
+        //
+        // QSGGeometry has no antialiasing of its own — setAntialiasing() only
+        // reaches QPainter, which this class does not use — so a quad's edges
+        // come out hard and the fog looked jagged.  Each quad is drawn 1 device
+        // pixel wider than the stroke with its edge vertices fully transparent;
+        // the GPU interpolates the alpha across that skirt, which is what a
+        // coverage-based rasteriser would have produced.
+        //
+        // The skirt is in ITEM units and one device pixel is 1/dpr of one, so the
+        // widening is divided back out.
+        const double dpr  = window() != nullptr ? window()->devicePixelRatio() : 1.0;
+        const double skirt = 0.5 / std::max (1.0, dpr);
+        const double hw = s.width * 0.5 + skirt;
         const double nx = -dy / len * hw;
         const double ny =  dx / len * hw;
 
@@ -180,9 +193,16 @@ QSGNode* OvFogSource::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
         const QPointF p2 (s.b.x() - nx, s.b.y() - ny);
         const QPointF p3 (s.a.x() - nx, s.a.y() - ny);
 
-        const uchar a = uchar (std::clamp (int (s.alpha * 255.0f + 0.5f), 0, 255));
+        // The SEGMENT'S OWN COLOUR, premultiplied.  This used to be (a, a, a) —
+        // a grey whose brightness was the alpha — because FogSegment carried no
+        // colour at all, which is why the crossing had no colour.
+        const float a = std::clamp (float (s.color.alphaF()), 0.0f, 1.0f);
+        const uchar A = uchar (std::clamp (int (a * 255.0f + 0.5f), 0, 255));
+        const uchar R = uchar (std::clamp (int (s.color.redF()   * a * 255.0f + 0.5f), 0, 255));
+        const uchar G = uchar (std::clamp (int (s.color.greenF() * a * 255.0f + 0.5f), 0, 255));
+        const uchar B = uchar (std::clamp (int (s.color.blueF()  * a * 255.0f + 0.5f), 0, 255));
         auto put = [&] (const QPointF& p) {
-            v[n].set (float (p.x()), float (p.y()), 255, 255, 255, a);
+            v[n].set (float (p.x()), float (p.y()), R, G, B, A);
             ++n;
         };
         put (p0); put (p1); put (p2);

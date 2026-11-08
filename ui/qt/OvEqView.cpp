@@ -1472,7 +1472,7 @@ void OvEqView::fogSegments (const QPointF& origin, QVector<FogSegment>& out)
     // wherever the curve handed over from one band to the next the picture
     // stepped, which is what read as stacked slabs round the seam.  The blur
     // and the fade are a continuous function of distance now (blur.frag).
-    auto push = [&] (auto&& yAt, float alpha, float width)
+    auto push = [&] (auto&& yAt, const QColor& colour, float width)
     {
         auto clampY = [&] (double y) { return std::clamp (y, lo, hi); };
 
@@ -1487,7 +1487,7 @@ void OvEqView::fogSegments (const QPointF& origin, QVector<FogSegment>& out)
             if (outward > 0.0)
                 out.push_back ({ QPointF (origin.x() + prevX, origin.y() + prevY),
                                  QPointF (origin.x() + xx,    origin.y() + yy),
-                                 alpha, width });
+                                 colour, width });
             prevX = xx;
             prevY = yy;
             if (xx >= w) break;
@@ -1504,7 +1504,9 @@ void OvEqView::fogSegments (const QPointF& origin, QVector<FogSegment>& out)
                   return toY (bandMagAt (b, fromX (x, w)),
                               h, rangeDb, top, plot.bottom());
               },
-              0.22f * float (accent.alphaF()), 1.0f);
+              QColor (accent.red(), accent.green(), accent.blue(),
+                      int (0.22f * accent.alphaF() * 255.0f + 0.5f)),
+              1.0f);
     }
 
     // ---- the total curve, accent, 2 px -----------------------------------
@@ -1517,7 +1519,7 @@ void OvEqView::fogSegments (const QPointF& origin, QVector<FogSegment>& out)
               return curveY[(size_t) i]
                    + (curveY[(size_t) j] - curveY[(size_t) i]) * (t - i);
           },
-          float (accent.alphaF()), 2.0f);
+          accent, 2.0f);
 }
 
 void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
@@ -1533,9 +1535,7 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
     g->setBrush (Qt::NoBrush);
     for (const auto& s : segs)
     {
-        QColor c = accent;
-        c.setAlphaF (accent.alphaF() * s.alpha);
-        g->setPen (QPen (c, s.width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        g->setPen (QPen (s.color, s.width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         g->drawLine (s.a, s.b);
     }
     g->restore();

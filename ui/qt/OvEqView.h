@@ -99,7 +99,7 @@ public:
     void buildLayers (Layers& out);
 
     /// One straight run of the outgoing curve, in this view's coordinates.
-    struct FogSegment { QPointF a, b; float alpha; float width; };
+    struct FogSegment { QPointF a, b; QColor color; float width; };
 
     /// The outgoing curve as line SEGMENTS rather than a painted stroke.
     ///
