@@ -125,13 +125,42 @@ Item {
         sigmaSlope: 6.05
         fade: true
 
-        // Always live.  A three-stage ShaderEffectSource chain driven by
-        // scheduleUpdate() did not reliably fill in (measured: the fog never
-        // appeared at all), and a chain that is always live cannot be stale —
-        // which is what a window being dragged needs.
-        live: true
+        // LIVE ONLY WHILE THE STROKES CHANGE.
+        //
+        // `live: true` re-ran two full-surface Gaussian passes every frame for a
+        // picture that only changes when a curve does — the crossing region's
+        // own cost, and the reason it sat at ~2 fps while the spectrum (which
+        // does change every frame) ran at 107.
+        //
+        // The earlier attempt at a non-live chain failed for a different reason:
+        // scheduleUpdate() on a three-stage ShaderEffectSource chain did not
+        // propagate in dependency order, so the capture rendered into an empty
+        // intermediate and the fog vanished.  The fix is to hold the chain live
+        // for a few frames after each change — long enough for every stage to
+        // fill — and then let it go quiet.
+        live: settle.running
         exposeOutput: ! root.raw
     }
+
+    // Runs for a moment after any change, then stops.  4 frames at 60 Hz is
+    // enough for capture -> H -> V to fill in order; after that an idle fog
+    // costs nothing.
+    Timer {
+        id: settle
+        interval: 70; repeat: false
+    }
+    function wake() { settle.restart() }
+
+    // The strokes are rebuilt by OvFogSource only when the curve moved, and that
+    // is the one event that can change this picture.
+    Connections {
+        target: srcItem
+        function onRevisionChanged() { settle.restart() }
+    }
+    onWidthChanged:   settle.restart()
+    onHeightChanged:  settle.restart()
+    onYChanged:       settle.restart()
+    onFitScaleChanged: settle.restart()
 
     // ONYXTEON_FOGRAW: the unblurred strokes, to check the source on its own.
 

@@ -41,15 +41,35 @@ void OvSeamFrost::attach (OvEqView* v)
 // update()->paint()->contentChanged()->update() cycle.
 void OvSeamFrost::scheduleRebuild()
 {
+    // Coalesce to 30 Hz, but never DROP the last request.
+    //
+    // The previous version returned early when the throttle window had not
+    // elapsed, and nothing rescheduled it — so once the plots settled, the seam
+    // kept whatever it had when the last rebuild was refused.  On startup that
+    // is an empty surface, which is why the seam could stay blank forever while
+    // the plots were fine.
+    //
+    // `m_pending` records that a rebuild is owed, and the timer below delivers
+    // it when the window opens.
+    m_pending = true;
     if (m_scheduled) return;
     m_scheduled = true;
+
     QTimer::singleShot (0, this, [this] {
         m_scheduled = false;
-        // Coalesce to 30 Hz.  The plots repaint at 60 and the seam's own
-        // composite is ~0.25 ms; refreshing it faster than this only burns CPU
-        // for a surface that is already the output of a 3 px blur.
+        if (! m_pending) return;
+
         const auto now = std::chrono::steady_clock::now();
-        if (now - m_lastRebuild < std::chrono::milliseconds (33)) return;
+        const auto since = now - m_lastRebuild;
+        if (since < std::chrono::milliseconds (33))
+        {
+            // Too soon: come back when the window has opened.
+            const int wait = 33 - int (std::chrono::duration_cast<
+                std::chrono::milliseconds> (since).count()) + 1;
+            QTimer::singleShot (wait, this, [this] { scheduleRebuild(); });
+            return;
+        }
+        m_pending = false;
         m_lastRebuild = now;
         update();
     });
@@ -206,28 +226,44 @@ QImage OvSeamFrost::renderGlass()
 
 QSGNode* OvSeamFrost::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 {
-    const QImage glass = renderGlass();
-    if (glass.isNull()) return old;
-
-    if (m_node == nullptr)
+    const auto _t = std::chrono::steady_clock::now();
+    // Qt drops and rebuilds node trees; a member pointer to the old one dangles.
+    if (old == nullptr)
     {
-        m_node = window()->createImageNode();
-        m_node->setFiltering (QSGTexture::Linear);
-        m_node->setTextureCoordinatesTransform (QSGImageNode::NoTransform);
+        m_node = nullptr;
+        m_texKey = 0;
     }
 
-    // The glass changes whenever the plots do, so the key is the checksum the
-    // cache already computed plus the size — the image itself is never compared.
-    const QString key = QStringLiteral ("%1|%2x%3")
-                            .arg (m_cacheKey).arg (glass.width()).arg (glass.height());
-    if (key != m_texKey)
+    // The glass changes whenever the plots do.  The cache key the compositor
+    // already computes is the right test, and it has to be checked BEFORE
+    // building: renderGlass() is a half-resolution capture plus a full
+    // separable Gaussian, and running it on every frame — which updatePaintNode
+    // is called on — cost the whole window its frame rate.  Measured: 34 fps
+    // before this class became a QQuickItem, 1 fps after.
+    if (m_cache.isNull() || m_cacheKey != m_texKey)
     {
-        m_texKeep = glass.copy();     // must outlive the render pass's upload
+        const QImage glass = renderGlass();
+        if (glass.isNull()) return old;
+
+        if (m_node == nullptr)
+        {
+            m_node = window()->createImageNode();
+            m_node->setFiltering (QSGTexture::Linear);
+            m_node->setTextureCoordinatesTransform (QSGImageNode::NoTransform);
+        }
+        // SHARED, not copied: QImage is implicitly shared, so holding the
+        // reference keeps the pixels alive until the render pass uploads them.
+        m_texKeep = glass;
         m_node->setTexture (window()->createTextureFromImage (m_texKeep));
-        m_texKey = key;
+        m_texKey = m_cacheKey;
     }
-    m_node->setRect (QRectF (0, 0, width(), height()));
 
-    if (old == nullptr) return m_node;
-    return old;
+    if (m_node == nullptr) return old;
+    m_node->setRect (QRectF (0, 0, width(), height()));
+    {
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - _t).count();
+        if (ms > 4.0) std::fprintf (stderr, "[seam] rebuild %.1f ms\n", ms);
+    }
+    return old != nullptr ? old : m_node;
 }

@@ -56,10 +56,11 @@ private:
     OvEqView* m_top = nullptr;
     OvEqView* m_bottom = nullptr;
     bool m_scheduled = false;
+    bool m_pending   = false;   ///< a rebuild is owed but throttled
     std::chrono::steady_clock::time_point m_lastRebuild {};
     QImage  m_cache;        // last composited glass
     QSGImageNode* m_node = nullptr;
-    QString m_texKey;
+    quint64 m_texKey = 0;
     QImage  m_texKeep;      // outlives the texture upload
     quint64 m_cacheKey = 0;
 };
