@@ -122,16 +122,26 @@ inline void spectrumFromRing (const std::vector<float>& ring, int ringPos,
         const float frac = (float) i / (float) std::max (1, n - 1);
         const float fr   = 20.0f * std::pow (1000.0f, frac);
         const float pos  = fr / fsr * (float) kFft;
-        const int   b0   = (int) pos;                 // may be 0 or below the usable range
+        const int   b0   = (int) pos;
         const float t    = pos - (float) b0;
 
-        // Below the first usable FFT bin there is no data to report at all, so
-        // ramp up from the plot's floor instead of repeating bin 1: the first
-        // three display bins would otherwise be one flat slab ~20 px wide at the
-        // very left of the fill.
+        // BELOW THE FIRST USABLE BIN THERE IS NO DATA, so HOLD the lowest bin.
+        //
+        // The window is 2048 samples, so 23.4 Hz is the lowest frequency this
+        // transform can resolve at all; everything under it is inside bin 1's
+        // band already (11.7 .. 35.2 Hz), and bin 0 is the window sum, which
+        // twitches as the waveform slides through the buffer.
+        //
+        // This used to ramp up from the -85 dB floor over 0..24 Hz, which was
+        // invented data: at 20 Hz it reported 0.60 while the first real bin said
+        // 0.71, so the fill DROPPED by 8 dB in its leftmost three columns and
+        // read as the graph being severed just right of the edge.  Holding the
+        // measured value is both honest and continuous — it is what every
+        // analyser does at its own lower limit.  Measured on pink noise: bins
+        // 0..3 all 0.708, then 0.705, 0.703 … — a step of 0.003, not 0.10.
         const float db = (b0 >= 1 && b0 < top)
                        ? binDb (b0) + (binDb (b0 + 1) - binDb (b0)) * t
-                       : -85.0f + (binDb (1) + 85.0f) * std::clamp (pos, 0.0f, 1.0f);
+                       : binDb (1);
         dst[i] = std::clamp ((db + 85.0f) / 85.0f, 0.0f, 1.0f);
     }
 }

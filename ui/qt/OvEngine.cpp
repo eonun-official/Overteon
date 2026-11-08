@@ -253,6 +253,32 @@ void OvEngine::tick()
                     changed = true;
                 }
             }
+        // ONYXTEON_ENGDBG: what the poll actually saw, once a second.
+        //
+        // Without this, "the spectrum is not moving" has a dozen possible
+        // causes that all look identical on screen.  These three counters
+        // separate them: haveIn/haveOut say whether the source produced a new
+        // FFT, changed says whether it differed enough to reach the UI.  All
+        // three at zero means the audio never arrived; changed at zero with the
+        // other two moving means the data is constant, which is what a muted
+        // or unconnected input looks like.
+        if (std::getenv ("ONYXTEON_ENGDBG"))
+        {
+            static int nIn = 0, nOut = 0, nCh = 0, nPoll = 0;
+            static auto t0 = std::chrono::steady_clock::now();
+            ++nPoll; if (haveIn) ++nIn; if (haveOut) ++nOut; if (changed) ++nCh;
+            const double dt = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+            if (dt >= 1.0)
+            {
+                std::fprintf (stderr, "[eng] poll %.0f/s haveIn %.0f/s haveOut %.0f/s "
+                                      "changed %.0f/s  first %.3f %.3f\n",
+                              nPoll/dt, nIn/dt, nOut/dt, nCh/dt,
+                              m_inSpectrum.isEmpty() ? -1.0 : m_inSpectrum.at(0).toDouble(),
+                              m_spectrum.isEmpty() ? -1.0 : m_spectrum.at(0).toDouble());
+                nIn = nOut = nCh = nPoll = 0; t0 = std::chrono::steady_clock::now();
+            }
+        }
         if (haveIn || haveOut)
             ovtick::markKind ("fft-block", ovtick::TickKind::FftBlock);
         if (changed)

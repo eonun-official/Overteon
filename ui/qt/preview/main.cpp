@@ -342,6 +342,7 @@ int main (int argc, char** argv)
     int tickReadPid = 0;   // --tick-read <pid>
     QStringList presets;          // id=value pairs, applied before the first frame
     QStringList presetFiles;      // .hinj files, also applied before the first frame
+    QString jackName = QStringLiteral ("onyxpreview");   // --jack-name
 
     for (int i = 1; i < argc; ++i)
     {
@@ -419,6 +420,15 @@ int main (int argc, char** argv)
         {
             customQml = QString::fromLatin1 (argv[++i]);
         }
+        else if (a == "--jack-name" && i + 1 < argc)
+        {
+            // The JACK client name.  Two previews on one server CANNOT share it:
+            // the second one is silently renamed by JACK to "name-01", the ports
+            // you then connect are the FIRST process's, and it looks exactly
+            // like the DSP is broken — the instrumented client reports silence
+            // while the renamed one has signal.  Give each run its own name.
+            jackName = QString::fromLatin1 (argv[++i]);
+        }
         else if (a == "--ctl" && i + 1 < argc)
         {
             // Control block name for `ovctl`: parameters can then be driven from
@@ -485,9 +495,9 @@ int main (int argc, char** argv)
     // therefore come out of the DSP itself — the input tap is what entered it,
     // the output tap is what actually left.  Nothing is modelled.
     auto proc = std::make_unique<InjectorProcessor>();
-    auto jackSrc = std::make_unique<OvJackJuce> (*proc, "onyxpreview");
+    auto jackSrc = std::make_unique<OvJackJuce> (*proc, jackName.toStdString());
 #else
-    auto jackSrc = std::make_unique<OvJackSource> ("onyxpreview");
+    auto jackSrc = std::make_unique<OvJackSource> (jackName.toStdString());
 #endif
     if (! jackSrc->ok())
     {

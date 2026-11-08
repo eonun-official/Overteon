@@ -207,8 +207,13 @@ bool OvJuceSource::analyse (float* dest, int count, bool inTap)
         // Above ~1 kHz the spacing is coarser than a bin so this changes nothing;
         // at the bottom it turns the plateaus into the ramp the spectrum actually
         // has.
-        const float pos  = juce::jlimit (0.0f, (float) maxBin,
-                                         fr / fsr * (float) InjectorProcessor::fftSize);
+        //
+        // Below the FIRST usable bin there is no data — bin 0 is DC and, with a
+        // Hann window, holds the window sum, which twitches as the waveform
+        // slides through the buffer.  Hold the lowest real bin instead of
+        // interpolating towards DC, or the fill drops at the left edge.
+        const float raw  = fr / fsr * (float) InjectorProcessor::fftSize;
+        const float pos  = juce::jlimit (1.0f, (float) maxBin, raw);
         const int   b0   = (int) pos;
         const int   b1   = juce::jmin (maxBin, b0 + 1);
         const float t    = pos - (float) b0;

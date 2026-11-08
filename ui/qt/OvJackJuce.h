@@ -124,6 +124,33 @@ private:
 
         m_midi.clear();
         proc.processBlock (m_buf, m_midi);
+
+        // ONYXTEON_JACKDBG: the peak of the audio the callback actually got.
+        //
+        // The first thing to check when both spectra sit at zero: JACK names
+        // clients, and a second client asking for a name that is taken is
+        // silently renamed ("onyxpreview" -> "onyxpreview-01").  Ports you then
+        // connect by the old name belong to the OTHER process, this one sees
+        // silence, and it reads exactly like a broken analyser.  A non-zero
+        // peak here with zero spectra would mean the DSP, not the plumbing.
+        if (std::getenv ("ONYXTEON_JACKDBG"))
+        {
+            float pk = 0.0f;
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < n; ++i)
+                    pk = std::max (pk, std::abs (m_buf.getReadPointer (c)[i]));
+            static float acc = 0.0f; static int cnt = 0;
+            static auto t0 = std::chrono::steady_clock::now();
+            acc = std::max (acc, pk); ++cnt;
+            const double dt = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+            if (dt >= 1.0)
+            {
+                std::fprintf (stderr, "[jck] %d blocks/s  in_peak %.5f  l=%p r=%p\n",
+                              cnt, acc, (void*) l, (void*) r);
+                acc = 0.0f; cnt = 0; t0 = std::chrono::steady_clock::now();
+            }
+        }
         return 0;
     }
 
