@@ -104,6 +104,60 @@ Item {
         return soloList === null || soloList.indexOf (name) >= 0
     }
 
+    // ---- ONYXTEON_SOLO_OPACITY: fade what survives the solo ---------------
+    //
+    // Solo HIDES every widget it was not given.  That is right for attributing
+    // a frame cost, but useless for comparing two renders: one widget per run
+    // means you can never see where two of them disagree.  An opacity keeps the
+    // solo path exactly as it is — same composite, same probes, same numbers —
+    // and lets the named widgets be seen through:
+    //
+    //     ONYXTEON_SOLO=plots,fog ONYXTEON_SOLO_OPACITY=0.5
+    //         both at half strength, so a one-pixel disagreement reads as a
+    //         doubled edge instead of being hidden behind the top one
+    //
+    //     ONYXTEON_SOLO_OPACITY=plots=1,fog=0.25,seam=0.4
+    //         per widget; a bare number sets the default for the rest
+    //
+    // A value of 1 (the default) is no fade at all, and with no ONYXTEON_SOLO
+    // the setting is ignored entirely — a normal run is untouched, because
+    // fading the real UI is not something this switch should ever do by itself.
+    readonly property var soloOpacityMap: {
+        const spec = (typeof ovSoloOpacity !== "undefined") ? String (ovSoloOpacity) : ""
+        const m = {}
+        if (! spec) return m
+        for (const part of spec.split (",")) {
+            const s = part.trim ()
+            if (! s) continue
+            const eq = s.indexOf ("=")
+            if (eq < 0) {
+                const v = Number (s)
+                if (! isNaN (v)) m["*"] = Math.max (0, Math.min (1, v))
+            } else {
+                const k = s.slice (0, eq).trim ()
+                const v = Number (s.slice (eq + 1))
+                if (k && ! isNaN (v)) m[k] = Math.max (0, Math.min (1, v))
+            }
+        }
+        return m
+    }
+
+    /// The opacity a soloed widget is drawn at.  Outside a solo it is 1, which
+    /// is what makes this a debug switch and not a feature.
+    function soloOpacityFor (name) {
+        if (soloList === null) return 1
+        if (soloOpacityMap[name] !== undefined) return soloOpacityMap[name]
+        if (soloOpacityMap["*"]     !== undefined) return soloOpacityMap["*"]
+        return 1
+    }
+
+    /// One call per layer: soloed widgets get their configured opacity, the
+    /// rest are fully transparent (they are already `visible: false`; the 0 is
+    /// only so a binding cannot outlive the solo and leave half a picture).
+    function soloAlpha (name) {
+        return soloed (name) ? soloOpacityFor (name) : 0
+    }
+
     // ONYXTEON_NOFOG=1: the fog off, for a reference capture.
     property bool anyFog: ! ((typeof ovNoFog !== "undefined") && ovNoFog)
 
@@ -164,6 +218,7 @@ Item {
             Item {
                 id: plotLayer
                 visible: root.soloed ("plots")
+                opacity: root.soloAlpha ("plots")
         objectName: "plotLayer"
                 anchors.fill: parent
 
@@ -223,6 +278,7 @@ Item {
                     objectName: "eqFog"
                     enabled: root.anyFog
                     visible: root.anyFog && root.soloed ("fog")
+                    opacity: root.soloAlpha ("fog")
                     topView: scView
                     bottomView: pqView
                     fitScale: root.fitScale
@@ -249,6 +305,7 @@ Item {
                 dbgName: "seam"
                 enabled: root.anyFrost && ! root.cpuFrost
                 visible: root.anyFrost && ! root.cpuFrost && root.soloed ("seam")
+                opacity: root.soloAlpha ("seam")
                 width: 550
                 height: 68
                 x: (parent.width - width) / 2
@@ -266,6 +323,7 @@ Item {
             OvSeamFrost {
                 id: seamFrost
                 visible: root.cpuFrost && root.soloed ("seam")
+                opacity: root.soloAlpha ("seam")
                 width: 550
                 height: 68
                 x: (parent.width - width) / 2
@@ -278,6 +336,7 @@ Item {
             Item {
                 id: eqLayer
                 visible: root.soloed ("bars")
+                opacity: root.soloAlpha ("bars")
                 anchors.fill: parent
 
                 OvEqSection {
@@ -321,7 +380,7 @@ Item {
                 // from its own height, and collapsing it would move the plots.
                 // The cost of a transparent item is ~0; the cost of a moved
                 // layout is a wrong measurement.
-                opacity: root.soloed ("header") ? 1 : 0
+                opacity: root.soloAlpha ("header")
                 x: 0
                 y: parent.height / 2 - height / 2
                 width: parent.width
@@ -347,6 +406,7 @@ Item {
                 OvFrameProbe { id: probeDeck; objectName: "probe-deck"
                                width: 0; height: 0 }
                 visible: root.soloed ("deck")
+                opacity: root.soloAlpha ("deck")
                 anchors.fill: parent
                 anchors.topMargin: 1
                 engine: root.engine
@@ -403,13 +463,18 @@ Item {
         if (soloList === null) return []
         const rows = []
         const want = (n) => soloList.indexOf ("each") >= 0 || soloList.indexOf (n) >= 0
+        // Only attach an alpha when it actually fades something: the read-out is
+        // also the record of how a capture was taken, and a column that always
+        // says 1.00 is noise.
+        const alpha = (n) => { const a = soloOpacityFor (n); return a < 1 ? a : undefined }
         if (want ("plots")) {
-            rows.push ({ name: "sc plot", fps: scView.paintFps })
-            rows.push ({ name: "pq plot", fps: pqView.paintFps })
+            rows.push ({ name: "sc plot", fps: scView.paintFps, alpha: alpha ("plots") })
+            rows.push ({ name: "pq plot", fps: pqView.paintFps, alpha: alpha ("plots") })
         }
         if (want ("fog"))
             rows.push ({ name: "fog", fps: eqFogItem ? eqFogItem.paintFps : null,
-                         note: eqFogItem ? "" : "not created" })
+                         note: eqFogItem ? "" : "not created",
+                         alpha: alpha ("fog") })
         // The QML-only widgets mark their own frames through an OvFrameProbe:
         // the scene graph calls into it for every frame that widget's subtree
         // is rendered, which is that widget's rate rather than the window's.
@@ -417,7 +482,8 @@ Item {
             if (!want (n)) continue
             const p = probes[n]
             rows.push ({ name: n, fps: p ? p.fps : null,
-                         note: p ? "" : "no probe" })
+                         note: p ? "" : "no probe",
+                         alpha: alpha (n) })
         }
         return rows
     }

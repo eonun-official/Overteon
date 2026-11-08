@@ -16,11 +16,16 @@ import QtQuick
 Item {
     id: root
 
-    property var    rows: []          // [{name, fps, note}]
+    property var    rows: []          // [{name, fps, note, alpha}]
     property real   windowFps: 0      // presented frames, from a FrameAnimation
     property real   scale: 1.0        // design -> window, so it stays readable
 
-    width: 250
+    /// The α column only exists when something was actually faded, so it must
+    /// not take width away from the rate in a normal solo run — and must get
+    /// its own room when it does, rather than being clipped off the panel.
+    readonly property bool anyAlpha: rows.some (r => r.alpha !== undefined)
+
+    width: 250 + (anyAlpha ? 58 : 0)
     height: 26 + rows.length * 18
     visible: rows.length > 0
     z: 99998
@@ -85,6 +90,18 @@ Item {
                            : (modelData.fps < 30 ? "#ff8a6a"
                                                  : (modelData.fps < 55 ? "#ffd166"
                                                                        : "#7ee08a"))
+                    font.pixelSize: 11
+                    font.family: "monospace"
+                }
+                Text {
+                    // The alpha this widget is drawn at.  Only shown when
+                    // ONYXTEON_SOLO_OPACITY faded something, so a capture
+                    // always says how faint the picture was when it was
+                    // taken — a diff against a full-strength shot would
+                    // otherwise be noise.
+                    visible: modelData.alpha !== undefined
+                    text: visible ? "α " + modelData.alpha.toFixed(2) : ""
+                    color: "#8a7bd8"
                     font.pixelSize: 11
                     font.family: "monospace"
                 }

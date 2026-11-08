@@ -519,6 +519,13 @@ int main (int argc, char** argv)
         widget->setClearColor (QColor (0x16, 0x18, 0x1d));
         widget->rootContext()->setContextProperty ("engine", engine.get());
         widget->rootContext()->setContextProperty ("ovUiScale", uiScale());
+        // Same solo switches as the QQuickView path below: the compat widget is
+        // the only one that runs under wine, so the debug views have to work
+        // there too.
+        widget->rootContext()->setContextProperty (
+            "ovSolo", qEnvironmentVariable ("ONYXTEON_SOLO"));
+        widget->rootContext()->setContextProperty (
+            "ovSoloOpacity", qEnvironmentVariable ("ONYXTEON_SOLO_OPACITY"));
 
         // QQuickWidget renders into an FBO, which needs a GL/RHI context; the
         // software backend has none.  Under wine the OpenGL RHI is already
@@ -640,6 +647,22 @@ int main (int argc, char** argv)
         view.rootContext()->setContextProperty ("ovSolo", solo);
         if (! solo.isEmpty())
             std::fprintf (stderr, "[solo] showing only: %s\n", solo.toUtf8().constData());
+
+        // ONYXTEON_SOLO_OPACITY: how faintly those widgets are drawn.
+        //
+        // Solo hides everything else, so two widgets can never be seen at once —
+        // which is fine for attributing a frame cost and useless for finding
+        // where two renders disagree.  Fading the survivors lets them be laid
+        // over each other: at 0.5 a one-pixel difference reads as a doubled
+        // edge instead of one picture hiding the other.
+        //
+        // A bare number fades every soloed widget; `name=value` pairs override
+        // it per widget.  Ignored without ONYXTEON_SOLO, so a normal run can
+        // never be faded by a stray environment variable.
+        const QString op = qEnvironmentVariable ("ONYXTEON_SOLO_OPACITY");
+        view.rootContext()->setContextProperty ("ovSoloOpacity", op);
+        if (! solo.isEmpty() && ! op.isEmpty())
+            std::fprintf (stderr, "[solo] opacity: %s\n", op.toUtf8().constData());
     }
 
     // ---- --tick: publish and consume through a shared-memory ring ----------
