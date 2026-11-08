@@ -1,3 +1,4 @@
+#include "OvEnv.h"
 #include "OvEngine.h"
 #include "OvQmlTypes.h"
 #include "OvTick.h"
@@ -262,7 +263,7 @@ void OvEngine::tick()
         // three at zero means the audio never arrived; changed at zero with the
         // other two moving means the data is constant, which is what a muted
         // or unconnected input looks like.
-        if (std::getenv ("ONYXTEON_ENGDBG"))
+        if (ovEnvFlag ("ONYXTEON_ENGDBG"))
         {
             static int nIn = 0, nOut = 0, nCh = 0, nPoll = 0;
             static auto t0 = std::chrono::steady_clock::now();

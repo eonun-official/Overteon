@@ -1,3 +1,4 @@
+#include "OvEnv.h"
 #include "OvMeterView.h"
 #include <QQuickWindow>
 #include "OvFrost.h"
@@ -440,7 +441,7 @@ void OvMeterView::drawPod (QPainter* g, PodPass pass)
 void OvMeterView::paint (QPainter* g)
 {
     ovtick::markKind ("paint-meter", ovtick::TickKind::PaintMeter);
-    if (std::getenv ("ONYXTEON_FPS") != nullptr)
+    if (ovEnvFlag ("ONYXTEON_FPS"))
     {
         static int frames = 0;
         static auto t0 = std::chrono::steady_clock::now();
@@ -470,7 +471,7 @@ void OvMeterView::paint (QPainter* g)
     //  bleed must exceed 3 sigma of the widest (2.5 * 1.146 * 3 = 8.6 px) and
     //  the item must be taller than the art, or a painted item clips the halo
     //  at its own bounds — the SVG uses overflow:visible for the same reason.
-    if (std::getenv ("ONYXTEON_NOGLOW") == nullptr)
+    if (! ovEnvFlag ("ONYXTEON_NOGLOW"))
     {
         // Half device resolution for the halo.  A halo is only ever seen
         // through a 3 px Gaussian, so the extra pixels cannot be resolved;

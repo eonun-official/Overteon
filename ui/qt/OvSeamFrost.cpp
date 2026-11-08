@@ -1,3 +1,4 @@
+#include "OvEnv.h"
 #include "OvSeamFrost.h"
 #include "OvEqView.h"
 #include "OvFrost.h"
@@ -111,8 +112,8 @@ QImage OvSeamFrost::renderGlass()
     // ONYXTEON_NOFROST means no glass anywhere, so a reference capture really
     // has none.  (It used to skip only the control pits, which made an A/B of
     // the seam look like the seam was not painting.)
-    if (std::getenv ("ONYXTEON_NOFROST") != nullptr) return QImage();
-    if (std::getenv ("ONYXTEON_NOSEAM") != nullptr) return QImage();
+    if (ovEnvFlag ("ONYXTEON_NOFROST")) return QImage();
+    if (ovEnvFlag ("ONYXTEON_NOSEAM")) return QImage();
     if (m_top == nullptr || m_bottom == nullptr) return QImage();
 
     // unfrostedImage(): the page's FrostEngine samples the raw plot canvases.
@@ -209,13 +210,13 @@ QImage OvSeamFrost::renderGlass()
     m_cacheKey = key;
     m_cache = out;
 
-    if (std::getenv ("ONYXTEON_FROSTDEBUG") != nullptr)
+    if (ovEnvFlag ("ONYXTEON_FROSTDEBUG"))
         std::fprintf (stderr, "[seam] %gx%g capture=%dx%d dpr=%.2f top=%dx%d bottom=%dx%d\n",
                       w, h, capture.width(), capture.height(), double (dpr),
                       top.width(), top.height(), bottom.width(), bottom.height());
 
     // debug: dump what the glass actually produced
-    if (std::getenv ("ONYXTEON_SEAMDUMP") != nullptr)
+    if (ovEnvFlag ("ONYXTEON_SEAMDUMP"))
     {
         static int n = 0;
         out.save (QStringLiteral ("/tmp/seam_%1.png").arg (n++));

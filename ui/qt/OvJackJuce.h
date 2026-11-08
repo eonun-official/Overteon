@@ -24,6 +24,7 @@
 //  OvJuceSource, i.e. the plug-in's own APVTS — so ovctl drives the same
 //  parameters the DSP reads, and a .hinj file sets what the plug-in would set.
 // ============================================================
+#include "OvEnv.h"
 #include "OvJuceSource.h"
 #include "FxProcessor.h"   // InjectorProcessor, the real DSP
 
@@ -133,7 +134,7 @@ private:
         // connect by the old name belong to the OTHER process, this one sees
         // silence, and it reads exactly like a broken analyser.  A non-zero
         // peak here with zero spectra would mean the DSP, not the plumbing.
-        if (std::getenv ("ONYXTEON_JACKDBG"))
+        if (ovEnvFlag ("ONYXTEON_JACKDBG"))
         {
             float pk = 0.0f;
             for (int c = 0; c < 2; ++c)
