@@ -15,7 +15,12 @@
 //  there; it is also useful on any platform with a broken swap path.
 // ============================================================
 #include "OvEngine.h"
-#include "OvJackSource.h"
+#if OVERTEON_PREVIEW_HAS_DSP
+ #include "OvJackJuce.h"
+ #include "FxProcessor.h"
+#else
+ #include "OvJackSource.h"
+#endif
 #include "OvPreset.h"
 #include "OvTick.h"
 #include "OvQmlTypes.h"
@@ -473,7 +478,17 @@ int main (int argc, char** argv)
     // could not tell a working analyser from a broken one, and every comparison
     // made against it was a comparison against a signal that did not exist.
     // `bench.py -Gs` connects mpv to these ports.
+#if OVERTEON_PREVIEW_HAS_DSP
+    // THE REAL DSP.  The preview now hosts the plug-in's own InjectorProcessor
+    // and plays the part a host plays: the JACK thread copies the incoming
+    // frames into a JUCE buffer and calls processBlock().  The two spectrum taps
+    // therefore come out of the DSP itself — the input tap is what entered it,
+    // the output tap is what actually left.  Nothing is modelled.
+    auto proc = std::make_unique<InjectorProcessor>();
+    auto jackSrc = std::make_unique<OvJackJuce> (*proc, "onyxpreview");
+#else
     auto jackSrc = std::make_unique<OvJackSource> ("onyxpreview");
+#endif
     if (! jackSrc->ok())
     {
         // There is no fallback source any more — the mock was removed because

@@ -99,6 +99,9 @@ public:
     /// Everything the render node needs for this frame.  Builds whichever
     /// cached layers are stale and leaves the rest null.
     void buildLayers (Layers& out);
+    /// Advance the analyser ballistics and write the smoothed levels.
+    /// Called once per frame by whichever path is drawing.
+    void advanceSpectrum (float* spec, float* specRaw);
 
     /// One straight run of the outgoing curve, in this view's coordinates.
     struct FogSegment { QPointF a, b; QColor color; float width; };
@@ -430,6 +433,7 @@ private:
     /// what every hardware analyser does; the data is unchanged, only its
     /// presentation.
     float  m_specShown[128] = {};
+    std::chrono::steady_clock::time_point m_specAdvanceAt {};   // per view
     std::chrono::steady_clock::time_point m_specShownAt {};
 
     /// The glow bar's own ballistics: 32 band levels, rate-derived release.

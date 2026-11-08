@@ -95,16 +95,43 @@ inline void spectrumFromRing (const std::vector<float>& ring, int ringPos,
     fft (work);
 
     const float fsr = (float) sampleRate;
+    const int   top = kFft / 2;
+
+    // dB of one FFT bin, the same scaling for every caller.
+    auto binDb = [&] (int b)
+    {
+        b = std::clamp (b, 1, top);
+        const float re  = work[(size_t) b].real();
+        const float im  = work[(size_t) b].imag();
+        const float mag = 2.0f * std::sqrt (re * re + im * im) / (float) kFft;
+        return 20.0f * std::log10 (std::max (mag, 1e-7f));
+    };
+
+    // INTERPOLATE between FFT bins — do not truncate to the nearest one.
+    //
+    // The display bins are log-spaced, 20 Hz .. 20 kHz in `n` steps, while the
+    // transform's bins are LINEAR and 23.4 Hz apart at 48 kHz with a 2048-sample
+    // window.  Truncating meant the first TEN display bins all landed on bin 1
+    // and the next ones on bin 2, so the bottom of the plot was a few flat
+    // plateaus: a rectangle at the left edge of the fill that dropped in steps
+    // instead of descending.  Above ~1 kHz the display spacing is coarser than a
+    // bin, so this changes nothing there; at the bottom it turns the plateaus
+    // into the ramp the spectrum really has.
     for (int i = 0; i < n; ++i)
     {
         const float frac = (float) i / (float) std::max (1, n - 1);
         const float fr   = 20.0f * std::pow (1000.0f, frac);
-        const int   bin  = std::clamp ((int) (fr / fsr * (float) kFft), 1, kFft / 2);
+        const float pos  = fr / fsr * (float) kFft;
+        const int   b0   = (int) pos;                 // may be 0 or below the usable range
+        const float t    = pos - (float) b0;
 
-        const float re  = work[(size_t) bin].real();
-        const float im  = work[(size_t) bin].imag();
-        const float mag = 2.0f * std::sqrt (re * re + im * im) / (float) kFft;
-        const float db  = 20.0f * std::log10 (std::max (mag, 1e-7f));
+        // Below the first usable FFT bin there is no data to report at all, so
+        // ramp up from the plot's floor instead of repeating bin 1: the first
+        // three display bins would otherwise be one flat slab ~20 px wide at the
+        // very left of the fill.
+        const float db = (b0 >= 1 && b0 < top)
+                       ? binDb (b0) + (binDb (b0 + 1) - binDb (b0)) * t
+                       : -85.0f + (binDb (1) + 85.0f) * std::clamp (pos, 0.0f, 1.0f);
         dst[i] = std::clamp ((db + 85.0f) / 85.0f, 0.0f, 1.0f);
     }
 }

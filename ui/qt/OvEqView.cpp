@@ -221,7 +221,16 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickItem (parent)
             m_dirty = true;
         }
         if (std::exchange (m_dirty, false))
+        {
+            if (std::getenv ("ONYXTEON_NODECOUNT"))
+            {
+                static int k = 0;
+                if (k++ < 30)
+                    std::fprintf (stderr, "[nc] %s timer update %d\n",
+                                  qPrintable (m_prefix), k);
+            }
             update();
+        }
     });
     m_repaint.start();
 }
@@ -255,6 +264,12 @@ void OvEqView::setEngine (OvEngine* e)
         // window 158 fps, 109 % of one core).  That is 5 MB of texture per
         // frame for data that had not changed.
         connect (m_engine, &OvEngine::spectrumChanged, this, [this] {
+            if (std::getenv ("ONYXTEON_NODECOUNT"))
+            {
+                static int k = 0;
+                if (k++ < 3) std::fprintf (stderr, "[nc] %s spectrumChanged\n",
+                                           qPrintable (m_prefix));
+            }
             ++m_spectrumStamp;
             using clk = std::chrono::steady_clock;
             const auto now = clk::now();
@@ -622,7 +637,13 @@ bool applyTexture (QQuickWindow* win, QSGImageNode* node, const QImage& img,
     if (node == nullptr || win == nullptr) return false;
     if (img.isNull() || rect.isEmpty())
         return false;
-    if (key != haveKey || node->texture() == nullptr)
+    // If the caller handed us a real image, it IS new: buildLayers() only
+    // returns pixels for a layer whose cache key changed.  Comparing keys here
+    // as well was wrong — the overlay's key contains the whole curve cache tag,
+    // and the first frame after a preset load stored it while the texture was
+    // still the previous picture, so every later frame looked "unchanged" and
+    // the plot showed a stale layer.
+    if (node->texture() == nullptr || key != haveKey || true)
     {
         keep = img.copy();
         node->setTexture (win->createTextureFromImage (keep));
@@ -769,18 +790,11 @@ void OvEqView::setWantImage (bool on)
 
 QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 {
-#define OV_NODE_TIMING 0
-#if OV_NODE_TIMING
-    const auto _t0 = std::chrono::steady_clock::now();
-    double _msLayers = 0.0;
-#endif
     // Free what the PREVIOUS frame retired.  A texture replaced during the sync
     // phase may still be referenced by the batch the renderer is finishing, so
-    // it gets one frame of grace.  Without any of this the uploads accumulated:
-    // every drag frame leaked a 1040x333 texture and the window slowed down as
-    // it ran, which is the "it gets slower the longer I drag" report.
-    if (window() != nullptr)
-        for (QSGTexture* t : m_texRetired) delete t;
+    // it gets one frame of grace.  Without this the uploads accumulated: every
+    // drag frame leaked a 1040x333 texture and the window slowed down as it ran.
+    for (QSGTexture* t : m_texRetired) delete t;
     m_texRetired.clear();
     if (std::getenv ("ONYXTEON_NODERATE"))
     {
@@ -935,28 +949,13 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     // Tell the glass and the fog that this plot produced a new picture.
     //
     // QUEUED because this runs on the render thread and the receivers call
-    // QQuickItem::update(), which is a GUI-thread operation.  Emitted on EVERY
-    // frame, not only when the CPU seam glass asked for pixels: it used to sit
-    // inside the m_wantImage branch, so on the GPU path — the normal one —
-    // nothing was ever emitted and both consumers fell back to their own 1 Hz
-    // safety timers.  Measured symptom: dragging an EQ node moves the curve but
-    // the crossing and the seam glass stay frozen.
-    //
-    // Both receivers throttle themselves (the seam to 30 Hz, the fog by a
-    // signature check), so following the frame rate costs one queued call.
+    // QQuickItem::update(), a GUI-thread operation.  Emitted on EVERY frame, not
+    // only when the CPU seam glass asked for pixels: inside that branch nothing
+    // was ever emitted on the GPU path, so both consumers fell back to their own
+    // 1 Hz safety timers and the crossing stayed frozen during a drag.
     QMetaObject::invokeMethod (this, [this] { emit contentChanged(); },
                                Qt::QueuedConnection);
 
-#if OV_NODE_TIMING
-    {
-        const double ms = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - _t0).count();
-        if (ms > 4.0)
-            std::fprintf (stderr, "[nodet] %s %.1f ms (layers %.1f)\n",
-                          qPrintable (m_prefix), ms, _msLayers);
-    }
-#endif
-    (void) 0;
     QSGNode* root = m_sgRoot;
     return root;
 }
@@ -1253,55 +1252,10 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     // The previous version computed exp(-dt/tau) and then never used it — the
     // bin was assigned the raw target, so every measurement landed as an exact
     // value.  That is why the fill and the glow bar showed numbers, not motion.
-    {
-        using clk = std::chrono::steady_clock;
-        const auto now = clk::now();
-        double dt = 1.0 / double (OvTiming::kPlotHz);
-        if (m_specShownAt != clk::time_point())
-            dt = std::clamp (std::chrono::duration<double> (now - m_specShownAt).count(),
-                             0.0005, 0.20);
-        m_specShownAt = now;
-
-        constexpr double kFloor   = 0.0;      // the table's own bottom
-        constexpr double kDecaySec = 0.30;    // seconds to fall the full scale
-
-        float raw[128] = {};
-        if (m_engine != nullptr)
-        {
-            const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
-                                          : m_engine->spectrumTable();
-            const int n = std::min (128, int (tbl.size()));
-            for (int i = 0; i < n; ++i)
-            {
-                raw[i] = float (tbl.at (i).toDouble());
-                specRaw[i] = raw[i];
-            }
-        }
-
-        const double rate    = (dt > 1e-6) ? 1.0 / dt : double (OvTiming::kPlotHz);
-        const double nFrames = std::max (1.0, rate * kDecaySec);
-
-        for (int i = 0; i < 128; ++i)
-        {
-            const double shown  = m_specShown[i];
-            const double target = raw[i];
-
-            if (target >= shown)
-            {
-                m_specShown[i] = float (target);          // instant attack
-            }
-            else
-            {
-                const double start = std::max (1e-6, shown - kFloor);
-                const double goal  = std::max (0.0, target - kFloor);
-                const double ratio = std::clamp (goal / start, 0.0, 1.0);
-                const double step  = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
-                const double next  = shown + (shown - kFloor) * -step;
-                m_specShown[i] = float (std::max (next, target));
-            }
-            spec[i] = m_specShown[i];
-        }
-    }
+    // The ballistics run in ONE place — advanceSpectrum() — so the painter path
+    // and the scene-graph path advance the same array.  Computing them here and
+    // reading the raw table there was why the RHI fill had no smoothing at all.
+    advanceSpectrum (spec, specRaw);
 
     OV_MARK ("spec");
     // ---- spectrum (from the engine, 0..1 over 20 Hz..20 kHz)
@@ -1443,6 +1397,139 @@ const QImage& OvEqView::overlayImage (double w, double h, double top,
 //  moves; the other three are built through their existing caches and returned
 //  only when their key changed, so an idle frame does no drawing at all.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+//  The analyser's ballistics, in ONE place.
+//
+// The host polls the analyser at ~12 Hz while this paints at up to 60, so raw
+// bins would be held for five frames and then cut to an unrelated picture.  Each
+// bin gets an instant attack and a rate-derived release towards the newest
+// value, expressed as "this many dB in this many seconds" and turned into a
+// per-frame step from the DISPLAY rate (the way ZL Audio's
+// SpectrumDecayer::setDecaySpeed does it): step = 1 - (target/start)^(1/n_frames)
+// with n_frames = refresh_rate * decay_seconds.  A fixed coefficient is a fixed
+// number of FRAMES, so it falls faster the higher the refresh rate.
+//
+// Both front ends call this exactly once per frame.  It was inline in
+// paintContent(), and when the plot became a scene-graph item the node path read
+// the raw table instead — which is why the RHI fill had no smoothing and looked
+// nothing like the painter one.
+// ---------------------------------------------------------------------------
+void OvEqView::advanceSpectrum (float* spec, float* specRaw)
+{
+    // ONCE PER FRAME, whichever path asks for it.
+    //
+    // Both paintContent() and buildLayers() call this, and on the scene-graph
+    // path paintContent() also runs when the CPU seam glass is active.  Advancing
+    // the ballistics twice in one frame releases the analyser at double speed and
+    // leaves the fill a few rows off — measured as 10k differing pixels low in
+    // the PQ plot, all of them the spectrum fill's edge.
+    {
+        using clk = std::chrono::steady_clock;
+        // A MEMBER, not a static local.
+        //
+        // `static` is shared by every OvEqView instance, and there are two.  The
+        // second one to be called inside the same 1.5 ms window took the early
+        // return and got its OWN m_specShown copied back — advancing nothing.
+        // Whichever view lost the race therefore displayed a frozen spectrum for
+        // ever, which is the "it shows a constant value instead of the real
+        // levels" report; with the analyser idle both views sit on whatever they
+        // last held.
+        const auto now = clk::now();
+        if (m_specAdvanceAt != clk::time_point()
+            && now - m_specAdvanceAt < std::chrono::microseconds (1500))
+        {
+            std::memcpy (spec, m_specShown, sizeof (float) * 128);
+            if (specRaw != nullptr) std::memset (specRaw, 0, sizeof (float) * 128);
+            return;
+        }
+        m_specAdvanceAt = now;
+    }
+
+using clk = std::chrono::steady_clock;
+    const auto now = clk::now();
+    double dt = 1.0 / double (OvTiming::kPlotHz);
+    if (m_specShownAt != clk::time_point())
+        dt = std::clamp (std::chrono::duration<double> (now - m_specShownAt).count(),
+                         0.0005, 0.20);
+    m_specShownAt = now;
+
+    constexpr double kFloor   = 0.0;      // the table's own bottom
+    constexpr double kDecaySec = 0.30;    // seconds to fall the full scale
+
+    float raw[128] = {};
+    if (m_engine != nullptr)
+    {
+        const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
+                                      : m_engine->spectrumTable();
+        const int n = std::min (128, int (tbl.size()));
+        for (int i = 0; i < n; ++i)
+        {
+            raw[i] = float (tbl.at (i).toDouble());
+            specRaw[i] = raw[i];
+        }
+    }
+
+    const double rate    = (dt > 1e-6) ? 1.0 / dt : double (OvTiming::kPlotHz);
+    const double nFrames = std::max (1.0, rate * kDecaySec);
+
+    // ---- smooth along FREQUENCY -----------------------------------------
+    // A single FFT bin's magnitude of noise is Rayleigh-distributed: consecutive
+    // frames differ by several dB, and with an instant attack plus a 0.3 s hold
+    // every spike is captured and then STAYS for a third of a second.  The
+    // outline came out hairy and motionless-spiky — "the waveform is not
+    // smoothed".  A fractional-octave average is what a spectrum analyser does
+    // for exactly this reason.
+    //
+    // The bins are log-spaced (12.8 per octave over the 10 octaves from 20 Hz to
+    // 20 kHz), so a 1/6-octave window is +/-2 bins with a triangular weight.
+    // Averaging the 0..1 display values is averaging dB, because that table is
+    // linear in dB by construction.
+    {
+        static constexpr float kK[5] = { 1.0f, 2.0f, 3.0f, 2.0f, 1.0f };
+        float sm[128];
+        for (int i = 0; i < 128; ++i)
+        {
+            float acc = 0.0f, wsum = 0.0f;
+            for (int k = -2; k <= 2; ++k)
+            {
+                const int j = std::clamp (i + k, 0, 127);
+                acc  += raw[j] * kK[k + 2];
+                wsum += kK[k + 2];
+            }
+            sm[i] = acc / wsum;
+        }
+        std::memcpy (raw, sm, sizeof sm);
+    }
+
+    // ---- attack is not instant ------------------------------------------
+    // Instant attack on the smoothed array still lets a single measurement pull
+    // the outline up in one frame and hold it.  40 ms is short enough that a
+    // transient still shows immediately and long enough that the edge moves as
+    // one line instead of flickering.
+    const double attackK = 1.0 - std::exp (-dt / 0.040);
+
+    for (int i = 0; i < 128; ++i)
+    {
+        const double shown  = m_specShown[i];
+        const double target = raw[i];
+
+        if (target >= shown)
+        {
+            m_specShown[i] = float (shown + (target - shown) * attackK);
+        }
+        else
+        {
+            const double start = std::max (1e-6, shown - kFloor);
+            const double goal  = std::max (0.0, target - kFloor);
+            const double ratio = std::clamp (goal / start, 0.0, 1.0);
+            const double step  = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
+            const double next  = shown + (shown - kFloor) * -step;
+            m_specShown[i] = float (std::max (next, target));
+        }
+        spec[i] = m_specShown[i];
+    }
+}
+
 void OvEqView::buildLayers (Layers& out)
 {
     out = Layers();
@@ -1492,13 +1579,23 @@ void OvEqView::buildLayers (Layers& out)
     // the fill does not read as a staircase, then flattened to a polyline the
     // node can triangulate.  Same smoothing the painter path used.
     {
+        // THE BALLISTICS, not the raw table.  Reading the table directly is
+        // what made this fill unsmoothed and completely unlike the painter one.
         float spec[128] = {};
-        if (m_engine != nullptr)
+        float specRaw[128] = {};
+        advanceSpectrum (spec, specRaw);
+
+        if (std::getenv ("ONYXTEON_SPECDBG"))
         {
-            const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
-                                          : m_engine->spectrumTable();
-            const int n = std::min (128, int (tbl.size()));
-            for (int i = 0; i < n; ++i) spec[i] = float (tbl.at (i).toDouble());
+            static int n = 0;
+            if (++n % 30 == 0)
+            {
+                std::fprintf (stderr, "[sp] %s", qPrintable (m_prefix));
+                for (int i = 0; i < 16; ++i) std::fprintf (stderr, " %.3f", spec[i]);
+                std::fprintf (stderr, " | hi");
+                for (int i = 112; i < 128; ++i) std::fprintf (stderr, " %.3f", spec[i]);
+                std::fprintf (stderr, "\n");
+            }
         }
 
         double xs[128], ys[128];
@@ -2512,6 +2609,10 @@ int OvEqView::nodeAt (const QPointF& pos) const
 
 void OvEqView::mousePressEvent (QMouseEvent* e)
 {
+    if (std::getenv ("ONYXTEON_HITTEST"))
+        std::fprintf (stderr, "[eqpress] %s at (%.0f,%.0f) accepted=%d\n",
+                      qPrintable (m_prefix), e->position().x(), e->position().y(),
+                      int (acceptedMouseButtons()));
     // A new press always ends whatever the previous gesture left behind.  A
     // release can go to another item (the host window, an overlay) and then
     // m_dragBand kept its value — every later mouse move dragged that node,
@@ -2555,6 +2656,8 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
         if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr)
             p->beginGesture();
 
+    m_dirty = true;
+    update();
     e->accept();
 }
 
@@ -2600,7 +2703,19 @@ void OvEqView::mouseMoveEvent (QMouseEvent* e)
         tip += QStringLiteral (" · Q %1").arg (valueOf (base + "Q", 0.0), 0, 'f', 2);
 
     emit hoverInfo (tip, QPointF (m_bands[m_dragBand].x, m_bands[m_dragBand].y));
+
+    // Repaint in THIS frame, not on the 30 Hz timer.
+    //
+    // m_dirty alone leaves the redraw to the repaint timer, which runs at
+    // kPlotHz (30).  A drag therefore updated at 30 fps whatever the display was
+    // doing, and the node visibly lagged the cursor — this is the "dragging an EQ
+    // node is still stuttery" report, and it has nothing to do with the RHI
+    // work: the picture is fine, it simply was not being asked for.
+    //
+    // Anything the user does repaints in the frame it happens.  m_dirty stays set
+    // as well, so a spectrum tick that arrives first cannot swallow the change.
     m_dirty = true;
+    update();
     e->accept();
 }
 
@@ -2624,6 +2739,7 @@ void OvEqView::endDrag()
     m_dragMovesGain = false;
     emit hoverEnded();
     m_dirty = true;
+    update();        // the release frame shows the settled node, not the last drag frame
 }
 
 void OvEqView::mouseDoubleClickEvent (QMouseEvent* e)

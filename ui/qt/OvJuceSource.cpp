@@ -186,13 +186,36 @@ bool OvJuceSource::analyse (float* dest, int count, bool inTap)
     f.performFrequencyOnlyForwardTransform (buf.data());
 
     const float fsr = juce::jmax (1.0f, (float) proc.getSampleRate());
+    const int   maxBin = InjectorProcessor::fftSize / 2 - 1;
+
     for (int i = 0; i < count; ++i)
     {
         const float frac = (float) i / (float) juce::jmax (1, count - 1);
         const float fr   = 20.0f * std::pow (1000.0f, frac);
-        const int   bin  = juce::jlimit (0, InjectorProcessor::fftSize / 2,
-                                         (int) (fr / fsr * (float) InjectorProcessor::fftSize));
-        const float mag  = buf[(size_t) bin] / (float) InjectorProcessor::fftSize * 8.0f;
+
+        // INTERPOLATE between FFT bins, do not truncate to the nearest one.
+        //
+        // The 128 display bins are log-spaced from 20 Hz to 20 kHz while the FFT
+        // has 1024 LINEAR bins — 23.4 Hz apart at 48 kHz.  Truncating meant the
+        // first ten display bins all read bin 0 and the next ones read bin 1, so
+        // the lowest decade came out as a few FLAT PLATEAUS: a rectangle at the
+        // left of the fill that stepped down instead of descending, which is the
+        // "it tears down like a rectangle below 20 Hz" report.  The same effect
+        // put a stair tread on every other log bin whose spacing was finer than
+        // one FFT bin.
+        //
+        // Above ~1 kHz the spacing is coarser than a bin so this changes nothing;
+        // at the bottom it turns the plateaus into the ramp the spectrum actually
+        // has.
+        const float pos  = juce::jlimit (0.0f, (float) maxBin,
+                                         fr / fsr * (float) InjectorProcessor::fftSize);
+        const int   b0   = (int) pos;
+        const int   b1   = juce::jmin (maxBin, b0 + 1);
+        const float t    = pos - (float) b0;
+        const float mag0 = buf[(size_t) b0];
+        const float mag1 = buf[(size_t) b1];
+        const float mag  = (mag0 + (mag1 - mag0) * t)
+                         / (float) InjectorProcessor::fftSize * 8.0f;
         const float db   = juce::Decibels::gainToDecibels (mag, -90.0f);
         dest[i] = juce::jlimit (0.0f, 1.0f, juce::jmap (db, -85.0f, 0.0f, 0.0f, 1.0f));
     }

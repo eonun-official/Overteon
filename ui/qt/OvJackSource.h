@@ -14,10 +14,11 @@
 //  "the UI is slow" from "the host is slow".
 //
 //  Input and output spectra: the inputs are the signal, and the "output" is
-//  that signal with the EQ curve applied — the preview links no DSP, so the
-//  Post EQ response is the honest stand-in, computed from the same parameters
-//  the curve is drawn from.  That keeps the two spectrum fills and the two glow
-//  bars showing two different pictures, as they must.
+//  that signal with the EQ response modelled on top, because THIS build links
+//  no DSP.  It is only used by the PREVIEW_ONLY configuration; the normal
+//  preview hosts the plug-in's InjectorProcessor and measures the processed
+//  audio for real (OvJackJuce.h).  Even here the model is applied in dB before
+//  the display floor, so silence stays silent instead of drawing the curve.
 // ============================================================
 #include "OvSource.h"
 #include "OvBiquad.h"
@@ -182,15 +183,28 @@ public:
 
     bool spectrum (float* dst, int n) override
     {
+        // THE FALLBACK — no DSP in this build.
+        //
+        // This source exists for the PREVIEW_ONLY configuration (a Qt-only
+        // cross-build where JUCE cannot be compiled) and has no
+        // InjectorProcessor to measure.  The normal preview hosts the real DSP
+        // and never reaches this code — see OvJackJuce.h.
+        //
+        // The EQ response is therefore a MODEL here, and a model is only honest
+        // where it belongs: in dB, BEFORE the display floor.  It used to be
+        // added AFTER the 0..1 conversion, so a silent input — a table sitting
+        // on its -85 dB floor — plus the EQ curve came out as the EQ shape drawn
+        // by itself: a static curve in silence, which is the one thing an
+        // after-processing meter must never show.  Adding it to the dB value
+        // first means silence plus gain is still below the floor.
         const auto snap = snapshot();
         ovfft::spectrumFromRing (snap.ring, snap.pos, m_rate, dst, n, m_fft);
 
-        // The output picture: the same spectrum with the EQ response applied.
         for (int i = 0; i < n; ++i)
         {
-            const double f = 20.0 * std::pow (1000.0, (double) i / std::max (1, n - 1));
-            const double db = eqGainDb (f);
-            dst[i] = (float) std::clamp ((double) dst[i] + db / 85.0, 0.0, 1.0);
+            const double f  = 20.0 * std::pow (1000.0, (double) i / std::max (1, n - 1));
+            const double db = -85.0 + 85.0 * (double) dst[i] + eqGainDb (f);
+            dst[i] = (float) std::clamp ((db + 85.0) / 85.0, 0.0, 1.0);
         }
         return true;
     }

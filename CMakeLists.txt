@@ -309,7 +309,41 @@ if(OVERTEON_QT_UI)
         ui/qt/ov_ui.qrc
         ${OVERTEON_SHADER_QRC})
 
-    target_include_directories(overteon-qml-preview PRIVATE ui/qt)
+    target_include_directories(overteon-qml-preview PRIVATE ui/qt src)
+
+    # ---- the REAL DSP ------------------------------------------------
+    # The preview used to FFT the raw input and then ADD an analytic EQ curve on
+    # top of it to produce the "after" picture.  That is not an after-processing
+    # meter: with no signal the input sits on its -85 dB floor, and adding the
+    # curve to that floor drew the EQ shape as a static image — the "in silence
+    # it shows a constant value" report.  Because it was a model it could never
+    # show what the DSP actually does either (oversampling, saturation
+    # harmonics, dry/wet, the limiter).
+    #
+    # The preview therefore hosts the plug-in's own InjectorProcessor: the JACK
+    # thread copies incoming frames into a JUCE buffer and calls processBlock(),
+    # exactly as a host would, and both spectrum taps are read from inside the
+    # DSP.  Parameters, presets and meters come from the same APVTS the plug-in
+    # uses, so ovctl and .hinj files drive the real thing.
+    target_sources(overteon-qml-preview PRIVATE
+        src/FxProcessor.cpp
+        ui/qt/OvJuceSource.cpp
+        # createEditor() is part of the processor; the preview never opens the
+        # editor, but the symbol has to link.
+        ui/qt/OvQmlEditor.cpp ui/qt/OvQtComponent.cpp)
+    target_compile_definitions(overteon-qml-preview PRIVATE
+        OVERTEON_PREVIEW_HAS_DSP=1 OVERTEON_QT_UI=1
+        # Same JUCE feature set as the plug-in target.  Without these the module
+        # sources are compiled with the browser enabled and juce_gui_extra pulls
+        # in gtk, which is neither needed nor installed here.
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        $<$<NOT:$<PLATFORM_ID:Windows>>:BUILD_UNIXLIKE=1>)
+    target_link_libraries(overteon-qml-preview PRIVATE
+        juce::juce_audio_utils juce::juce_dsp
+        juce::juce_recommended_config_flags)
     target_link_libraries(overteon-qml-preview PRIVATE
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets
         # OvEqView is a QQuickFramebufferObject and paints with a
