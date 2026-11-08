@@ -697,7 +697,19 @@ public:
     }
 
     /// Returns the vertex count drawn; 0 means "nothing".
-    int rebuild (const QVector<QPointF>& top, double bottom, const QColor& accent)
+    ///
+    /// The colours are PREMULTIPLIED and normalised to 0..1 before the byte
+    /// conversion.  Two mistakes were here, both visible on screen:
+    ///
+    ///   * QColor::red() returns 0..255, and the value was multiplied by 255 a
+    ///     second time, so the colour saturated to 255 while the alpha stayed a
+    ///     few units.  A premultiplied colour LARGER than its alpha is invalid
+    ///     and the blend degenerates to additive — the fill rendered as a solid
+    ///     teal bar no matter how small the alpha was.
+    ///   * the gradient was never applied at all: both ends used the accent, so
+    ///     the fill did not fade into the section's teal at the bottom.
+    int rebuild (const QVector<QPointF>& top, double bottom, double topOfRamp,
+                 const QColor& accent)
     {
         QSGGeometry* geom = geometry();
         const int n = top.size();
@@ -705,19 +717,38 @@ public:
         if (geom->vertexCount() < n * 2)
             geom->allocate (n * 2);
 
+        // The painter path's gradient, in 0..1:
+        //     QLinearGradient grad (0, top, 0, bottom)
+        //     setColorAt (0.0, accent   @ .18)
+        //     setColorAt (1.0, #43d9c4 @ 0)
+        const QColor teal (QStringLiteral ("#43d9c4"));
+        const double ar = accent.redF(),   ag = accent.greenF(),   ab = accent.blueF();
+        const double tr = teal.redF(),     tg = teal.greenF(),     tb = teal.blueF();
+        const double span = std::max (1e-6, bottom - topOfRamp);
+
+        auto put = [&] (QSGGeometry::ColoredPoint2D& vx, const QPointF& p, double y)
+        {
+            const double t = std::clamp ((y - topOfRamp) / span, 0.0, 1.0);
+            const double r = ar + (tr - ar) * t;
+            const double g = ag + (tg - ag) * t;
+            const double b = ab + (tb - ab) * t;
+            const double a = 0.18 * (1.0 - t);
+            // PREMULTIPLIED: colour and alpha in the same 0..1 space, colour
+            // scaled by alpha once.
+            vx.set (float (p.x()), float (p.y()),
+                    uchar (std::clamp (int (r * a * 255.0 + 0.5), 0, 255)),
+                    uchar (std::clamp (int (g * a * 255.0 + 0.5), 0, 255)),
+                    uchar (std::clamp (int (b * a * 255.0 + 0.5), 0, 255)),
+                    uchar (std::clamp (int (a * 255.0 + 0.5), 0, 255)));
+        };
+
         auto* v = geom->vertexDataAsColoredPoint2D();
-        const int hiA = int (accent.alpha() * 0.18 * 255.0 + 0.5);   // the fill's top
-        const int loA = 0;                                           // fades out
         int k = 0;
         for (const QPointF& p : top)
         {
-            v[k].set (float (p.x()), float (p.y()),
-                      uchar (accent.red()), uchar (accent.green()), uchar (accent.blue()),
-                      uchar (hiA));
+            put (v[k], p, p.y());
             ++k;
-            v[k].set (float (p.x()), float (bottom),
-                      uchar (accent.red()), uchar (accent.green()), uchar (accent.blue()),
-                      uchar (loA));
+            put (v[k], QPointF (p.x(), bottom), bottom);
             ++k;
         }
         geom->setVertexCount (k);
@@ -820,8 +851,8 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     {
         auto* sp = static_cast<SpectrumNode*> (m_sgSpectrum);
         const int n = std::getenv ("ONYXTEON_ONLYBG")
-                    ? sp->rebuild (QVector<QPointF>(), 0.0, L.accent)
-                    : sp->rebuild (L.spectrum, L.spectrumBottom, L.accent);
+                    ? sp->rebuild (QVector<QPointF>(), 0.0, 1.0, L.accent)
+                    : sp->rebuild (L.spectrum, L.spectrumBottom, L.spectrumTop, L.accent);
         if (n > 0 && ! m_spAttached)
         {
             m_sgRoot->insertChildNodeBefore (sp, m_sgGlow);
@@ -835,13 +866,32 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     }
 
     // ---- glow bar --------------------------------------------------------
+    //
+    // Built HERE.  paintGlowBar() is the painter path and no longer runs on this
+    // one, so without this call the node had nothing to draw and the pit showed
+    // whatever the previous frame left in it — which is why a "fake" bar stayed
+    // on screen while dragging with no audio: nothing was ever rebuilding it.
+    //
+    // The RETURN VALUE decides visibility, not the members: ensureGlowBar clears
+    // them when there is nothing to show, so a stopped signal removes the bar
+    // instead of freezing the last frame of it.
     {
-        const bool have = ! m_glowBar.isNull() && ! m_glowDest.isEmpty();
+        float spec[128] = {};
+        if (m_engine != nullptr)
+        {
+            const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
+                                          : m_engine->spectrumTable();
+            const int n = std::min (128, int (tbl.size()));
+            for (int i = 0; i < n; ++i) spec[i] = float (tbl.at (i).toDouble());
+        }
+        QRectF dest;
+        const bool ok = ensureGlowBar (width(), height(), QColor (m_accent), spec, dest);
+        const bool have = ok && ! m_glowBar.isNull() && ! dest.isEmpty();
         slot (m_sgGlow, applyTexture (window(), m_sgGlow,
                                       have ? m_glowBar : QImage(),
                                       have ? QString::number (m_glowKey) : QString(),
                                       m_texKeyGlow, m_texImgGlow,
-                                      have ? m_glowDest : QRectF()));
+                                      have ? dest : QRectF()));
     }
 
     // ---- overlay ---------------------------------------------------------
@@ -1407,6 +1457,7 @@ void OvEqView::buildLayers (Layers& out)
         }
 
         out.spectrumBottom = bottom;
+        out.spectrumTop    = top;
         out.spectrum.reserve (128 * 6);
         const int kSub = 5;                   // 5 segments per span is plenty
         for (int i = 0; i < 127; ++i)
@@ -1778,18 +1829,35 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
             l = m_glowShown[b];
         }
 
-        // Has the release finished?  Checked here, where the value is known,
-        // not from the incoming peak (see the note above).
-        {
-            bool anyFalling = false;
-            for (int b = 0; b < kBands; ++b)
-                if (m_glowShown[b] > 0.002) anyFalling = true;
-            m_glowFalling = anyFalling;
-        }
         // Display curve.  The table is (dB + 85) / 85, so a signal 20 dB down
         // sits at 0.76 and would glow almost as brightly as a full-scale one;
         // squaring turns that into something that reads as loudness.
         band[b] = l * l;
+    }
+
+    // Has the release finished?  Asked ONCE, after every band has advanced.
+    //
+    // It used to be inside the per-band loop, so only the LAST band's value was
+    // ever consulted: the top band reaches silence first, so the flag went false
+    // while the low bands were still falling, the "nothing to draw" gate below
+    // then refused to fire, and the bar kept drawing its residual glow for ever —
+    // the strip that stayed on screen after the audio stopped.
+    {
+        bool anyFalling = false;
+        double mx = 0;
+        for (int b = 0; b < kBands; ++b)
+        {
+            mx = std::max (mx, m_glowShown[b]);
+            if (m_glowShown[b] > 0.002) { anyFalling = true; }
+        }
+        m_glowFalling = anyFalling;
+        if (std::getenv ("ONYXTEON_GLOWDBG"))
+        {
+            static int n = 0;
+            if (++n % 10 == 0)
+                std::fprintf (stderr, "[glow] %s maxShown=%.6f falling=%d\n",
+                              qPrintable (m_prefix), mx, int (anyFalling));
+        }
     }
 
     // Four smoothing passes.  One was nowhere near enough: 32 bands over 640 px
@@ -1832,7 +1900,20 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
     // the last image on screen — three consecutive static captures in a passage
     // where the audio was merely quiet.  `m_glowFalling` is set whenever a bar
     // is above its target, so the release is always allowed to finish.
-    if (loud < 0.002 && ! m_glowFalling) { return false; }  // nothing to draw
+    if (loud < 0.002 && ! m_glowFalling)
+    {
+        // NOTHING TO DRAW — and say so in a way the scene graph can see.
+        //
+        // Returning false used to leave m_glowBar and m_glowDest untouched, so
+        // the node kept drawing the last image: when the audio stopped, the bar
+        // stayed on screen as a solid strip above the pit (blue-ish, because it
+        // was the tail of the release at full alpha).  Clearing both makes the
+        // caller detach the node instead.
+        m_glowBar = QImage();
+        m_glowDest = QRectF();
+        m_glowKey = 0;
+        return false;
+    }
 
     // Never divide by a tiny peak: band/peak with peak at 1e-6 multiplies the
     // residue of the release into full-scale noise, and at exactly 0 it produces

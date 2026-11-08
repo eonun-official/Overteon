@@ -92,6 +92,7 @@ public:
         /// baseline it fills down to.  Both in item coordinates.
         QVector<QPointF> spectrum;
         double spectrumBottom = 0.0;
+        double spectrumTop    = 0.0;   // the gradient's other end
         QColor accent;
     };
     /// Everything the render node needs for this frame.  Builds whichever
