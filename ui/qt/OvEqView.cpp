@@ -769,6 +769,19 @@ void OvEqView::setWantImage (bool on)
 
 QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 {
+    if (std::getenv ("ONYXTEON_NODERATE"))
+    {
+        static int n = 0;
+        static auto t0 = std::chrono::steady_clock::now();
+        ++n;
+        const double dt = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
+        if (dt >= 1.0)
+        {
+            std::fprintf (stderr, "[noderate] %s %.1f/s\n", qPrintable (m_prefix), n / dt);
+            n = 0; t0 = std::chrono::steady_clock::now();
+        }
+    }
     if (m_engine == nullptr) return old;
 
     // The CPU seam glass — the fallback for a machine where the GPU chain
@@ -903,6 +916,21 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
         slot (m_sgOverlay, applyTexture (window(), m_sgOverlay, img, L.overlayKey,
                                          m_texKeyOv, m_texImgOv, full));
     }
+
+    // Tell the glass and the fog that this plot produced a new picture.
+    //
+    // QUEUED because this runs on the render thread and the receivers call
+    // QQuickItem::update(), which is a GUI-thread operation.  Emitted on EVERY
+    // frame, not only when the CPU seam glass asked for pixels: it used to sit
+    // inside the m_wantImage branch, so on the GPU path — the normal one —
+    // nothing was ever emitted and both consumers fell back to their own 1 Hz
+    // safety timers.  Measured symptom: dragging an EQ node moves the curve but
+    // the crossing and the seam glass stay frozen.
+    //
+    // Both receivers throttle themselves (the seam to 30 Hz, the fog by a
+    // signature check), so following the frame rate costs one queued call.
+    QMetaObject::invokeMethod (this, [this] { emit contentChanged(); },
+                               Qt::QueuedConnection);
 
     QSGNode* root = m_sgRoot;
     return root;

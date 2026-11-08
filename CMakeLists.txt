@@ -270,6 +270,13 @@ if(OVERTEON_QT_UI)
     endforeach()
     add_custom_target(overteon_shaders DEPENDS ${OVERTEON_SHADER_QSBS})
 
+    # ---- ovctl: drive a running preview through shared memory -------------
+    # Small enough to be a plain executable with no Qt dependency, so it can be
+    # run from a script while the UI is busy.
+    add_executable(ovctl tools/ovctl.cpp)
+    target_include_directories(ovctl PRIVATE ui/qt)
+    target_link_libraries(ovctl PRIVATE ${CMAKE_THREAD_LIBS_INIT})
+
     set(OVERTEON_SHADER_QRC "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/ov_shaders.qrc")
     file(WRITE ${OVERTEON_SHADER_QRC}
         "<RCC><qresource prefix=\"/shaders\">\n"

@@ -218,7 +218,15 @@ QSGNode* OvFogSource::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 
     m_builtKey = key;
     ++m_built;
-    if (m_built % 60 == 1)
-        emit revisionChanged();
+
+    // EVERY rebuild, not every sixtieth.
+    //
+    // The signal is what tells the blur chain downstream that the strokes
+    // changed; emitting it on a counter meant a drag updated the geometry on
+    // every frame but the chain was only woken once every 60 builds, so the
+    // crossing stayed on whatever picture it had when the counter last wrapped.
+    // Measured symptom: dragging an EQ node updates the curve but the fog does
+    // not move at all.
+    emit revisionChanged();
     return node;
 }

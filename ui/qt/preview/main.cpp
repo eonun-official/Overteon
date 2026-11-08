@@ -19,6 +19,7 @@
 #include "OvPreset.h"
 #include "OvTick.h"
 #include "OvQmlTypes.h"
+#include "OvCtl.h"
 #include "OvEqView.h"
 
 #include <QApplication>
@@ -327,7 +328,7 @@ int main (int argc, char** argv)
     // returns null before that and the default would be silently ignored.
     int w = 840, h = 624;
     bool sizeGiven = false;
-    QString shot, customQml;
+    QString shot, customQml, ctlName;
     int shotDelay = 1200;
     bool hud = false;             // --hud: separate read-out window
     QPointF probe (-1, -1);       // --probe x,y: ask the hit-test about a point
@@ -412,6 +413,13 @@ int main (int argc, char** argv)
         else if (a == "--qml" && i + 1 < argc)
         {
             customQml = QString::fromLatin1 (argv[++i]);
+        }
+        else if (a == "--ctl" && i + 1 < argc)
+        {
+            // Control block name for `ovctl`: parameters can then be driven from
+            // outside through MIT shared memory, with an exponential approach so
+            // the code under test sees a drag rather than a jump.
+            ctlName = QString::fromLatin1 (argv[++i]);
         }
     }
 
@@ -713,7 +721,114 @@ int main (int argc, char** argv)
             prm->setValue (val);
     }
 
-    // Does the node end up where the cursor went?  This is the "the place I can
+    // ---- --ctl: parameters driven from outside through shared memory ------
+    //
+    // A writer (ovctl) sets a target and a time constant; this timer moves the
+    // parameter towards it every frame, so whatever the UI does in response is
+    // the response to a drag, not to a step.  Keeping it out of the paint path
+    // matters: the point is to measure the UI, so the driver must not be part of
+    // what is being measured.
+    if (! ctlName.isEmpty())
+    {
+        auto* blk = ovctl::map (ctlName.toStdString(), true);
+        if (blk == nullptr)
+        {
+            std::fprintf (stderr, "[ctl] cannot map /%s\n",
+                          ctlName.toStdString().c_str());
+        }
+        else
+        {
+            if (qEnvironmentVariableIsSet ("ONYXTEON_CTLDEBUG"))
+            {
+                auto& src = engine->source();
+                for (int i = 0; i < src.count(); ++i)
+                    std::fprintf (stderr, "[ctl] param[%d] id='%s'\n", i,
+                                  src.spec (i).id.c_str());
+            }
+            std::fprintf (stderr, "[ctl] control block /%s ready (ovctl --name %s set …)\n",
+                          ctlName.toStdString().c_str(), ctlName.toStdString().c_str());
+            auto* seen = new quint32[ovctl::kSlots] {};
+            auto* cur  = new double[ovctl::kSlots] {};
+            auto* tgt  = new double[ovctl::kSlots] {};
+            auto* tau  = new double[ovctl::kSlots] {};
+            auto* live = new bool[ovctl::kSlots] {};
+            auto* last = new std::chrono::steady_clock::time_point;
+            auto* eqViews = new QList<OvEqView*>;
+
+            // A raw pointer into the engine: the lambda cannot capture the
+            // unique_ptr, and the engine outlives this timer either way.
+            OvEngine* eng = engine.get();
+            auto* tick = new QTimer (&view);
+            tick->setInterval (8);          // same cadence as the engine's poll
+            QObject::connect (tick, &QTimer::timeout, [=, &view] {
+                const auto now = std::chrono::steady_clock::now();
+                const double dt = (*last == std::chrono::steady_clock::time_point())
+                                ? 0.0
+                                : std::chrono::duration<double> (now - *last).count();
+                *last = now;
+                bool touched = false;
+
+                for (int i = 0; i < ovctl::kSlots; ++i)
+                {
+                    auto& sl = blk->entries[i];
+                    const quint32 s = sl.seq.load (std::memory_order_acquire);
+                    if (s == 0) continue;
+
+                    if (s != seen[i])
+                    {
+                        // A new request: start from where the parameter is now,
+                        // so a second command mid-drag continues smoothly.
+                        seen[i] = s;
+                        tgt[i]  = double (sl.target);
+                        tau[i]  = double (sl.tau);
+                        auto* p = eng->typedParam (QString::fromLatin1 (sl.id)
+                                                          .trimmed());
+                        cur[i]  = p ? p->value() : tgt[i];
+                        live[i] = (p != nullptr);
+                        if (qEnvironmentVariableIsSet ("ONYXTEON_CTLDEBUG"))
+                            std::fprintf (stderr, "[ctl] slot %d id '%s' target %g tau %g -> %s\n",
+                                          i, sl.id, tgt[i], tau[i],
+                                          p ? "param found" : "NO SUCH PARAM");
+                    }
+                    if (! live[i]) continue;
+
+                    auto* p = eng->typedParam (QString::fromLatin1 (sl.id)
+                                                      .trimmed());
+                    if (p == nullptr) { live[i] = false; continue; }
+
+                    const double next = ovctl::approach (cur[i], tgt[i], dt, tau[i]);
+                    if (std::abs (next - cur[i]) > 1e-9)
+                    {
+                        cur[i] = next;
+                        p->setValue (next);
+                        touched = true;
+                    }
+                }
+
+                // Repaint the plots by hand.
+                //
+                // OvParam::setNorm updates its own cached norm, so OvEngine's
+                // poll sees no difference and never emits paramRevisionChanged
+                // for a change that came from outside — host automation, a
+                // preset load, or this control block.  A drag repaints because
+                // mouseMoveEvent calls update() itself, which is why only
+                // programmatic changes were affected.
+                //
+                // The real fix belongs in the engine (compare against the
+                // source, not against its own cache).  Until then the harness
+                // asks the views directly.
+                if (touched)
+                {
+                    if (eqViews->isEmpty() && view.rootObject() != nullptr)
+                        *eqViews = view.rootObject()->findChildren<OvEqView*>();
+                    for (auto* v : *eqViews) v->update();
+                }
+            });
+            tick->start();
+        }
+    }
+
+    // Does the node end up where the cursor went?  This is "the place I can
     // drag it and the node itself are not together" complaint, asked as a
     // number: press on a node, move to a known point, and compare the node's
     // resulting position with that point.
