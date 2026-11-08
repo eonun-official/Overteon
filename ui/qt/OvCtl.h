@@ -111,6 +111,19 @@ inline Block* map (const std::string& bareName, bool create)
     return b;
 }
 
+/// Attach to an EXISTING block, creating one only if there is none.
+///
+/// The writer must not truncate: `set` used to open with create=true every time,
+/// which ftruncate()s and memsets the whole block, so each command erased the
+/// one before it.  Measured: `ovctl list` always reported 0 slots and the preview
+/// never saw a value, while every individual `set` looked successful.
+inline Block* attach (const std::string& bareName)
+{
+    if (Block* b = map (bareName, false))
+        return b;                    // already there: keep its contents
+    return map (bareName, true);     // first one wins and creates it
+}
+
 inline void unmap (Block* b)
 {
     if (b != nullptr) ::munmap (static_cast<void*> (b), blockBytes());

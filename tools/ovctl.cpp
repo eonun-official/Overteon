@@ -58,7 +58,9 @@ int main (int argc, char** argv)
 
     if (cmd.empty()) { usage(); return 2; }
 
-    ovctl::Block* blk = ovctl::map (name, true);
+    // ATTACH, do not create: creating truncates the block and would wipe
+    // whatever the previous command set.
+    ovctl::Block* blk = ovctl::attach (name);
     if (blk == nullptr)
     {
         std::fprintf (stderr, "ovctl: cannot map /%s (run the preview with --ctl %s)\n",
