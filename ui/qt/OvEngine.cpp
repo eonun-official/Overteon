@@ -44,15 +44,22 @@ OvEngine::OvEngine (std::unique_ptr<OvSource> source, QObject* parent)
 OvEngine::~OvEngine() = default;
 
 // ---------------------------------------------------------------------------
-//  The light behind the accent glow.
+//  The light behind the accent glow — the page's `--light`, exactly.
 //
-//  The same ovb::Fall as every other meter (ui/qt/OvBallistics.h): instant
-//  attack, smootherstep-eased release, dB per SECOND.  It used to be its own
-//  copy of  step = 1 - (target/start)^(1/n_frames), which is why the light and
-//  the bars beside it fell at two different speeds.
+//      const outLight = Math.max (mdb(d.ol), mdb(d.or));
+//      scGlass.style.setProperty ("--light", (outLight*outLight).toFixed(3));
+//      .controlpit::before{opacity:var(--light,0);transition:opacity .1s linear}
 //
-//  Faster than the bars: a glow that lags behind the music reads as broken
-//  rather than as smooth.  60 dB in 120 ms.
+//  Two things follow, and both are different from what was here:
+//
+//    * the value is SQUARED before it is displayed, not smoothed in dB.  This
+//      used to be a dB-domain ovb::Fall at 36 dB/s, which is a third rate and a
+//      third shape that the page does not have.
+//    * the only filtering is the CSS transition: a LINEAR ramp that reaches the
+//      new value in 100 ms whatever the distance (ovb::LinearGlide).
+//
+//  `outLight`/`inLight` therefore carry --light itself, already squared; QML
+//  uses them directly instead of squaring them a second time.
 // ---------------------------------------------------------------------------
 void OvEngine::lightTick()
 {
@@ -64,28 +71,17 @@ void OvEngine::lightTick()
                          0.0005, 0.20);
     m_lightAt = now;
 
-    // The same ovb::Fall the bars use, in dB — this used to be a third copy of
-    // the release formula, and the light and the bars disagreed about how fast
-    // a fall was.
-    //
-    // 60 dB in 0.12 s (500 dB/s) was still an order of magnitude faster than
-    // any meter, and the level it follows is now an RMS with a 300 ms
-    // integration.  It is set to that detector's own natural decay,
-    // 4.343/0.12 = 36 dB/s, so the glow tracks the measurement instead of
-    // racing ahead of it — and it is deliberately faster than the bars'
-    // 11.8 dB/s, because a glow that lags the music reads as broken.
-    constexpr double kLightDbPerSec = 4.343 / 0.12;
-    constexpr double kSpanDb = 60.0, kFloorDb = -60.0;
+    // mdb(): (dB + 60) / 60, clamped — the page's mapping, on the LOUDER channel.
+    const auto mdb = [] (double db) { return std::clamp ((db + 60.0) / 60.0, 0.0, 1.0); };
+    const double levelOut = std::max (mdb (m_meters.outL), mdb (m_meters.outR));
+    const double levelIn  = std::max (mdb (m_meters.inL),  mdb (m_meters.inR));
 
-    // The measurement is already in dB; the light follows the LOUDER channel.
-    const double targetOut = std::max (m_meters.outL, m_meters.outR);
-    const double targetIn  = std::max (m_meters.inL,  m_meters.inR);
+    // --light = level^2, then the 0.1 s linear opacity transition.
+    m_outGlide.set (levelOut * levelOut);
+    m_inGlide.set  (levelIn  * levelIn);
 
-    m_outFall.advance (targetOut, dt, kLightDbPerSec);
-    m_inFall.advance  (targetIn,  dt, kLightDbPerSec);
-
-    const double nextOut = ovb::dbToNorm (m_outFall.shown, kSpanDb, kFloorDb);
-    const double nextIn  = ovb::dbToNorm (m_inFall.shown,  kSpanDb, kFloorDb);
+    const double nextOut = m_outGlide.advance (dt);
+    const double nextIn  = m_inGlide.advance (dt);
 
     // Threshold in the 0..1 domain: 0.002 is well under one pixel of glow.
     if (std::abs (nextOut - m_outLight) > 0.002 || std::abs (nextIn - m_inLight) > 0.002)
@@ -97,10 +93,9 @@ void OvEngine::lightTick()
 
     if (ovEnvFlag ("ONYXTEON_METERDBG"))
     {
-        std::fprintf (stderr, "[l] %.3f  out %6.2f dB  in %6.2f dB  "
-                              "light out %.4f in %.4f\n",
+        std::fprintf (stderr, "[l] %.3f  --light out %.4f in %.4f  (level %.3f %.3f)\n",
                       std::chrono::duration<double> (now.time_since_epoch()).count(),
-                      m_outFall.shown, m_inFall.shown, m_outLight, m_inLight);
+                      m_outLight, m_inLight, levelOut, levelIn);
     }
 }
 

@@ -1,55 +1,43 @@
 #pragma once
 // ============================================================
-//  OnyxTEON — the analyser's averaging, in ONE testable place.
+//  OnyxTEON — the analyser's averaging.
 //
-//  The spectrum fill is the one display that is fed raw FFT magnitudes, and an
-//  FFT magnitude of noise is Rayleigh-distributed: consecutive bins and
-//  consecutive measurements of the SAME bin differ by several dB even when the
-//  signal is perfectly steady.  Drawing that directly is what "the spectrum is
-//  not smooth, it shakes" describes, and it cannot be fixed by shaping the
-//  existing dB values — a random walk in dB is still a random walk.
+//  THE PAGE HAS NONE.  web_fx/index.html does this and only this:
 //
-//  So the averaging happens where the physics is:
+//      window.__JUCE__.backend.addEventListener ("spectrum", arr => {
+//        for (let i=0;i<128&&i<arr.length;i++){ pqPanel.spectrum[i]=arr[i];
+//                                              scPanel.spectrum[i]=arr[i]*0.85; }
+//        pqPanel.drawSpec();   // a polyline through the raw 128 bins
+//      });
 //
-//    1. dB -> POWER.  Every smoothing below is a mean of ENERGY, because that
-//       is the quantity an analyser measures.  Averaging the 0..1 dB display
-//       value (which is what this used to do) averages decibels, and the mean
-//       of a Rayleigh variable's dB is not the dB of its mean: the outline sits
-//       low and still twitches.
+//  so what the page shows is the measurement, frame by frame, and that is what
+//  this class does by default: `advance()` copies the table through unchanged.
+//  Anything else on top of it is a display filter the page does not have, and
+//  the reference for this UI is the page.
 //
-//    2. Along FREQUENCY: a 1/3-octave Gaussian.  The 128 bins are log-spaced
-//       at 12.8 per octave, so 1/3 octave is 4.27 bins wide (sigma 1.7).  This
-//       is what a fractional-octave analyser does and it is the only step that
-//       removes the bin-to-bin sawtooth.
+//  The consequence is real and is not hidden: an FFT magnitude of steady noise
+//  has a ~5.6 dB standard deviation per frame, so the outline moves about 5 dB
+//  per frame on noise and the fill reads as "shaking".  That IS the page.  Where
+//  it is not wanted (a 128-bin outline on a 640 px canvas is not the same
+//  picture as an FFT of 2048 samples in a browser), the smoothing below can be
+//  switched on with three environment variables, and it was tuned by
+//  measurement rather than by taste:
 //
-//    3. Along TIME: a one-pole mean in the power domain, with separate attack
-//       and release constants.  A one-pole in power IS the exponential mean
-//       that defines a running RMS, so this is the spectrum equivalent of what
-//       ovb::Rms does for the level meters, and the fall it produces,
-//       4.343/tau dB/s, is the same relationship.
+//      ONYXTEON_SPECREL=0.26    release, seconds (4.343/tau dB/s)
+//      ONYXTEON_SPECATT=0.12    attack, seconds
+//      ONYXTEON_SPECSIGMA=2.5   frequency kernel, bins (1.7 = 1/3 octave,
+//                               2.5 = 1/2 octave at 12.8 bins per octave)
 //
-//  Why not ovb::Fall (the dB-domain constant-rate release the bars use): a bar
-//  shows one number and a constant dB/s fall is exactly right for it.  A
-//  spectrum shows 128 numbers whose differences are what the eye reads, and a
-//  dB-domain ramp applied per bin preserves every one of those differences — the
-//  outline falls smoothly and still shakes.  Power averaging is what kills the
-//  shake.
+//  With those on, tools/units/spectrum_test.cpp measures, on a steady signal:
 //
-//  Measured (tools/units/spectrum_test.cpp, which builds the input as a comb of
-//  Rayleigh-like bins and runs the OLD chain beside the new one on the same
-//  data, so the two numbers are a comparison and not a memory):
+//      frame-to-frame change, 95th pct   5.47 dB (page)  ->  1.05 dB (smoothed)
+//      bin-to-bin sawtooth, 95th pct     2.56 dB          ->  0.90 dB
+//      release after silence             none (page)      ->  16.6 dB/s
 //
-//      frame-to-frame change, 95th percentile, steady noise
-//          old (dB domain, 1/6 oct, 85 dB/0.3 s)   5.47 dB
-//          new (power domain, 1/2 oct, 0.26 s)     1.05 dB
-//      bin-to-bin sawtooth, 95th percentile
-//          old 2.56 dB    new 0.90 dB
-//      release, once the signal stops
-//          old 283 dB/s   new 16.6 dB/s
-//
-//  And on real audio (ONYXTEON_SPECDBG=all, one frame's 128 bins per line):
-//  frame-to-frame change has a median of 0.43 dB and a 95th percentile of
-//  1.6-2.0 dB, the tail above that being the music itself.
+//  and the averaging is done where the physics is: dB -> POWER first, because
+//  the mean of decibels is not the decibel of the mean, then a Gaussian along
+//  frequency (that is the only step that removes bin-to-bin sawtooth), then a
+//  one-pole along time in the same power domain (which IS a running RMS).
 // ============================================================
 
 #include <algorithm>
@@ -75,32 +63,41 @@ inline double dbOfPower (double p)  { return 10.0 * std::log10 (std::max (p, 1e-
 
 struct SpectrumBallistics
 {
-    // ---- tunables, all in real units --------------------------------------
-    /// Power-domain one-pole constants.  The fall is 4.343/tau dB/s, so
-    /// 0.12 s is 36 dB/s and a full 85 dB sweep takes 2.4 s — the value that
-    /// replaced "85 dB in 0.3 s", which measured 283 dB/s and read as a snap.
-    double attackTau  = 0.120;
-    double releaseTau = 0.260;      // 4.343/0.26 = 16.7 dB/s downward
+    /// Off by default: the page's behaviour is a straight copy of the table.
+    /// Turned on by OvEqView when any ONYXTEON_SPEC* is set.
+    bool   smooth = false;
 
-    /// Half an octave.  sigma in bins: 12.8 bins/octave * (1/2) / 2.5 = 2.56,
-    /// rounded to 2.5.  Chosen from a sweep of (attack, release, sigma) against
-    /// a steady signal — the combination that gets the frame-to-frame change
-    /// under 1 dB while still moving 20 dB in a quarter of a second.
+    // ---- tunables, all in real units --------------------------------------
+    /// Power-domain one-pole constants.  The fall is 4.343/tau dB/s, so 0.26 s
+    /// is 16.6 dB/s and a full 85 dB sweep takes 5 s.
+    double attackTau  = 0.120;
+    double releaseTau = 0.260;
+
+    /// 1/2 octave.  sigma in bins: 12.8 bins/octave * (1/2) / 2.5 = 2.56.
     double freqSigma  = 2.5;
 
     void reset()
     {
         for (int i = 0; i < kBins; ++i) { m_pow[i] = 0.0; m_out[i] = 0.0f; }
+        m_primed = false;
     }
 
     /// raw01: the engine's table, 0..1 over 85 dB.  out01 receives the same
     /// scale.  dt in seconds; a caller that runs at 30 Hz passes 0.033.
     void advance (const float* raw01, float* out01, double dt)
     {
+        if (! smooth)
+        {
+            // THE PAGE: the table, as it arrived, nothing added.
+            std::memcpy (out01, raw01, sizeof (float) * kBins);
+            std::memcpy (m_out, raw01, sizeof (float) * kBins);
+            return;
+        }
+
         if (! (dt > 0.0)) dt = 1.0 / 30.0;
         buildKernel();
 
-        // ---- 1+2. dB -> power, then the 1/3-octave mean -------------------
+        // ---- 1+2. dB -> power, then the fractional-octave mean -----------
         double p[kBins];
         for (int i = 0; i < kBins; ++i)
             p[i] = powerOfDb (normToDb (raw01[i]));
@@ -120,6 +117,16 @@ struct SpectrumBallistics
         }
 
         // ---- 3. the power-domain one-pole --------------------------------
+        //
+        // Seeded on the first frame from the measurement itself: starting at
+        // zero power means the first second after opening the editor ramps up
+        // from silence, which is a visible artefact and not smoothing.
+        if (! m_primed)
+        {
+            for (int i = 0; i < kBins; ++i) m_pow[i] = sm[i];
+            m_primed = true;
+        }
+
         const double aUp = 1.0 - std::exp (-dt / std::max (1e-5, attackTau));
         const double aDn = 1.0 - std::exp (-dt / std::max (1e-5, releaseTau));
         for (int i = 0; i < kBins; ++i)
@@ -137,12 +144,14 @@ struct SpectrumBallistics
     const float* shown() const { return m_out; }
 
     /// dB/s the outline falls at once the signal stops (the same relation as
-    /// ovb::Rms::decayDbPerSec).
-    double releaseDbPerSec() const { return 4.343 / std::max (1e-5, releaseTau); }
+    /// ovb::Rms::decayDbPerSec).  Zero when smoothing is off, because then the
+    /// outline follows the measurement and has no rate of its own.
+    double releaseDbPerSec() const { return smooth ? 4.343 / std::max (1e-5, releaseTau) : 0.0; }
 
 private:
     double m_pow[kBins] {};
     float  m_out[kBins] {};
+    bool   m_primed = false;
     double m_kernel[2 * kFreqHalf + 1] {};
     double m_kernelSigma = -1.0;
 

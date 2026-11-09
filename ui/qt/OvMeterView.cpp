@@ -69,30 +69,31 @@ namespace
         return std::clamp ((db + 60.0) / 60.0, 0.0, 1.0);
     }
 
-    // ---- the pod's numbers, in real units --------------------------------
-    // Every one of these used to be a per-frame coefficient somewhere in this
-    // file; expressed per second they mean the same thing at jalv's 15 Hz idle
-    // rate and at the preview's 60-120 Hz.
+    // ---- the pod's numbers, taken from the WEB UI ------------------------
+    //
+    // web_fx/index.html is the reference, and it has exactly two time constants
+    // in its whole meter:
+    //
+    //     drawLevel():  stroke-dashoffset = 100*(1-mdb(v))
+    //                   -> the BAR is the measurement. No smoothing.
+    //     peak:         hold 1.1 s, then ch.p -= dt*0.18, dt clamped to 0.1 s
+    //                   -> 0.18 of the 60 dB scale per second = 10.8 dB/s
+    //     hArc:         stroke-dashoffset = 100*(1-f)
+    //                   -> the RING is the measurement. No smoothing; the C++
+    //                      already one-poles harmRatioS with tau 131 ms.
+    //
+    // So there is no bar release here any more, and no ring release.  What the
+    // eye sees falling is the MEASUREMENT falling — which, now that the detector
+    // is a 300 ms RMS rather than a peak-hold, is 4.343/0.3 = 14.5 dB/s and
+    // looks like a meter.  Inventing a display release on top of it was adding
+    // a third rate to the two the page has.
     constexpr double kBarSpanDb   = 60.0;                // bottom of the bar
     constexpr double kBarFloorDb  = -60.0;
 
-    // 20 dB in 1.7 s.  This IS the standard one: IEC 60268-10 PPM Type II
-    // (EBU) falls 20 dB in 1.7 s, Type I (DIN) 24 dB in 2.8 s.  It replaces
-    // 20 dB/0.35 s — 57 dB/s, i.e. a full 60 dB scale emptied in a second,
-    // which no meter does and which read as a snap rather than a fall.
-    //
-    // The measurement behind it is now true RMS (ovb::Rms, tau 300 ms), whose
-    // own natural decay is 4.343/0.3 = 14.5 dB/s, so this display release is
-    // the slower of the two and is what you actually see: 11.8 dB/s.
-    constexpr double kBarDbPerSec = 20.0 / 1.7;
+    constexpr double kPeakHoldSec  = 1.1;                // the page's
+    constexpr double kPeakDbPerSec = 0.18 * 60.0;        // 10.8 dB/s
 
-    constexpr double kPeakDbPerSec = 0.18 * 60.0;        // 10.8 dB/s (the page's)
-
-    // The ring follows a harmonic RATIO that the DSP smooths with a 131 ms
-    // one-pole (kHarmTau in FxProcessor.cpp), so 4.343/0.131 = 33 dB/s is that
-    // measurement's own decay — the display adds no shape of its own.
     constexpr double kHarmFloorDb = -48.0;
-    constexpr double kHarmDbPerSec = 4.343 / 0.131;
 
     // green plateau -> amber -> red, with a hot red in the last 3 %
     QColor harmColor (double f)
@@ -260,53 +261,43 @@ void OvMeterView::advance (double dt)
                      { &m_inL, m.inL },   { &m_inR, m.inR } };
 
     // drawLevel() in web_fx/index.html, step for step:
-    //   new max        -> hold for 1.1 s
-    //   after the hold -> fall back at about 10.8 dB/s, never below the level
     //
-    // The motion itself comes from ovb::Fall (ui/qt/OvBallistics.h), which is
-    // the SAME code the light, the harmonic ring, the analyser and the glow
-    // bands use.  The bars used to carry their own copy of
-    //       step = 1 - (target/start)^(1/n_frames)
-    // here: an exponential, i.e. maximum speed on the first frame of a fall and
-    // an infinite tail, which is why a bar snapped to its value and then crept.
-    // Constant dB/s with a smootherstep ease-in lands exactly and starts from
-    // rest; the numbers are the same ones (20 dB in 0.35 s), only the curve is.
+    //     if (level >= ch.p) { ch.p = level; ch.holdUntil = now + 1100; }
+    //     else if (now > ch.holdUntil) ch.p = max(level, ch.p - dt*.18);
+    //     ch.bar.setAttribute ("stroke-dashoffset", 100*(1-level));   <- direct
+    //
+    // The BAR is the measurement with no smoothing of its own, and the TRAIL is
+    // the page's hold-and-fall.  Both are read off the same numbers.
     for (const auto& t : list)
     {
-        const double targetDb = ovb::normToDb (levelToFraction (t.db), kBarSpanDb, kBarFloorDb);
-        t.ch->levelFall.advance (targetDb, dt, kBarDbPerSec);
-        t.ch->level = ovb::dbToNorm (t.ch->levelFall.shown, kBarSpanDb, kBarFloorDb);
+        t.ch->level = levelToFraction (t.db);          // no display smoothing
 
         if (t.ch->level >= t.ch->peak)
         {
             t.ch->peak = t.ch->level;
-            t.ch->holdUntil = m_clock + 1.1;
-            // Start the trail's fall from rest again: it is a new peak.
+            t.ch->holdUntil = m_clock + kPeakHoldSec;
             t.ch->peakFall.reset (ovb::normToDb (t.ch->peak, kBarSpanDb, kBarFloorDb));
         }
         else if (m_clock > t.ch->holdUntil)
         {
-            // 0.18 per second of the 0..1 scale is 10.8 dB/s of a 60 dB one.
             t.ch->peakFall.advance (ovb::normToDb (t.ch->level, kBarSpanDb, kBarFloorDb),
                                     dt, kPeakDbPerSec);
             t.ch->peak = ovb::dbToNorm (t.ch->peakFall.shown, kBarSpanDb, kBarFloorDb);
         }
     }
 
-    // The harmonic ring is a METER too: it must move like one.  Mapping the
-    // raw value snapped it between readings — in the preview the source only
-    // changes `harm` when a new block is measured, so the ring sat still and
-    // then jumped.
+    // The HARM ring, also with no display smoothing:
     //
-    // It also used to release in LINEAR AMPLITUDE (v -= v*step) while every
-    // other meter released in dB, so the ring's tail had a different shape from
-    // the bars beside it.  It is a dB quantity to begin with; it now goes
-    // through the same ovb::Fall, in dB, at 48 dB in 0.45 s.
-    {
-        const double harmDb = std::clamp (double (m.harm), kHarmFloorDb, 0.0);
-        m_harmFall.advance (harmDb, dt, kHarmDbPerSec, 0.045);
-        m_harmFrac = ovb::dbToNorm (m_harmFall.shown, -kHarmFloorDb, kHarmFloorDb);
-    }
+    //     const f = clamp (((d.hm ?? -100) + 48) / 48, 0, 1);
+    //     hArc.setAttribute ("stroke-dashoffset", 100*(1-f));
+    //
+    // The smoothing for this one is in the DSP, where it belongs: harmRatioS is
+    // a 131 ms one-pole (kHarmTau in FxProcessor.cpp), so the value arriving
+    // here is already smooth and adding a second curve on top only made the ring
+    // lag the number printed in its own centre.
+    m_harmFrac = ovb::dbToNorm (std::clamp (double (m.harm), kHarmFloorDb, 0.0),
+                                -kHarmFloorDb, kHarmFloorDb);
+
     double f = m_harmFrac;
     // test hook: ONYXTEON_HARM=0..1 pins the harmonic fraction so the ring's
     // colour ramp can be inspected at known values.

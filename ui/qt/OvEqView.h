@@ -446,9 +446,11 @@ private:
     std::chrono::steady_clock::time_point m_specAdvanceAt {};   // per view
     std::chrono::steady_clock::time_point m_specShownAt {};
 
-    /// The glow bar's own ballistics: 32 band levels, through the same ovb::Fall.
+    /// The glow bar's 32 band levels.  The page's glow is `--light` with a
+    /// 0.1 s linear CSS transition, so that is what each band follows
+    /// (ovb::LinearGlide) rather than an invented dB-per-second release.
     double m_glowShown[32] = {};
-    ovb::Fall m_glowFall[32];
+    ovb::LinearGlide m_glowGlide[32];
     /// True while a band is still falling towards its target; keeps the bar
     /// drawn until the release finishes instead of freezing mid-fall.
     bool   m_glowFalling = false;
