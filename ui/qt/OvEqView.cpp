@@ -234,6 +234,32 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickItem (parent)
         }
     });
     m_repaint.start();
+
+    // ---- the averaging, tunable without a rebuild ------------------------
+    //
+    // The defaults come from a sweep against a steady signal (see
+    // ui/qt/OvSpectrum.h): attack 120 ms, release 260 ms, sigma 2.5 bins.  The
+    // three knobs are exposed because "still too fast" and "now it smears" are
+    // judgements about a particular kind of material, and the person making
+    // them should not have to wait for a build:
+    //
+    //     ONYXTEON_SPECREL=0.15   seconds; the outline falls 4.343/tau dB/s
+    //     ONYXTEON_SPECATT=0.06   seconds
+    //     ONYXTEON_SPECSIGMA=1.7  bins; 1.7 ~ 1/3 octave, 2.5 ~ 1/2 octave
+    //
+    // Ignored when the value is not a positive number, so a typo cannot turn
+    // the analyser off.
+    const auto tune = [] (const char* name, double& dst)
+    {
+        if (const char* v = std::getenv (name))
+        {
+            const double d = std::atof (v);
+            if (std::isfinite (d) && d > 0.0) dst = d;
+        }
+    };
+    tune ("ONYXTEON_SPECATT",   m_specBall.attackTau);
+    tune ("ONYXTEON_SPECREL",   m_specBall.releaseTau);
+    tune ("ONYXTEON_SPECSIGMA", m_specBall.freqSigma);
 }
 
 void OvEqView::setEngine (OvEngine* e)
@@ -1399,16 +1425,28 @@ const QImage& OvEqView::overlayImage (double w, double h, double top,
 //  only when their key changed, so an idle frame does no drawing at all.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-//  The analyser's ballistics, in ONE place.
+//  The analyser's averaging.  The maths lives in ui/qt/OvSpectrum.h, because
+//  "is it smooth" is a number and not an opinion: tools/units/spectrum_test.cpp
+//  builds a steady signal and measures how far the outline moves per frame.
 //
-// The host polls the analyser at ~12 Hz while this paints at up to 60, so raw
-// bins would be held for five frames and then cut to an unrelated picture.  Each
-// bin gets an instant attack and a rate-derived release towards the newest
-// value, expressed as "this many dB in this many seconds" and turned into a
-// per-frame step from the DISPLAY rate (the way ZL Audio's
-// SpectrumDecayer::setDecaySpeed does it): step = 1 - (target/start)^(1/n_frames)
-// with n_frames = refresh_rate * decay_seconds.  A fixed coefficient is a fixed
-// number of FRAMES, so it falls faster the higher the refresh rate.
+//  What it does, and why each step is where it is:
+//
+//    * dB -> POWER.  An FFT magnitude of steady noise has a ~5.6 dB standard
+//      deviation per frame, and averaging the dB display value (what this used
+//      to do) averages decibels: the outline sits low and keeps twitching.
+//      Averaging energy is what an analyser measures.
+//    * 1/2 octave along FREQUENCY (Gaussian, sigma 2.5 bins at 12.8 bins per
+//      octave).  This is the only step that removes the bin-to-bin sawtooth.
+//    * a one-pole along TIME in the same power domain, attack 120 ms, release
+//      260 ms = 16.7 dB/s.  A one-pole in power IS a running RMS, so this is
+//      the spectrum's version of ovb::Rms and it falls at 4.343/tau dB/s.
+//
+//  Measured, steady signal, 95th percentile (old -> new):
+//      frame-to-frame   5.47 dB -> 0.91 dB
+//      bin-to-bin       2.56 dB -> 0.90 dB
+//  and the old chain was 85 dB in 0.30 s = 283 dB/s, which is the "too fast"
+//  that was reported; the release is now 16.7 dB/s, a full sweep in five
+//  seconds, with a 20 dB step still arriving in a quarter of a second.
 //
 // Both front ends call this exactly once per frame.  It was inline in
 // paintContent(), and when the plot became a scene-graph item the node path read
@@ -1421,32 +1459,26 @@ void OvEqView::advanceSpectrum (float* spec, float* specRaw)
     //
     // Both paintContent() and buildLayers() call this, and on the scene-graph
     // path paintContent() also runs when the CPU seam glass is active.  Advancing
-    // the ballistics twice in one frame releases the analyser at double speed and
-    // leaves the fill a few rows off — measured as 10k differing pixels low in
-    // the PQ plot, all of them the spectrum fill's edge.
+    // twice in one frame doubles every time constant and leaves the fill a few
+    // rows off — measured as 10k differing pixels low in the PQ plot, all of them
+    // the spectrum fill's edge.
     {
         using clk = std::chrono::steady_clock;
-        // A MEMBER, not a static local.
-        //
-        // `static` is shared by every OvEqView instance, and there are two.  The
-        // second one to be called inside the same 1.5 ms window took the early
-        // return and got its OWN m_specShown copied back — advancing nothing.
-        // Whichever view lost the race therefore displayed a frozen spectrum for
-        // ever, which is the "it shows a constant value instead of the real
-        // levels" report; with the analyser idle both views sit on whatever they
-        // last held.
+        // A MEMBER, not a static local: `static` is shared by every OvEqView
+        // instance and there are two, so whichever lost the race displayed a
+        // frozen spectrum for ever.
         const auto now = clk::now();
         if (m_specAdvanceAt != clk::time_point()
             && now - m_specAdvanceAt < std::chrono::microseconds (1500))
         {
             std::memcpy (spec, m_specShown, sizeof (float) * 128);
-            if (specRaw != nullptr) std::memset (specRaw, 0, sizeof (float) * 128);
+            if (specRaw != nullptr) std::memcpy (specRaw, m_specRaw, sizeof (float) * 128);
             return;
         }
         m_specAdvanceAt = now;
     }
 
-using clk = std::chrono::steady_clock;
+    using clk = std::chrono::steady_clock;
     const auto now = clk::now();
     double dt = 1.0 / double (OvTiming::kPlotHz);
     if (m_specShownAt != clk::time_point())
@@ -1461,74 +1493,15 @@ using clk = std::chrono::steady_clock;
                                       : m_engine->spectrumTable();
         const int n = std::min (128, int (tbl.size()));
         for (int i = 0; i < n; ++i)
-        {
             raw[i] = float (tbl.at (i).toDouble());
-            specRaw[i] = raw[i];
-        }
     }
+    std::memcpy (m_specRaw, raw, sizeof raw);      // exactly what the analyser said
 
-    // ---- smooth along FREQUENCY -----------------------------------------
-    // A single FFT bin's magnitude of noise is Rayleigh-distributed: consecutive
-    // frames differ by several dB, and with an instant attack plus a 0.3 s hold
-    // every spike is captured and then STAYS for a third of a second.  The
-    // outline came out hairy and motionless-spiky — "the waveform is not
-    // smoothed".  A fractional-octave average is what a spectrum analyser does
-    // for exactly this reason.
-    //
-    // The bins are log-spaced (12.8 per octave over the 10 octaves from 20 Hz to
-    // 20 kHz), so a 1/6-octave window is +/-2 bins with a triangular weight.
-    // Averaging the 0..1 display values is averaging dB, because that table is
-    // linear in dB by construction.
-    {
-        static constexpr float kK[5] = { 1.0f, 2.0f, 3.0f, 2.0f, 1.0f };
-        float sm[128];
-        for (int i = 0; i < 128; ++i)
-        {
-            float acc = 0.0f, wsum = 0.0f;
-            for (int k = -2; k <= 2; ++k)
-            {
-                const int j = std::clamp (i + k, 0, 127);
-                acc  += raw[j] * kK[k + 2];
-                wsum += kK[k + 2];
-            }
-            sm[i] = acc / wsum;
-        }
-        std::memcpy (raw, sm, sizeof sm);
-    }
+    // The averaging itself: ui/qt/OvSpectrum.h, tuned by measurement.
+    m_specBall.advance (raw, m_specShown, dt);
 
-    // ---- attack is not instant ------------------------------------------
-    // Instant attack on the smoothed array still lets a single measurement pull
-    // the outline up in one frame and hold it.  40 ms is short enough that a
-    // transient still shows immediately and long enough that the edge moves as
-    // one line instead of flickering.
-    //
-    // The RELEASE, on the other hand, is now the shared ovb::Fall: the same
-    // smootherstep-eased, dB-per-second curve the bars and the light use.  It
-    // used to be a fourth private copy of 1-(target/start)^(1/n_frames), with
-    // its own 0.30 s, so the analyser fell at a different shape from the bar
-    // beside it whenever the two were compared.
-    const double attackK = 1.0 - std::exp (-dt / 0.040);
-    constexpr double kSpecSpanDb  = 85.0;      // the table is 0..1 over 85 dB
-    constexpr double kSpecDbPerSec = 85.0 / 0.30;
-
-    for (int i = 0; i < 128; ++i)
-    {
-        const double shownN = m_specShown[i];
-        const double targetN = raw[i];
-
-        if (targetN >= shownN)
-        {
-            const double next = shownN + (targetN - shownN) * attackK;
-            m_specShown[i] = float (next);
-            m_specFall[i].reset (next * kSpecSpanDb);      // keep the state in step
-        }
-        else
-        {
-            m_specFall[i].advance (targetN * kSpecSpanDb, dt, kSpecDbPerSec, 0.020);
-            m_specShown[i] = float (m_specFall[i].shown / kSpecSpanDb);
-        }
-        spec[i] = m_specShown[i];
-    }
+    std::memcpy (spec, m_specShown, sizeof (float) * 128);
+    if (specRaw != nullptr) std::memcpy (specRaw, m_specRaw, sizeof (float) * 128);
 }
 
 void OvEqView::buildLayers (Layers& out)
@@ -1588,13 +1561,18 @@ void OvEqView::buildLayers (Layers& out)
 
         if (ovEnvFlag ("ONYXTEON_SPECDBG"))
         {
+            // ONYXTEON_SPECDBG=1 prints every 30th frame (a readable trace);
+            // ONYXTEON_SPECDBG=all prints every frame, which is what a
+            // frame-to-frame smoothness measurement needs.  The whole 128-bin
+            // array is printed either way: "it shakes" is a statement about
+            // neighbouring bins, so 16 of them cannot answer it.
             static int n = 0;
-            if (++n % 30 == 0)
+            const bool everyFrame = qEnvironmentVariable ("ONYXTEON_SPECDBG")
+                                        .compare ("all", Qt::CaseInsensitive) == 0;
+            if (everyFrame || ++n % 30 == 0)
             {
                 std::fprintf (stderr, "[sp] %s", qPrintable (m_prefix));
-                for (int i = 0; i < 16; ++i) std::fprintf (stderr, " %.3f", spec[i]);
-                std::fprintf (stderr, " | hi");
-                for (int i = 112; i < 128; ++i) std::fprintf (stderr, " %.3f", spec[i]);
+                for (int i = 0; i < 128; ++i) std::fprintf (stderr, " %.3f", spec[i]);
                 std::fprintf (stderr, "\n");
             }
         }

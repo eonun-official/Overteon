@@ -27,6 +27,7 @@
 #include <QPainterPath>
 
 #include "OvBallistics.h"   // ovb::Fall / ovb::catmullRomLimited
+#include "OvSpectrum.h"     // ovspec::SpectrumBallistics
 
 class OvEngine;
 
@@ -434,11 +435,14 @@ private:
     /// a jump is a movement across several frames instead of a cut.  This is
     /// what every hardware analyser does; the data is unchanged, only its
     /// presentation.
+    /// What the analyser said last, untouched (ui/qt/OvEqView.cpp copies it out
+    /// for the debug trace and for anything that wants the measured value).
+    float  m_specRaw[128] = {};
+    /// What is on screen: the averaged outline.  The averaging — power domain,
+    /// 1/2 octave along frequency, a one-pole along time — is ovspec::
+    /// SpectrumBallistics (ui/qt/OvSpectrum.h), which is the whole state.
     float  m_specShown[128] = {};
-    /// The ballistic state behind m_specShown, in dB (ui/qt/OvBallistics.h).
-    /// Keeping the state, not just the value, is what lets the release ease in
-    /// with smootherstep instead of starting at full speed.
-    ovb::Fall m_specFall[128];
+    ovspec::SpectrumBallistics m_specBall;
     std::chrono::steady_clock::time_point m_specAdvanceAt {};   // per view
     std::chrono::steady_clock::time_point m_specShownAt {};
 

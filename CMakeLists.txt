@@ -427,6 +427,13 @@ if(OVERTEON_QT_UI)
     # 15 Hz as at 120 Hz.  No Qt, no audio, no window -- it is arithmetic.
     add_executable(onyx-ballistics-test tools/units/ballistics_test.cpp)
     target_include_directories(onyx-ballistics-test PRIVATE ui/qt)
+
+    # headless proof that the analyser is smooth: a steady signal's outline must
+    # not move more than ~1 dB a frame, and the old 1/6-octave/dB-domain chain is
+    # built beside it for comparison.  Same conditions, same source, so the two
+    # numbers are a measurement rather than a memory.
+    add_executable(onyx-spectrum-test tools/units/spectrum_test.cpp)
+    target_include_directories(onyx-spectrum-test PRIVATE ui/qt)
 endif()
 
 # Platform switch used by the sources: Windows vs. everything unix-like
