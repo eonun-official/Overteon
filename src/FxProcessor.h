@@ -9,6 +9,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "DSP.h"
 #include "Limiter.h"
+#include "OvBallistics.h"   // ovb::Rms — the level meters' detector
 
 class InjectorProcessor : public juce::AudioProcessor
 {
@@ -75,6 +76,12 @@ public:
     std::atomic<float> meterOutL { 0.0f }, meterOutR { 0.0f };
     std::atomic<float> meterHarm { -100.0f };   // harmonic/dry ratio, dB
     double harmRatioS = 0.0;
+
+    /// The RMS detectors behind the four level atomics.  Audio thread only; the
+    /// atomics are what the editor reads.  Their integration constant is
+    /// kMeterRmsTau, so the fall is 4.343/tau dB/s at any sample rate and any
+    /// buffer size (ui/qt/OvBallistics.h explains why that matters).
+    ovb::Rms rmsInL, rmsInR, rmsOutL, rmsOutR;
 
     juce::AudioProcessorValueTreeState apvts;
 

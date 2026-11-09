@@ -187,6 +187,105 @@ int main()
         }
     }
 
+    // ---- the RMS detector --------------------------------------------------
+    // The meters are RMS now, and "RMS" is a claim that can be checked without
+    // a screenshot: a sine of amplitude A must read A/sqrt(2) whatever its
+    // frequency, a square must read A, and once the signal stops the reading
+    // must fall at 4.343/tau dB per second — at ANY block size and ANY sample
+    // rate, which is the bug that made the old peak meter's fall speed depend
+    // on the host's buffer.
+
+    auto dbOf = [] (double a) { return 20.0 * std::log10 (std::max (a, 1e-9)); };
+
+    {
+        // 0.5 full-scale sine: -6.02 dB peak, -9.03 dB RMS.
+        std::vector<double> sine (48000);
+        for (size_t i = 0; i < sine.size(); ++i)
+            sine[i] = 0.5 * std::sin (2.0 * M_PI * 1000.0 * double (i) / 48000.0);
+
+        ovb::Rms r; r.tau = 0.3;
+        // 2 s of signal is >6 tau: settled.
+        for (int k = 0; k < 94; ++k) r.process (sine.data(), 1024, 48000.0);
+        const double got = dbOf (r.amplitude());
+        check (std::abs (got - (-9.03)) < 0.05, "RMS of a 0.5 sine reads -9.03 dBFS", got, -9.03);
+        std::printf ("      (a PEAK meter would have read %.2f dBFS here)\n", dbOf (0.5));
+
+        // 0.5 full-scale square: 0 dB peak, -6.02 dB RMS.
+        std::vector<double> sq (1024);
+        for (size_t i = 0; i < sq.size(); ++i) sq[i] = (i % 2) ? 0.5 : -0.5;
+        ovb::Rms r2; r2.tau = 0.3;
+        for (int k = 0; k < 94; ++k) r2.process (sq.data(), 1024, 48000.0);
+        const double g2 = dbOf (r2.amplitude());
+        check (std::abs (g2 - (-6.02)) < 0.05, "RMS of a 0.5 square reads -6.02 dBFS", g2, -6.02);
+    }
+
+    // The fall: 4.343/tau dB/s, and NOT a function of the block size.
+    //
+    // Fitted rather than measured by a threshold crossing: the detector updates
+    // once per BLOCK, so with a 4096-sample buffer each published value is 85 ms
+    // old and a "when does it cross -20 dB" question is quantised to that step
+    // (which is how 14.4 dB/s came out as 13.8 on the first attempt).  A least
+    // squares straight line through log(mean square) vs time has no such bias —
+    // the decay IS a straight line in dB by construction.
+    {
+        auto fittedRate = [] (double fs, int block, double tau)
+        {
+            ovb::Rms r; r.tau = tau;
+            std::vector<double> sine (size_t (block), 0.0);
+            for (size_t i = 0; i < sine.size(); ++i)
+                sine[i] = 0.5 * std::sin (2.0 * M_PI * 1000.0 * double (i) / fs);
+            for (int k = 0; k < int (2.0 * fs / block); ++k) r.process (sine.data(), block, fs);
+
+            std::vector<double> zero (size_t (block), 0.0);
+            const double dt = double (block) / fs;
+            double t = 0.0, st = 0.0, sd = 0.0, stt = 0.0, std_ = 0.0;
+            int n = 0;
+            for (int k = 0; k < int (1.5 / dt); ++k)
+            {
+                r.process (zero.data(), block, fs);
+                t += dt;
+                const double d = r.db();
+                st += t; sd += d; stt += t * t; std_ += t * d; ++n;
+            }
+            const double slope = (n * std_ - st * sd) / (n * stt - st * st);   // dB/s
+            return -slope;
+        };
+
+        const double want = 4.343 / 0.3;
+        for (double fs : { 44100.0, 48000.0, 96000.0 })
+            for (int block : { 64, 256, 1024, 4096 })
+            {
+                const double rate = fittedRate (fs, block, 0.3);
+                char label[96];
+                std::snprintf (label, sizeof label,
+                               "RMS fall %.0f Hz / %4d samples = %.2f dB/s", fs, block, rate);
+                check (std::abs (rate - want) / want < 0.01, label, rate, want);
+            }
+    }
+
+    // The harmonic ratio's smoothing must be a time constant, not a per-block
+    // coefficient: 0.15 per block was 131 ms at 1024 and 33 ms at 256.
+    {
+        auto fittedTau = [] (int block, double fs)
+        {
+            double v = 1.0, t = 0.0;
+            double st = 0.0, sy = 0.0, stt = 0.0, sty = 0.0;
+            int n = 0;
+            for (int k = 0; k < int (1.5 * fs / block); ++k)
+            {
+                v -= ovb::onePoleCoef (double (block) / fs, 0.131) * v;
+                t += double (block) / fs;
+                const double y = std::log (v);
+                st += t; sy += y; stt += t * t; sty += t * y; ++n;
+            }
+            const double slope = (n * sty - st * sy) / (n * stt - st * st);
+            return -1.0 / slope;
+        };
+        const double a = fittedTau (64, 48000.0), b = fittedTau (4096, 48000.0);
+        check (std::abs (a - b) / a < 0.01, "harm smoothing does not depend on block size", a, b);
+        check (std::abs (a - 0.131) / 0.131 < 0.01, "harm smoothing is the 131 ms it replaced", a, 0.131);
+    }
+
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "PASS" : "FAIL",
                  failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

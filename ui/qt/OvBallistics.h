@@ -175,6 +175,73 @@ struct Fall
 };
 
 // ---------------------------------------------------------------------------
+//  Rms — a TRUE mean-square detector, per sample, one-pole.
+//
+//  The meters used to be peak meters: max(|x|) held, then multiplied by a
+//  decaying coefficient.  That is not RMS, and it is not what the numbers on
+//  screen are supposed to be — the manual describes the harmonic ring as an RMS
+//  ratio and the level bars as levels, and a peak detector reads the crest
+//  factor, so a transient shows several dB high and then falls at whatever
+//  coefficient the release happens to have.
+//
+//  Here the state is MEAN SQUARE, updated once per sample:
+//
+//      ms += (x*x - ms) * a,   a = 1 - exp(-1 / (fs * tau))
+//
+//  so the amplitude is sqrt(ms) and the level is 10*log10(ms).  Three things
+//  follow for free, and all three are what "RMS" means:
+//
+//    * a full-scale sine reads -3.01 dBFS and a full-scale square reads 0 dBFS;
+//    * a signal that stops decays at 4.343/tau dB per second — for tau = 300 ms
+//      that is 14.5 dB/s, four times slower than the 57 dB/s a peak meter with
+//      a 141 ms coefficient produced;
+//    * the decay is tied to TIME, not to blocks: 256 samples per block and 4096
+//      samples per block below the same signal must agree, and they do because
+//      `a` is derived from tau and fs.
+//
+//  The old code had exactly this bug in one place and fixed it in another: the
+//  level meters were converted to a time-derived coefficient and the harmonic
+//  ratio kept `+= 0.15 * (x - v)` per BLOCK, i.e. 131 ms at 48 kHz / 1024 and
+//  33 ms at 48 kHz / 256.  onePoleCoef() below is the fix for that shape of bug.
+// ---------------------------------------------------------------------------
+struct Rms
+{
+    double ms  = 0.0;      // mean square
+    double tau = 0.300;    // integration time constant, seconds
+
+    static double coefPerSample (double sampleRate, double tauSeconds)
+    {
+        if (! (sampleRate > 0.0)) return 1.0;
+        return 1.0 - std::exp (-1.0 / (sampleRate * std::max (1e-5, tauSeconds)));
+    }
+
+    void reset() { ms = 0.0; }
+
+    void process (const double* x, int n, double sampleRate)
+    {
+        const double a = coefPerSample (sampleRate, tau);
+        double m = ms;
+        for (int i = 0; i < n; ++i)
+            m += (x[i] * x[i] - m) * a;
+        ms = m;
+    }
+
+    double amplitude() const { return std::sqrt (std::max (0.0, ms)); }
+    double db() const        { return 10.0 * std::log10 (std::max (ms, 1e-18)); }
+
+    /// The rate this detector falls at once the signal stops, dB/s.  Used to
+    /// size the display's release so it can never run ahead of the measurement.
+    double decayDbPerSec() const { return 4.343 / std::max (1e-5, tau); }
+};
+
+/// Coefficient for "move this much of the way over dt seconds", i.e. a block
+/// rate-independent one-pole.  0.15 per block at 21.3 ms is not 0.15 at 5.3 ms.
+inline double onePoleCoef (double dt, double tauSeconds)
+{
+    return 1.0 - std::exp (-std::max (0.0, dt) / std::max (1e-6, tauSeconds));
+}
+
+// ---------------------------------------------------------------------------
 //  Conversions between a meter's 0..1 display scale and dB.
 //  The scale is linear in dB (a meter's scale always is), so these are the
 //  only two places the range appears.

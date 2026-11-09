@@ -75,10 +75,24 @@ namespace
     // rate and at the preview's 60-120 Hz.
     constexpr double kBarSpanDb   = 60.0;                // bottom of the bar
     constexpr double kBarFloorDb  = -60.0;
-    constexpr double kBarDbPerSec = 20.0 / 0.35;         // 20 dB in 0.35 s
-    constexpr double kPeakDbPerSec = 0.18 * 60.0;        // 10.8 dB/s
+
+    // 20 dB in 1.7 s.  This IS the standard one: IEC 60268-10 PPM Type II
+    // (EBU) falls 20 dB in 1.7 s, Type I (DIN) 24 dB in 2.8 s.  It replaces
+    // 20 dB/0.35 s — 57 dB/s, i.e. a full 60 dB scale emptied in a second,
+    // which no meter does and which read as a snap rather than a fall.
+    //
+    // The measurement behind it is now true RMS (ovb::Rms, tau 300 ms), whose
+    // own natural decay is 4.343/0.3 = 14.5 dB/s, so this display release is
+    // the slower of the two and is what you actually see: 11.8 dB/s.
+    constexpr double kBarDbPerSec = 20.0 / 1.7;
+
+    constexpr double kPeakDbPerSec = 0.18 * 60.0;        // 10.8 dB/s (the page's)
+
+    // The ring follows a harmonic RATIO that the DSP smooths with a 131 ms
+    // one-pole (kHarmTau in FxProcessor.cpp), so 4.343/0.131 = 33 dB/s is that
+    // measurement's own decay — the display adds no shape of its own.
     constexpr double kHarmFloorDb = -48.0;
-    constexpr double kHarmDbPerSec = 48.0 / 0.45;        // full ring in 0.45 s
+    constexpr double kHarmDbPerSec = 4.343 / 0.131;
 
     // green plateau -> amber -> red, with a hot red in the last 3 %
     QColor harmColor (double f)

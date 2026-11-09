@@ -1,21 +1,14 @@
 #include "FxProcessor.h"
+#include "OvBallistics.h"   // ovb::Rms / ovb::onePoleCoef — the meters' detector
 
 namespace
 {
     /// Per-call decay coefficient for a meter that must fall at a fixed RATE.
     ///
-    /// The old code multiplied by a constant (0.86) on every block.  That makes
-    /// the time constant depend on the BLOCK RATE, i.e. on both the sample rate
-    /// and the host's buffer size:
-    ///
-    ///     48 kHz / 1024   46.9 blocks/s   tau = 141 ms
-    ///     96 kHz / 1024   93.8 blocks/s   tau =  71 ms   <- twice as fast
-    ///     48 kHz /  256  187.5 blocks/s   tau =  35 ms   <- four times as fast
-    ///
-    /// which is exactly why the meters looked like they snapped to each value
-    /// instead of falling: at a high rate the release is over before the next
-    /// frame can show it.  The coefficient is derived from the elapsed time now,
-    /// so 141 ms is 141 ms at any rate and any buffer size.
+    /// Kept for the values still stored as linear gain with an exponential
+    /// release (the harmonic ratio).  The LEVEL meters no longer use it: they
+    /// are true RMS (ovb::Rms in ui/qt/OvBallistics.h) and their fall comes out
+    /// of the integration constant, so there is no coefficient to tune.
     inline float meterDecay (int numSamples, double sampleRate, double tauSeconds)
     {
         if (sampleRate <= 0.0 || numSamples <= 0) return 1.0f;
@@ -23,7 +16,22 @@ namespace
         return (float) std::exp (-dt / std::max (1e-4, tauSeconds));
     }
 
-    constexpr double kMeterTau = 0.1414;   // the 48 kHz / 1024 behaviour, kept
+    /// RMS integration time for the four level meters.
+    ///
+    /// 300 ms is the VU convention (IEC 60268-17 integrates over 300 ms) and it
+    /// is what makes the fall read as RMS rather than as a peak release: with
+    /// tau = 0.3 s the detector falls at 4.343/0.3 = 14.5 dB/s once the signal
+    /// stops, which is the natural slope of a windowed RMS — no extra release
+    /// coefficient is applied on top of it.
+    constexpr double kMeterRmsTau = 0.300;
+
+    /// The harmonic ratio's smoothing, as a TIME constant.
+    ///
+    /// It used to be `+= 0.15 * (x - v)` per BLOCK, which is 131 ms at
+    /// 48 kHz / 1024 and 33 ms at 48 kHz / 256 — the same block-rate dependence
+    /// the level meters were already fixed for.  0.15 at 21.3 ms is tau 131 ms,
+    /// so that is what it is now, at every buffer size.
+    constexpr double kHarmTau = 0.131;
 }
 
 
@@ -327,6 +335,8 @@ void InjectorProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
         guardZHpos[0] = guardZHpos[1] = guardZDpos[0] = guardZDpos[1] = 0;
     }
     meterInL = meterInR = meterOutL = meterOutR = 0.0f;
+    rmsInL.reset(); rmsInR.reset(); rmsOutL.reset(); rmsOutR.reset();
+    rmsInL.tau = rmsInR.tau = rmsOutL.tau = rmsOutR.tau = kMeterRmsTau;
     gSmooth = 1.0;
     agComp  = 1.0;
     // snap the EQ range multipliers to their targets (no sweep on playback start)
@@ -390,19 +400,23 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     // ---- input gain + input meters ----
     {
         const double ig = juce::Decibels::decibelsToGain ((double) par.inGain->load());
-        double pl = 0.0, pr = 0.0;
         for (int i = 0; i < n; ++i)
         {
             L[i] *= ig;
             R[i] *= ig;
-            pl = juce::jmax (pl, std::abs (L[i]));
-            pr = juce::jmax (pr, std::abs (R[i]));
             fftInData[(size_t) fftInIdx] = (float) ((L[i] + R[i]) * 0.5);
             if (++fftInIdx >= fftSize) { fftInIdx = 0; fftInReady = true; }
         }
-        const float k = meterDecay (n, sr, kMeterTau);
-        meterInL.store (juce::jmax ((float) pl, meterInL.load() * k));
-        meterInR.store (juce::jmax ((float) pr, meterInR.load() * k));
+
+        // TRUE RMS, not max(|x|) with a decay coefficient.  What goes on screen
+        // has to be the RMS of what went through: the bars are labelled level,
+        // the manual calls the ring an RMS ratio, and a peak detector reads the
+        // crest factor instead — 3 dB high on a sine and 10+ dB high on a
+        // transient, then falling at a speed set by an arbitrary coefficient.
+        rmsInL.process (L, n, sr);
+        rmsInR.process (R, n, sr);
+        meterInL.store ((float) rmsInL.amplitude());
+        meterInR.store ((float) rmsInR.amplitude());
     }
 
     // ---- drive: classic / harmonic injector ----
@@ -516,25 +530,23 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
                 auto* o0 = buffer.getWritePointer (0);
                 auto* o1 = nCh > 1 ? buffer.getWritePointer (1) : o0;
-                double pl = 0.0, pr = 0.0;
                 for (int i = 0; i < n; ++i)
                 {
                     const double l = ll[i], r = rr[i];
                     o0[i] = (float) l; o1[i] = (float) r;
-                    pl = juce::jmax (pl, std::abs (l));
-                    pr = juce::jmax (pr, std::abs (r));
                     fftData[(size_t) fftIdx] = (float) ((l + r) * 0.5);
                     if (++fftIdx >= fftSize) { fftIdx = 0; fftReady = true; }
                 }
-                const float kOut = meterDecay (n, sr, kMeterTau);
-                meterOutL.store (juce::jmax ((float) pl, meterOutL.load() * kOut));
-                meterOutR.store (juce::jmax ((float) pr, meterOutR.load() * kOut));
-                const float kIn = meterDecay (n, sr, 0.55);
-                meterInL.store (meterInL.load() * kIn);
-                meterInR.store (meterInR.load() * kIn);
-                // same reasoning: the harmonic ratio's fall must be a rate too,
-                // or the ring empties at a different speed in every host
-                harmRatioS *= meterDecay (n, sr, kMeterTau);
+                // RMS on the output tap too, and no second, artificial decay on
+                // the input meter: this branch used to multiply meterInL by an
+                // extra exp(-dt/0.55) on top of the input stage's own release,
+                // so in Schranz the IN bar fell at a different speed from the
+                // same bar in every other mode.
+                rmsOutL.process (ll, n, sr);
+                rmsOutR.process (rr, n, sr);
+                meterOutL.store ((float) rmsOutL.amplitude());
+                meterOutR.store ((float) rmsOutR.amplitude());
+                harmRatioS *= meterDecay (n, sr, kHarmTau);
                 meterHarm.store ((float) juce::Decibels::gainToDecibels (harmRatioS, -100.0));
                 return;
             }
@@ -739,7 +751,12 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         }
         if (dmode != 1) harmE *= dmix * dmix;
         const double ratio = std::sqrt (harmE / juce::jmax (dryE, 1.0e-18));
-        harmRatioS += 0.15 * (ratio - harmRatioS);
+        // Time-based, not per block.  0.15 per block was 131 ms at 48 kHz /
+        // 1024 and 33 ms at 48 kHz / 256, so the ring emptied four times faster
+        // in a host with a smaller buffer — the same bug the level meters had
+        // already been fixed for.
+        harmRatioS += ovb::onePoleCoef (double (n) / std::max (1.0, sr), kHarmTau)
+                    * (ratio - harmRatioS);
         meterHarm.store ((float) juce::Decibels::gainToDecibels (harmRatioS, -100.0));
     }
 
@@ -826,7 +843,6 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         }
         limiter.process (ll, rr, n);
 
-        double pl = 0.0, pr = 0.0;
         auto* o0 = buffer.getWritePointer (0);
         auto* o1 = nCh > 1 ? buffer.getWritePointer (1) : o0;
         for (int i = 0; i < n; ++i)
@@ -834,14 +850,13 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             const double l = ll[i], r = rr[i];
             o0[i] = (float) l;
             o1[i] = (float) r;
-            pl = juce::jmax (pl, std::abs (l));
-            pr = juce::jmax (pr, std::abs (r));
             fftData[(size_t) fftIdx] = (float) ((l + r) * 0.5);
             if (++fftIdx >= fftSize) { fftIdx = 0; fftReady = true; }
         }
-        const float kOut = meterDecay (n, sr, kMeterTau);
-        meterOutL.store (juce::jmax ((float) pl, meterOutL.load() * kOut));
-        meterOutR.store (juce::jmax ((float) pr, meterOutR.load() * kOut));
+        rmsOutL.process (ll, n, sr);
+        rmsOutR.process (rr, n, sr);
+        meterOutL.store ((float) rmsOutL.amplitude());
+        meterOutR.store ((float) rmsOutR.amplitude());
     }
 }
 
