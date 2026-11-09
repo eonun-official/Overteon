@@ -238,7 +238,7 @@ Item {
                     prefix: "sc"
                     accent: OvTheme.sc
                     headerTop: true
-                    glow: root.outLight   // --light: already level^2, 0.1 s linear
+                    glow: root.outLight * root.outLight   // --light = level^2
                     // The CPU seam glass reads this half's pixels back; the
                     // GPU one samples the texture and needs no readback.
                     wantImage: root.cpuFrost
@@ -254,7 +254,7 @@ Item {
                     prefix: "pq"
                     accent: OvTheme.pq
                     headerTop: false
-                    glow: root.inLight    // --light: already level^2, 0.1 s linear
+                    glow: root.inLight * root.inLight
                     wantImage: root.cpuFrost
                 }
 

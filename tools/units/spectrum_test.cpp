@@ -1,18 +1,10 @@
-// The analyser, checked against the WEB UI and against itself.
+// The analyser's smoothness, as a number instead of an opinion.
 //
-// The reference for this display is web_fx/index.html, which draws the raw FFT
-// table: no frequency kernel, no time constant.  So the first thing asserted
-// here is that the default path is a BIT-EXACT copy of what the analyser said —
-// anything else would be a filter the page does not have.
-//
-// The second thing is the optional smoothing (ONYXTEON_SPEC*), which exists
-// because a 128-bin outline on a 640 px canvas is not the same picture as a
-// browser's, and because "not smooth" was a real report.  Its numbers are
-// measured the same way, on the same data, beside the old chain.
-//
-// What can be measured without a screenshot: how far a bin MOVES between two
-// frames and how far it moves between two NEIGHBOURING BINS, both in dB, on a
-// signal whose true spectrum is constant.
+// "The spectrum is too fast and not smooth at all" cannot be settled by
+// looking: a still frame of a shaky outline and a still frame of a smooth one
+// are both still frames.  What can be measured is how far a bin MOVES between
+// two frames and how far it moves between two NEIGHBOURING BINS, both in dB, on
+// a signal whose true spectrum is constant.
 //
 // The input is built the way an FFT actually behaves on steady noise: a fixed
 // smooth envelope plus per-bin, per-frame Rayleigh-like magnitude scatter (a
@@ -136,8 +128,7 @@ int main()
 
     Source src;
     OldSpectrum oldS;
-    ovspec::SpectrumBallistics newS;      // the OPT-IN smoothing path
-    newS.smooth = true;
+    ovspec::SpectrumBallistics newS;
 
     std::vector<double> oldFrame, newFrame, oldBin, newBin;
     float raw[128];
@@ -169,26 +160,6 @@ int main()
         std::memcpy (prevNew, b, sizeof b);
     }
 
-    // ---- 1. the default path IS the page --------------------------------
-    {
-        ovspec::SpectrumBallistics page;      // smooth == false, i.e. the default
-        if (page.smooth) { std::printf ("FAIL  default is not the page's raw path\n"); ++failures; }
-
-        Source s3;
-        float in[128], out[128];
-        bool identical = true;
-        for (int n = 0; n < 20; ++n)
-        {
-            s3.frame (in);
-            std::memset (out, 0xA5, sizeof out);
-            page.advance (in, out, dt);
-            for (int i = 0; i < 128; ++i)
-                if (out[i] != in[i]) identical = false;
-        }
-        check (identical, "default analyser output == the measurement, bit for bit");
-        check (page.releaseDbPerSec() == 0.0, "and it has no release of its own", page.releaseDbPerSec(), 0.0);
-    }
-
     const double oldF95 = percentile (oldFrame, 0.95);
     const double newF95 = percentile (newFrame, 0.95);
     const double oldB95 = percentile (oldBin,   0.95);
@@ -200,17 +171,14 @@ int main()
     std::printf ("      bin-to-bin sawtooth, 95th percentile\n");
     std::printf ("        old %6.2f dB    new %6.2f dB\n", oldB95, newB95);
 
-    check (newF95 < 1.2, "smoothed: steady noise moves the outline <1.2 dB a frame", newF95, 1.2);
-    check (newF95 < oldF95 * 0.5, "smoothed: at least twice as still as the old chain", newF95, oldF95 * 0.5);
-    check (newB95 < 1.2, "smoothed: the bin-to-bin sawtooth is under 1.2 dB", newB95, 1.2);
-    std::printf ("      (the page's raw path is the old number by construction: it draws\n"
-                 "       exactly what the old chain started from, before any filter)\n");
+    check (newF95 < 1.2, "steady noise does not move the outline by >1.2 dB a frame", newF95, 1.2);
+    check (newF95 < oldF95 * 0.5, "and it is at least twice as still as before", newF95, oldF95 * 0.5);
+    check (newB95 < 1.2, "the bin-to-bin sawtooth is under 1.2 dB", newB95, 1.2);
 
     // ---- the fall, once the signal stops --------------------------------
     {
         Source s2;
         ovspec::SpectrumBallistics b;
-        b.smooth = true;
         float v[128], o[128];
         for (int n = 0; n < 120; ++n) { s2.frame (v); b.advance (v, o, dt); }   // settled
 
@@ -258,7 +226,6 @@ int main()
     // ---- attack still reaches the target -------------------------------
     {
         ovspec::SpectrumBallistics b;
-        b.smooth = true;
         float v[128], o[128];
         float flat[128];
         for (int i = 0; i < 128; ++i) flat[i] = float (ovspec::dbToNorm (-60.0));

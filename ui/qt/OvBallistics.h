@@ -1,52 +1,26 @@
 #pragma once
 // ============================================================
-//  OnyxTEON — how every meter moves.  ONE file, and the reference is the WEB
-//  UI (web_fx/index.html), not a convention and not a taste.
+//  OnyxTEON — how every meter moves.  ONE file, because it was five.
 //
-//  Read off the page, its meters have exactly TWO time constants:
+//  The bars, the peak trail, the harmonic ring, the accent light, the spectrum
+//  fill and the 32 glow bands each carried their own copy of this maths, and
+//  they had drifted: two worked in dB, one in linear amplitude, two in display
+//  units, and the interpolation between samples was a different curve in every
+//  one of them.  A single audio signal therefore fell at four different speeds
+//  depending on which part of the UI you looked at.
 //
-//    IN/OUT bars   stroke-dashoffset = 100*(1-mdb(v))     no smoothing at all
-//    peak trail    hold 1.1 s, then p -= dt*0.18          (dt clamped to 0.1 s)
-//                  => 0.18 of the 60 dB scale per second = 10.8 dB/s
-//    HARM ring     stroke-dashoffset = 100*(1-f)          no smoothing at all;
-//                  the smoothing lives in the C++ (harmRatioS, 0.15 per block
-//                  = a 131 ms one-pole)
-//    --light       opacity = level^2, CSS                  transition .1s linear
-//    spectrum      raw 128 bins into a polyline            no smoothing at all
+//  Three things live here:
 //
-//  So the ONLY smoothing a display may add is the peak trail's 10.8 dB/s and a
-//  100 ms LINEAR transition on the light.  Everything else is drawn from the
-//  measurement in the frame it arrives.  That is not a simplification — it is
-//  what the page does, and the page is what the plugin is supposed to look and
-//  feel like.
-//
-//  The consequence, measured rather than assumed: the analyser moves about 5 dB
-//  per frame on steady noise, because an FFT magnitude of noise has a ~5.6 dB
-//  standard deviation and the page draws it unfiltered.  That is the page's
-//  appearance.  If it is not wanted, smoothing can be switched on per value
-//  with the ONYXTEON_SPEC* knobs (see ovspec::SpectrumBallistics) instead of
-//  being invented here.
-//
-//  What lives here:
-//
-//    smootherstep(f)      the C2 ease (6f^5-15f^4+10f^3), for movements that do
-//                         have a duration; smoothstep is only C1 and its second
-//                         derivative jumps at both ends, which reads as a facet
-//                         under the pod's 3 px Gaussian.
-//    catmullRom(f, ...)   the curve along an AXIS (frequency), where
-//                         neighbouring points are separate measurements of the
-//                         same thing.  Limited form: no overshoot, because an
-//                         overshoot on a meter draws a level that never existed.
-//    Fall                 a dB value with an instant attack and a constant
-//                         dB/second release.  Used ONLY by the peak trail, whose
-//                         10.8 dB/s is the one release the page has.
-//    LinearGlide          the CSS `transition: opacity .1s linear` — a linear
-//                         ramp to a new target that restarts whenever the target
-//                         changes.  Used by the light and the glow bands, which
-//                         is where the page's only display smoothing comes from.
-//    Rms                  the true mean-square detector behind the level meters
-//                         (tau 300 ms), so a fall has a rate that means
-//                         something: 4.343/tau dB/s.
+//    smootherstep(f)          the C2 ease (6f^5-15f^4+10f^3).  Used for the
+//                             SHAPE of every movement: the release of a bar,
+//                             the light, the ring, a spectrum bin.
+//    catmullRom(f, p0..p3)    Catmull-Rom, the curve used along an AXIS —
+//                             frequency for the glow bands and the analyser
+//                             outline, where neighbouring points are separate
+//                             measurements of the same thing.
+//    Level / Fall             the ballistic state of one displayed value, in
+//                             dB: instant attack, eased release, and a speed
+//                             derived from dt, never from a frame count.
 //
 //  Why smootherstep and not smoothstep (3f^2-2f^3): smoothstep is only C1, so
 //  its second derivative jumps at both ends of every movement.  Under a 3 px
@@ -198,64 +172,6 @@ struct Fall
     /// True while the value still has somewhere to fall to, so a caller can
     /// keep asking for frames after the audio went quiet.
     bool falling (double targetDb) const { return shown > targetDb + 1e-9; }
-};
-
-// ---------------------------------------------------------------------------
-//  LinearGlide — CSS `transition: <prop> 0.1s linear`.
-//
-//  This is the ONLY smoothing the page puts on a display value, so it is what
-//  the light and the glow bands use here:
-//
-//      .controlpit::before{opacity:var(--light,0);transition:opacity .1s linear}
-//
-//  CSS semantics, reproduced rather than approximated: when the target changes,
-//  a LINEAR ramp starts from wherever the value currently is and reaches the new
-//  target in `duration` seconds, whatever the distance.  A new target during a
-//  ramp starts a new ramp from the current value.  Setting the same target again
-//  does nothing (CSS does not restart an unchanged transition), which matters
-//  because the light is set on every meter event — restarting every time would
-//  make it crawl and never arrive.
-// ---------------------------------------------------------------------------
-struct LinearGlide
-{
-    double value   = 0.0;     // what is on screen
-    double from    = 0.0;     // where the current ramp started
-    double target  = 0.0;
-    double elapsed = 0.0;
-    double duration = 0.100;  // the page's 0.1 s
-
-    void reset (double v)
-    {
-        value = from = target = v;
-        elapsed = duration;
-    }
-
-    /// A new measurement arrived: begin a ramp from here to `t`.
-    void set (double t)
-    {
-        if (t == target) return;            // unchanged: CSS would not restart
-        from    = value;
-        target  = t;
-        elapsed = 0.0;
-    }
-
-    /// Advance the ramp.  Returns the current value.
-    double advance (double dt)
-    {
-        if (! (dt > 0.0)) dt = 0.0;
-        if (duration <= 0.0) { value = target; return value; }
-
-        elapsed += dt;
-        // A tolerance, not an exact compare: dt is accumulated from a clock, so
-        // ten 10 ms frames land on 0.09999999999999999 and the value would sit
-        // at 0.999999999 while the state still claimed to be ramping.
-        if (elapsed + 1e-9 >= duration) { elapsed = duration; value = target; return value; }
-
-        value = from + (target - from) * (elapsed / duration);
-        return value;
-    }
-
-    bool ramping() const { return elapsed + 1e-9 < duration; }
 };
 
 // ---------------------------------------------------------------------------

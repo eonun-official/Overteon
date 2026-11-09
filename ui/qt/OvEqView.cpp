@@ -237,30 +237,29 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickItem (parent)
 
     // ---- the averaging, tunable without a rebuild ------------------------
     //
-    // DEFAULT: none — the page draws the raw table (web_fx/index.html's
-    // `spectrum` listener copies it into the panel and calls drawSpec).  Setting
-    // any of these turns the averaging on, using the values given:
+    // The defaults come from a sweep against a steady signal (see
+    // ui/qt/OvSpectrum.h): attack 120 ms, release 260 ms, sigma 2.5 bins.  The
+    // three knobs are exposed because "still too fast" and "now it smears" are
+    // judgements about a particular kind of material, and the person making
+    // them should not have to wait for a build:
     //
-    //     ONYXTEON_SPECREL=0.26    seconds; the outline falls 4.343/tau dB/s
-    //     ONYXTEON_SPECATT=0.12    seconds
-    //     ONYXTEON_SPECSIGMA=2.5   bins; 1.7 ~ 1/3 octave, 2.5 ~ 1/2 octave
+    //     ONYXTEON_SPECREL=0.15   seconds; the outline falls 4.343/tau dB/s
+    //     ONYXTEON_SPECATT=0.06   seconds
+    //     ONYXTEON_SPECSIGMA=1.7  bins; 1.7 ~ 1/3 octave, 2.5 ~ 1/2 octave
     //
-    // A value that is not a positive number is ignored, so a typo cannot turn
-    // the analyser off.  The numbers above are the tuned defaults and are what
-    // tools/units/spectrum_test.cpp measures.
-    const auto tune = [] (const char* name, double& dst) -> bool
+    // Ignored when the value is not a positive number, so a typo cannot turn
+    // the analyser off.
+    const auto tune = [] (const char* name, double& dst)
     {
         if (const char* v = std::getenv (name))
         {
             const double d = std::atof (v);
-            if (std::isfinite (d) && d > 0.0) { dst = d; return true; }
+            if (std::isfinite (d) && d > 0.0) dst = d;
         }
-        return false;
     };
-    const bool any = tune ("ONYXTEON_SPECATT",   m_specBall.attackTau)
-                   | tune ("ONYXTEON_SPECREL",   m_specBall.releaseTau)
-                   | tune ("ONYXTEON_SPECSIGMA", m_specBall.freqSigma);
-    m_specBall.smooth = any;
+    tune ("ONYXTEON_SPECATT",   m_specBall.attackTau);
+    tune ("ONYXTEON_SPECREL",   m_specBall.releaseTau);
+    tune ("ONYXTEON_SPECSIGMA", m_specBall.freqSigma);
 }
 
 void OvEqView::setEngine (OvEngine* e)
@@ -1498,10 +1497,7 @@ void OvEqView::advanceSpectrum (float* spec, float* specRaw)
     }
     std::memcpy (m_specRaw, raw, sizeof raw);      // exactly what the analyser said
 
-    // The display: ui/qt/OvSpectrum.h.  By default this is the page's behaviour
-    // — the table copied straight through, no averaging — and the optional
-    // smoothing is enabled only when one of the ONYXTEON_SPEC* knobs is set
-    // (the constructor reads them).
+    // The averaging itself: ui/qt/OvSpectrum.h, tuned by measurement.
     m_specBall.advance (raw, m_specShown, dt);
 
     std::memcpy (spec, m_specShown, sizeof (float) * 128);
@@ -1956,18 +1952,6 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
     // modulated per band, so a loud region of the spectrum glows brighter and
     // climbs further from the lit edge.  That keeps the page's look (a soft
     // pool of light, not a bar chart) while still showing where the energy is.
-    // One dt for the whole strip: the page's transition is on the element, not
-    // on each band, so all 32 advance together.
-    double glowDt = 1.0 / double (OvTiming::kPlotHz);
-    {
-        using clk = std::chrono::steady_clock;
-        const auto now = clk::now();
-        if (m_glowShownAt != clk::time_point())
-            glowDt = std::clamp (std::chrono::duration<double> (now - m_glowShownAt).count(),
-                                 0.0005, 0.20);
-        m_glowShownAt = now;
-    }
-
     constexpr int kBands = 32;
     double band[kBands];
     for (int b = 0; b < kBands; ++b)
@@ -1978,20 +1962,29 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
         for (int i = i0; i < i1; ++i) sum += std::clamp (double (spec[i]), 0.0, 1.0);
         double l = sum / double (i1 - i0);
 
-        // ---- the only smoothing this strip gets -------------------------
-        // The page's glow is `.controlpit::before{opacity:var(--light);
-        // transition:opacity .1s linear}` — a 100 ms LINEAR ramp and nothing
-        // else.  Its brightness is also not per-band at all (a radial gradient
-        // times --light); the 32-band modulation is an addition here, so the
-        // closest thing to "the same speed as the page" is for each band to
-        // follow the same 100 ms linear transition.
-        //
-        // Anything slower than that (this was 85 dB over 0.35 s, i.e. 243 dB/s
-        // of release) is a speed the page does not have.
-        m_glowGlide[b].set (l);
-        m_glowShown[b] = m_glowGlide[b].advance (glowDt);
-        if (m_glowShown[b] > l + 1e-6) m_glowFalling = true;
-        l = m_glowShown[b];
+        // ---- ballistics, per band --------------------------------------
+        // The bar used to read the RAW bins (`specRaw` was passed in), so it had
+        // no smoothing at all: every new FFT moved it straight to a new shape.
+        // It gets the shared ovb::Fall now — the same curve as the spectrum fill,
+        // the pod's bars and the accent light — in dB, so "how far it reaches
+        // from the lit edge" moves over frames.
+        {
+            using clk = std::chrono::steady_clock;
+            const auto now = clk::now();
+            double dt = 1.0 / double (OvTiming::kPlotHz);
+            if (m_glowShownAt != clk::time_point())
+                dt = std::clamp (std::chrono::duration<double> (now - m_glowShownAt).count(),
+                                 0.0005, 0.20);
+            m_glowShownAt = now;
+
+            constexpr double kSpanDb    = 85.0;      // the table is 0..1 over 85 dB
+            constexpr double kDbPerSec  = 85.0 / 0.35;
+
+            m_glowFall[b].advance (l * kSpanDb, dt, kDbPerSec, 0.030);
+            m_glowShown[b] = m_glowFall[b].shown / kSpanDb;
+            if (m_glowShown[b] > l + 1e-6) m_glowFalling = true;
+            l = m_glowShown[b];
+        }
 
         // Display curve.  The table is (dB + 85) / 85, so a signal 20 dB down
         // sits at 0.76 and would glow almost as brightly as a full-scale one;

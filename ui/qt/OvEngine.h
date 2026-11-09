@@ -32,12 +32,14 @@ class OvEngine : public QObject
     Q_PROPERTY(double outR READ outR NOTIFY metersChanged)
     Q_PROPERTY(double harm READ harm NOTIFY metersChanged)
 
-    /// The page's `--light`: level^2, 0..1, ramped by its 0.1 s linear opacity
-    /// transition.  ALREADY SQUARED — QML uses it directly.
+    /// SMOOTHED level, 0..1, for anything that lights up rather than measures:
+    /// the accent glow in the control pits and the meter pod's accent.
     ///
-    /// (It used to be the un-squared level and each QML site squared it, which
-    /// made the transition act on the level instead of on --light.  The page
-    /// transitions the squared value, so that is what is transitioned here.)
+    /// These cannot come from `outL`/`inL` directly, and that is what was wrong:
+    /// a QML binding on the raw dB value re-evaluates only when a new
+    /// measurement arrives, so the glow jumped straight from one brightness to
+    /// the next — it never appeared to move.  A light needs its own ballistics,
+    /// the same ones the bars have, on a clock of its own.
     Q_PROPERTY(double outLight READ outLight NOTIFY lightChanged)
     Q_PROPERTY(double inLight  READ inLight  NOTIFY lightChanged)
 
@@ -61,7 +63,8 @@ public:
     double outR() const { return m_meters.outR; }
     double harm() const { return m_meters.harm; }
 
-    /// 0..1, = level^2, after the page's 0.1 s linear transition.
+    /// 0..1, already ballistic-filtered.  Same mapping the design uses:
+    /// (dB + 60) / 60 clamped, with a rate-derived release.
     double outLight() const { return m_outLight; }
     double inLight()  const { return m_inLight; }
     QVariantList spectrum() const { return m_spectrum; }
@@ -135,10 +138,9 @@ private:
     QTimer       m_lightTimer;
     double       m_outLight = 0.0;
     double       m_inLight  = 0.0;
-    // --light itself: level^2, ramped by the page's 0.1 s linear transition
-    // (ovb::LinearGlide, ui/qt/OvBallistics.h).
-    ovb::LinearGlide m_outGlide { 0.0, 0.0, 0.0, 0.0, 0.100 };
-    ovb::LinearGlide m_inGlide  { 0.0, 0.0, 0.0, 0.0, 0.100 };
+    // The ballistic state behind those two, in dB (ui/qt/OvBallistics.h).
+    ovb::Fall    m_outFall;
+    ovb::Fall    m_inFall;
     std::chrono::steady_clock::time_point m_lightAt {};
     void lightTick();
 };

@@ -12,17 +12,12 @@ Item {
     property color accent: OvTheme.sc
     property string title: "SIDECHAIN EQ"
     property int driveMode: 1
-    property real meterLight: 0.0      // --light: level^2, 0.1 s linear already applied
+    property real meterLight: 0.0      // 0..1, drives the accent glow
     property bool cpuFrost: false      // ONYXTEON_CPUFROST=1
 
-    //      .controlpit::before{opacity:var(--light,0);transition:opacity .1s linear}
-    //      rgba(255,92,138,.36) at the centre
-    //
-    // meterLight IS var(--light) — level^2, already ramped by the 0.1 s linear
-    // transition in OvEngine::lightTick — so this is the page's `* .36` and
-    // nothing else.  It used to square it again here, which made the glow follow
-    // level^4 whenever QML squared a value the engine had already left squared.
-    property real glowAmount: meterLight * 0.36   // var(--light) * .36
+    // .controlpit::before opacity, transition: opacity .1s linear, and the
+    // CSS formula level*level*0.36
+    property real glowAmount: meterLight * meterLight * 0.36   // var(--light) * .36
     //
     // NO Behavior here any more.  The CSS 0.1 s LINEAR transition was a third
     // interpolation on top of the meter's own: meterLight already arrives
@@ -115,7 +110,7 @@ Item {
             trapTop: root.headerTop
             sigmaCss: 3.0
             accent: root.accent
-            glow: root.meterLight
+            glow: root.meterLight * root.meterLight
         }
 
         // The frosted glass (backdrop blur + veil + accent glow) is painted by

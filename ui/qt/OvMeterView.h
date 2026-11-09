@@ -85,14 +85,15 @@ private:
         double peak = 0.0;
         double holdUntil = 0.0;   // seconds
 
-        /// The peak trail's ballistic state, in dB.  This is the ONLY meter
-        /// value on this UI with a release of its own: the page holds 1.1 s and
-        /// then falls at 10.8 dB/s.  `level` has no state at all — it is the
-        /// measurement, drawn in the frame it arrives, as the page draws it.
+        /// The ballistic state behind `level` and behind `peak`, in dB.
+        /// Both go through the same ovb::Fall as the ring, the light and the
+        /// analyser, so the four meters on this UI cannot drift apart again.
+        ovb::Fall levelFall;
         ovb::Fall peakFall;
     };
 
     Channel m_outL, m_outR, m_inL, m_inR;
+    ovb::Fall m_harmFall;
     double  m_harmFrac = 0.0;
     double  m_clock = 0.0;
     std::chrono::steady_clock::time_point m_last {};

@@ -159,22 +159,6 @@ int main()
         check (f.shown == 0.0, "attack is instant", f.shown, 0.0);
     }
 
-    // ---- the peak trail is the page's ------------------------------------
-    // The one release the page does have: hold 1.1 s, then 0.18 of the 60 dB
-    // scale per second = 10.8 dB/s, and it never goes below the level.
-    {
-        ovb::Fall f; f.reset (0.0);
-        const double dt = 1.0 / 30.0;
-        double held = 0.0;
-        for (int i = 0; i < 33; ++i) { held = f.shown; f.advance (-60.0, dt, 10.8, 0.0); }
-        // Fall has no hold of its own — the hold is OvMeterView's clock — so
-        // this checks the RATE it falls at once the hold is over.
-        const double after = f.shown;
-        for (int i = 0; i < 30; ++i) f.advance (-60.0, dt, 10.8, 0.0);
-        const double rate = (after - f.shown) / (30 * dt);
-        check (std::abs (rate - 10.8) / 10.8 < 0.06, "peak trail falls at 10.8 dB/s", rate, 10.8);
-    }
-
     // ---- the shape, printed, old vs new -----------------------------------
     // The old release was  step = 1 - (target/start)^(1/n_frames)  in the 0..1
     // domain.  Its speed is highest on the FIRST frame of a fall and its tail
@@ -201,47 +185,6 @@ int main()
             f.advance (-60.0, dt, 200.0);           // 60 dB in 0.30 s
             std::printf ("      %6d %10.3f %10.3f\n", i, oldStep, before - f.shown);
         }
-    }
-
-    // ---- LinearGlide: the page's CSS transition -----------------------------
-    // `.controlpit::before{opacity:var(--light,0);transition:opacity .1s linear}`
-    //
-    // Three properties of a CSS transition, all checked because the light's
-    // whole behaviour is these three:
-    //   * a step arrives in exactly `duration` seconds whatever its size;
-    //   * it is LINEAR (half the distance in half the time);
-    //   * re-setting the same target does NOT restart it (otherwise a value set
-    //     on every meter event would crawl for ever and never arrive).
-    {
-        ovb::LinearGlide g; g.reset (0.0);
-        g.set (1.0);
-
-        // half way in half the duration
-        double v = 0.0;
-        for (int i = 0; i < 5; ++i) v = g.advance (0.010);   // 50 ms of 100
-        check (std::abs (v - 0.5) < 1e-9, "CSS transition: linear, half at half the time", v, 0.5);
-        for (int i = 0; i < 5; ++i) v = g.advance (0.010);
-        check (std::abs (v - 1.0) < 1e-12, "CSS transition: arrives at target in 0.1 s", v, 1.0);
-        check (! g.ramping(), "CSS transition: and is no longer ramping");
-
-        // a small step also takes the full duration (CSS does not scale it)
-        g.set (1.0 - 0.1);
-        v = g.advance (0.050);
-        check (std::abs (v - (1.0 - 0.05)) < 1e-9, "CSS transition: a small step also takes 0.1 s", v, 0.95);
-
-        // the same target twice does not restart
-        v = g.advance (0.050);                 // arrives at 0.9
-        g.set (0.9);                           // unchanged
-        v = g.advance (0.010);
-        check (std::abs (v - 0.9) < 1e-12, "CSS transition: unchanged target does not restart", v, 0.9);
-
-        // a new target mid-ramp starts from where it currently is
-        ovb::LinearGlide h; h.reset (0.0);
-        h.set (1.0);
-        h.advance (0.050);                     // at 0.5
-        h.set (0.0);                           // reverse
-        const double mid = h.advance (0.050);  // 0.5 -> 0.0 in 0.1 s => at 0.25
-        check (std::abs (mid - 0.25) < 1e-9, "CSS transition: reversal starts from the current value", mid, 0.25);
     }
 
     // ---- the RMS detector --------------------------------------------------
