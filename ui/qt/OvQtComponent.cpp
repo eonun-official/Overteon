@@ -67,8 +67,19 @@ public:
         // NSViewComponent and HWNDComponent use, and it needs no raw window
         // handles at all.
         const auto area = peer->getAreaCoveredBy (*component);
-        window->setGeometry (QRect (area.getX(), area.getY(),
-                                    area.getWidth(), area.getHeight()));
+
+        // ...but the peer works in DEVICE pixels while QWindow works in
+        // device-INDEPENDENT pixels, and Qt multiplies by devicePixelRatio when
+        // it creates the native window.  Passing the device rectangle straight
+        // through made the Qt window DPR times too large: on a 1.302 desktop the
+        // JUCE editor was 1040x772 and the QQuickView inside it came out
+        // 1354x1005 -- bigger than its own parent, so the UI was drawn at the
+        // wrong scale and clipped at the edges.
+        const qreal dpr = window->devicePixelRatio();
+        window->setGeometry (QRect (qRound (area.getX()      / dpr),
+                                    qRound (area.getY()      / dpr),
+                                    qRound (area.getWidth()  / dpr),
+                                    qRound (area.getHeight() / dpr)));
     }
 
     bool eventFilter (QObject* object, QEvent* event) override
@@ -81,8 +92,15 @@ public:
             case QEvent::Resize:
             case QEvent::Move:
             {
-                auto g = window->geometry();
-                juce::Rectangle<int> bounds (g.x(), g.y(), g.width(), g.height());
+                // geometry() is in device-INDEPENDENT pixels (see above), so it
+                // is scaled UP to reach the peer's device space before it is
+                // handed to a JUCE Component, which thinks in device pixels.
+                const qreal dpr = window->devicePixelRatio();
+                const auto g = window->geometry();
+                juce::Rectangle<int> bounds (qRound (g.x()      * dpr),
+                                             qRound (g.y()      * dpr),
+                                             qRound (g.width()  * dpr),
+                                             qRound (g.height() * dpr));
 
                 auto* component = getComponent();
                 if (auto* peer = component->getPeer())

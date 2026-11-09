@@ -1,5 +1,6 @@
 #include "OvQmlEditor.h"
 #include "OvQtComponent.h"
+#include "OvEnv.h"
 
 #include "FxProcessor.h"
 #include "OvEngine.h"
@@ -112,24 +113,66 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
     impl = std::make_unique<Impl>();
     setOpaque (true);
 
-    // Ask the host for the design size.  JUCE turns this into the format's own
-    // resize request (ui:resize for LV2, IPlugView/vendor-specific for VST3),
-    // which is the portable way to say how big the editor wants to be — the
-    // host applies the desktop scale itself.  Without it the editor stayed at
-    // JUCE's 840x624 default and the whole UI was drawn at 62 % inside a
-    // larger canvas.
+    // Qt FIRST, then the size.
+    //
+    // The size has to be the design size AFTER the desktop scale, and only Qt
+    // knows that scale -- QScreen::devicePixelRatio() is what the embedded
+    // window will be created with.  Asking for the size before Qt existed meant
+    // primaryScreen() was null, the ratio fell back to 1.0, and the editor came
+    // out design-sized in device pixels: physically smaller than intended on
+    // every HiDPI desktop.
+    impl->qtOk = ensureQtApp();
     {
+        // Ask the host for the size.  JUCE turns this into the format's own
+        // resize request (ui:resize for LV2, IPlugView/vendor-specific for
+        // VST3), which is the portable way to say how big the editor wants to
+        // be.  Without it the editor stayed at JUCE's 840x624 default and the
+        // whole UI was drawn at 62 % inside a larger canvas.
         const auto want = targetSize();
-        setResizable (true, true);
-        // How far the host may stretch the editor.  The UI scales uniformly and
-        // fills the frame it is given (main.qml), so any size works — these
-        // limits only stop a host from dragging it down to something unreadable
-        // or up to a size that costs more than it shows.
-        setResizeLimits (OvThemeWidth / 2, OvThemeHeight / 2, 4096, 4096);
+
+        // ONYXTEON_FIXED_SIZE (on unless set to 0): the window keeps its
+        // original size.
+        //
+        // `setResizable (true, true)` tells the host it may stretch the editor,
+        // and jalv.gtk3 acts on that: its window becomes draggable to any size.
+        // For a plugin whose layout was drawn against one design size that is a
+        // liability rather than a feature — the UI does adapt, but the point of
+        // asking for the design size is that the design is what is being looked
+        // at.  With this off the host has no handle to resize, so the editor
+        // stays at exactly the size it asked for.
+        if (ovEnvFlagDefaultOn ("ONYXTEON_FIXED_SIZE"))
+        {
+            setResizable (false, false);
+        }
+        else
+        {
+            setResizable (true, true);
+            // How far the host may stretch the editor.  The UI scales uniformly
+            // and fills the frame it is given (main.qml), so any size works —
+            // these limits only stop a host from dragging it down to something
+            // unreadable or up to a size that costs more than it shows.
+            setResizeLimits (OvThemeWidth / 2, OvThemeHeight / 2, 4096, 4096);
+        }
+
         setSize (want.x, want.y);
+
+        if (ovEnvFlag ("ONYXTEON_SIZEDBG"))
+        {
+            const qreal dpr = QGuiApplication::primaryScreen()
+                                ? QGuiApplication::primaryScreen()->devicePixelRatio()
+                                : qreal (0.0);
+            const QRect avail = QGuiApplication::primaryScreen()
+                                ? QGuiApplication::primaryScreen()->availableGeometry()
+                                : QRect();
+            std::fprintf (stderr,
+                          "[size] design %dx%d  dpr %.4f  want %dx%d  "
+                          "screen avail %dx%d  resizable %d\n",
+                          OvThemeWidth, OvThemeHeight, (double) dpr,
+                          want.x, want.y, avail.width(), avail.height(),
+                          (int) isResizable());
+        }
     }
 
-    impl->qtOk = ensureQtApp();
     if (impl->qtOk)
     {
         ovRegisterQmlTypes();
@@ -196,6 +239,32 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
             qtComponent->setWindow (impl->view);
             addAndMakeVisible (*qtComponent);
             qtComponent->setBounds (getLocalBounds());
+
+            // ---- trigger the resize AGAIN, now that Qt exists --------------
+            //
+            // The size asked for at the top of this constructor is computed
+            // from the desktop scale, and it is set before this editor has a
+            // PEER.  A resize request with no peer has nothing to forward to
+            // the host, so the number can be silently dropped and the editor
+            // keeps whatever the host decided on its own.
+            //
+            // By here the peer and the embedded QWindow both exist, so setting
+            // the size a second time is the request that actually lands.  The
+            // guard keeps it silent when the first one did work.
+            {
+                const auto want = targetSize();
+                if (want.x != getWidth() || want.y != getHeight())
+                {
+                    if (ovEnvFlag ("ONYXTEON_SIZEDBG"))
+                        std::fprintf (stderr, "[size] re-applying %dx%d (was %dx%d)\n",
+                                      want.x, want.y, getWidth(), getHeight());
+                    setSize (want.x, want.y);
+                }
+                // The child has to match the component whatever happened above;
+                // this is the same call resized() makes, and doing it here means
+                // the very first presented frame is already the right size.
+                qtComponent->setBounds (getLocalBounds());
+            }
         }
     }
     else
@@ -239,28 +308,43 @@ void OvQmlEditor::resized()
 }
 
 // ---------------------------------------------------------------------------
-//  The editor's size, in LOGICAL pixels — what the host is asked for.
+//  The editor's size in DEVICE pixels — what the host is asked for.
 // ---------------------------------------------------------------------------
 juce::Point<int> OvQmlEditor::targetSize() const
 {
-    // ---- ask the HOST in logical pixels -----------------------------------
-    // Two different scales are in play and confusing them is what kept the
-    // editor the wrong size:
+    // ---- the design size, AFTER the desktop scale --------------------------
     //
-    //   * the request to the host (ui:resize / setSize) is in LOGICAL pixels,
-    //     and the host multiplies it by the desktop scale to build its canvas.
-    //     Asking for 1354 made a 1763-wide canvas; asking for 1040 makes 1354,
-    //     which is the size we want.
-    //   * the editor's own window must then be that canvas size in DEVICE
-    //     pixels, and that conversion is ovqt::Component's job now.
+    // The editor must occupy the same PHYSICAL area the design was drawn for,
+    // so the number the host is asked for is design x devicePixelRatio: 1040x772
+    // becomes 1354x1005 on a 1.302 desktop.
     //
-    // So: plain design size here, in logical pixels.
-    int w = OvThemeWidth;
-    int h = OvThemeHeight;
+    // This used to return the plain design size, on the theory that "the host
+    // multiplies by the desktop scale itself".  Measured on jalv.gtk3 it does
+    // not: asking for 1040 produced a 1040x772 host window, and the QQuickView
+    // inside it -- which Qt had already scaled up by the same ratio -- came out
+    // 1354x1005, larger than its own parent.  So the scaling happened exactly
+    // once, on the wrong side.
+    //
+    // The ratio is the one Qt itself will use for the embedded window, taken
+    // from the same screen Qt picks the window up on.  Rounding to whole pixels
+    // keeps the host canvas and the child window on the same integer.
+    const qreal dpr = [] {
+        if (auto* scr = QGuiApplication::primaryScreen())
+            return scr->devicePixelRatio();
+        return qreal (1.0);
+    }();
 
+    int w = (int) std::lround (OvThemeWidth  * dpr);
+    int h = (int) std::lround (OvThemeHeight * dpr);
+
+    // The design also has to FIT: a scaled editor must not ask for more than the
+    // screen it will open on, or the host clamps it and the panels are cut off.
+    // Comparing in device pixels on both sides is what makes this a real limit
+    // rather than a second, accidental scale.
     if (auto* scr = QGuiApplication::primaryScreen())
     {
-        const QSize avail = scr->availableGeometry().size();
+        const QSize avail (scr->availableGeometry().width()  * dpr,
+                           scr->availableGeometry().height() * dpr);
         if (avail.width() > 200 && avail.height() > 200)
         {
             const double k = std::min (1.0, std::min ((double) avail.width()  / w,
@@ -270,8 +354,8 @@ juce::Point<int> OvQmlEditor::targetSize() const
         }
     }
 
-    w = juce::jlimit (460, 4096, w);
-    h = juce::jlimit (341, 4096, h);
+    w = juce::jlimit (460, 8192, w);
+    h = juce::jlimit (341, 8192, h);
     return { w, h };
 }
 

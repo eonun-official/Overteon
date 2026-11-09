@@ -34,3 +34,21 @@ inline bool ovEnvFlag (const char* name)
            || strcasecmp (v, "no")    == 0
            || strcasecmp (v, "off")   == 0);
 }
+
+/// Same parsing, but ON unless it is explicitly turned off.
+///
+/// For a switch whose desirable state is "on" and whose off state has to be
+/// reachable from the environment.  Unset, empty and any non-false word are all
+/// ON here — the opposite default to ovEnvFlag(), which exists for debug
+/// output that must stay silent unless asked for.
+inline bool ovEnvFlagDefaultOn (const char* name)
+{
+    const char* v = std::getenv (name);
+    if (v == nullptr) return true;
+    if (*v == '\0')   return true;
+
+    return ! (strcasecmp (v, "0")     == 0
+           || strcasecmp (v, "false") == 0
+           || strcasecmp (v, "no")    == 0
+           || strcasecmp (v, "off")   == 0);
+}
