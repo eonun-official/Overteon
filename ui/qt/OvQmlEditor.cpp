@@ -292,6 +292,17 @@ OvQmlEditor::~OvQmlEditor()
     // to drop the rest.
     qtComponent.reset();
     impl.reset();
+
+    // Drain Qt's queue before this editor goes away.
+    //
+    // The QGuiApplication outlives the editor (it is deliberately leaked, one
+    // per process, because the host keeps running between editors), so anything
+    // still posted -- metacalls from OvEqView's render-thread invokeMethod, and
+    // deferred deletes -- would otherwise be delivered after every QML item
+    // that could receive them is gone.  Delivering them here, while the items
+    // are still valid, keeps teardown synchronous instead of "later, maybe".
+    if (QCoreApplication::instance() != nullptr)
+        QCoreApplication::sendPostedEvents();
 }
 
 void OvQmlEditor::paint (juce::Graphics& g)

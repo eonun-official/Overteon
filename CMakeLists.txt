@@ -289,10 +289,43 @@ if(OVERTEON_QT_UI)
     # The QML + font bundle has to be compiled into every plugin binary: the
     # shared-code target is a static archive and nothing references the rcc
     # object, so a plain target_sources there would be dropped by the linker.
+    # The GPU frost blurs live in their own resource bundle, and a plug-in that
+    # is missing it does not fail loudly: every ShaderEffect silently renders
+    # nothing, so the seam glass and the EQ fog just vanish in the host while
+    # the preview (which does link the bundle) looks right.  Only the host's log
+    # says so:
+    #
+    #   Failed to find shader ":/shaders/glass.vert.qsb"
+    #   ShaderEffect: shader preparation failed for qrc:/shaders/glass.frag.qsb
+    #
+    # So the bundle goes into every plug-in binary, exactly like the QML one,
+    # and the shaders are built first because AUTORCC must find the .qsb files.
     foreach(_fmt ${PLUGIN_FORMATS})
         if(TARGET HarmonicInjector_${_fmt})
-            target_sources(HarmonicInjector_${_fmt} PRIVATE ui/qt/ov_ui.qrc)
+            target_sources(HarmonicInjector_${_fmt} PRIVATE
+                ui/qt/ov_ui.qrc ${OVERTEON_SHADER_QRC})
             set_target_properties(HarmonicInjector_${_fmt} PROPERTIES AUTORCC ON)
+            add_dependencies(HarmonicInjector_${_fmt} overteon_shaders)
+
+            # -z,nodelete: the host must not unmap this module while it runs.
+            #
+            # Qt is used as a GUEST here: one QGuiApplication per process, made
+            # on first editor use and deliberately leaked, because the host's
+            # main loop keeps running between editors.  suil, however, dlcloses
+            # the plug-in as soon as the editor is destroyed, and the objects
+            # and metaobject strings that application still points at go with
+            # it.  The next queued event is then delivered through a vtable in
+            # an unmapped page:
+            #
+            #   #0 QCoreApplicationPrivate::notify_helper(QObject*, QEvent*)
+            #   #2 QCoreApplicationPrivate::sendPostedEvents()
+            #   ... g_main_context_iteration() ... g_application_run()
+            #
+            # i.e. jalv.gtk3 SIGSEGV (exit 139) every time its window is closed.
+            # Keeping the module resident costs nothing that matters -- it is
+            # the same 8 MB the editor already uses -- and closing the window
+            # then exits with status 0, measured over repeated runs.
+            target_link_options(HarmonicInjector_${_fmt} PRIVATE "LINKER:-z,nodelete")
         endif()
     endforeach()
 

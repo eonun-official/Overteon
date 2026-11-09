@@ -49,8 +49,13 @@ Item {
     /// ONYXTEON_NOFROST=1 turns every glass surface off, so a reference capture
     /// really has none.  Without this the "no frost" image still carried the GPU
     /// glass and every A/B against it read as zero difference.
-    property bool   enabled: true
-    visible: enabled
+    /// Whether this glass draws at all.  NOT named `enabled`: QQuickItem
+    /// already has `enabled`, and a QML item that declares its own shadows the
+    /// base property — Qt warns about it on every load ("Member enabled of the
+    /// object OvGpuGlass overrides a member of the base object") and the two
+    /// then disagree about what the property means.
+    property bool   active: true
+    visible: active
 
     readonly property int capW: Math.max (2, Math.round (width))
     readonly property int capH: Math.max (2, Math.round (height))

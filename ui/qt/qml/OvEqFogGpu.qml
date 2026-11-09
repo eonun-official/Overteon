@@ -36,11 +36,13 @@ Item {
     /// Half the gap between the two plot edges, in ITEM pixels.  Comes from the
     /// views because the padding rule (min(24, h*0.2)) is theirs.
     property real   edgeGap: 24
-    property bool   enabled: true
+    /// See OvGpuGlass: `enabled` is QQuickItem's own property, so the fog uses
+    /// its own name instead of shadowing it.
+    property bool   active: true
     /// ONYXTEON_FOGRAW=1: show the unblurred strokes.
     property bool   raw: (typeof ovFogRaw !== "undefined") ? ovFogRaw : false
 
-    visible: enabled && topView !== null && bottomView !== null
+    visible: active && topView !== null && bottomView !== null
 
     /// The surface's own paint rate, for ONYXTEON_SOLO.
     readonly property alias paintFps: srcItem.paintFps

@@ -276,7 +276,7 @@ Item {
                 OvEqFogGpu {
                     id: eqFogItem
                     objectName: "eqFog"
-                    enabled: root.anyFog
+                    active: root.anyFog
                     visible: root.anyFog && root.soloed ("fog")
                     opacity: root.soloAlpha ("fog")
                     topView: scView
@@ -303,7 +303,7 @@ Item {
             OvGpuGlass {
                 id: seamGlass
                 dbgName: "seam"
-                enabled: root.anyFrost && ! root.cpuFrost
+                active: root.anyFrost && ! root.cpuFrost
                 visible: root.anyFrost && ! root.cpuFrost && root.soloed ("seam")
                 opacity: root.soloAlpha ("seam")
                 width: 550
