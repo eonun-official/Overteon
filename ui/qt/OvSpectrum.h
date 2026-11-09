@@ -79,8 +79,8 @@ struct SpectrumBallistics
     /// Power-domain one-pole constants.  The fall is 4.343/tau dB/s, so
     /// 0.12 s is 36 dB/s and a full 85 dB sweep takes 2.4 s — the value that
     /// replaced "85 dB in 0.3 s", which measured 283 dB/s and read as a snap.
-    double attackTau  = 0.120;
-    double releaseTau = 0.260;      // 4.343/0.26 = 16.7 dB/s downward
+    double attackTau  = 0.096;      // 120 ms x 1.25
+    double releaseTau = 0.208;      // 260 ms x 1.25  ->  4.343/0.208 = 20.9 dB/s
 
     /// Half an octave.  sigma in bins: 12.8 bins/octave * (1/2) / 2.5 = 2.56,
     /// rounded to 2.5.  Chosen from a sweep of (attack, release, sigma) against

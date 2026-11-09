@@ -74,7 +74,7 @@ void OvEngine::lightTick()
     // 4.343/0.12 = 36 dB/s, so the glow tracks the measurement instead of
     // racing ahead of it — and it is deliberately faster than the bars'
     // 11.8 dB/s, because a glow that lags the music reads as broken.
-    constexpr double kLightDbPerSec = 4.343 / 0.12;
+    constexpr double kLightDbPerSec = 4.343 / 0.096;   // 120 ms tau x 1.25
     constexpr double kSpanDb = 60.0, kFloorDb = -60.0;
 
     // The measurement is already in dB; the light follows the LOUDER channel.

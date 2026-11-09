@@ -31,7 +31,7 @@ namespace
     /// 48 kHz / 1024 and 33 ms at 48 kHz / 256 — the same block-rate dependence
     /// the level meters were already fixed for.  0.15 at 21.3 ms is tau 131 ms,
     /// so that is what it is now, at every buffer size.
-    constexpr double kHarmTau = 0.131;
+    constexpr double kHarmTau = 0.105;    // 131 ms x 1.25: same 25 % faster ring
 }
 
 

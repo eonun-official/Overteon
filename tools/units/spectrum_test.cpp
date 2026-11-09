@@ -167,12 +167,17 @@ int main()
 
     std::printf ("\n      frame-to-frame change, 95th percentile\n");
     std::printf ("        old (dB domain, 1/6 oct, 0.3 s)      %6.2f dB\n", oldF95);
-    std::printf ("        new (power domain, 1/2 oct, 0.26 s)  %6.2f dB\n", newF95);
+    std::printf ("        new (power domain, 1/2 oct, 0.208 s)  %6.2f dB\n", newF95);
     std::printf ("      bin-to-bin sawtooth, 95th percentile\n");
     std::printf ("        old %6.2f dB    new %6.2f dB\n", oldB95, newB95);
 
-    check (newF95 < 1.2, "steady noise does not move the outline by >1.2 dB a frame", newF95, 1.2);
-    check (newF95 < oldF95 * 0.5, "and it is at least twice as still as before", newF95, oldF95 * 0.5);
+    // The absolute bound moved with the tuning: every display was asked to run
+    // 25 % faster, and a release that is 25 % faster necessarily lets a little
+    // more of the frame-to-frame scatter through (1.05 -> 1.28 dB).  What must
+    // NOT change is the relationship to the old chain, so that is the assertion
+    // with teeth: at least four times stiller.
+    check (newF95 < 1.5, "steady noise moves the outline <1.5 dB a frame", newF95, 1.5);
+    check (newF95 < oldF95 * 0.25, "and is at least four times as still as before", newF95, oldF95 * 0.25);
     check (newB95 < 1.2, "the bin-to-bin sawtooth is under 1.2 dB", newB95, 1.2);
 
     // ---- the fall, once the signal stops --------------------------------

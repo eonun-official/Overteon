@@ -1978,7 +1978,7 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
             m_glowShownAt = now;
 
             constexpr double kSpanDb    = 85.0;      // the table is 0..1 over 85 dB
-            constexpr double kDbPerSec  = 85.0 / 0.35;
+            constexpr double kDbPerSec  = 85.0 / 0.28;   // 0.35 s x 1.25
 
             m_glowFall[b].advance (l * kSpanDb, dt, kDbPerSec, 0.030);
             m_glowShown[b] = m_glowFall[b].shown / kSpanDb;
