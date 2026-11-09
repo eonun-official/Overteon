@@ -49,6 +49,14 @@ private:
     /// and every plug-in format without a per-platform code path.
     std::unique_ptr<ovqt::Component> qtComponent;
 
-    /// Design size in LOGICAL pixels, clamped to the screen.
+    /// Design size in DEVICE pixels (design x devicePixelRatio), clamped to the
+    /// screen so a scaled editor never asks for more than it can show.
     juce::Point<int> targetSize() const;
+
+    /// How many timer ticks until the "did the size actually land" check runs.
+    /// The host applies the resize asynchronously, so the size cannot be read
+    /// back in the constructor — it has to be read after the window has been
+    /// through a few frames.
+    int sizeCheckIn = 0;
+    bool sizeReported = false;
 };

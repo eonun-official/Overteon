@@ -276,6 +276,12 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
     // idles at ~15 Hz.  Asking for 120 only fills a backlog we can never drain;
     // 60 is the rate the scene is designed for and the most any host delivers.
     startTimerHz (60);
+
+    // Wait about a second of host idles before reading the size back.  The
+    // resize is asynchronous: the host applies it after the editor maps its
+    // window, so anything read in this constructor is the size the host picked,
+    // not the size that was asked for.
+    sizeCheckIn = 45;
 }
 
 OvQmlEditor::~OvQmlEditor()
@@ -364,6 +370,36 @@ juce::Point<int> OvQmlEditor::targetSize() const
 void OvQmlEditor::timerCallback()
 {
     if (! impl) return;
+
+    // ---- did the size actually land? ------------------------------------
+    //
+    // Printed from the LOG, not inferred from the source: the resize goes
+    // through the host (ui:resize), so the only trustworthy answer to "is the
+    // editor the size it asked for" is to read it back once the window has been
+    // up for a moment.  A mismatch is a real fault and is reported even
+    // without ONYXTEON_SIZEDBG -- it is the difference between a UI that is
+    // laid out correctly and one that is a stretched copy of itself.
+    if (sizeCheckIn > 0 && --sizeCheckIn == 0 && impl->view != nullptr)
+    {
+        const auto want = targetSize();
+        const auto got  = impl->view->size();          // device-INDEPENDENT
+        const qreal dpr = impl->view->devicePixelRatio();
+        const bool ok = want.x == getWidth() && want.y == getHeight();
+
+        // Both numbers, because they are in different units and mixing them up
+        // is what hid this bug for two rounds: the editor is in device pixels
+        // (what the host canvas is measured in), the QWindow in DIPs.
+        if (! ok || ovEnvFlag ("ONYXTEON_SIZEDBG"))
+            std::fprintf (stderr,
+                          "[size] asked %dx%d  editor %dx%d  qwindow %dx%d dip "
+                          "(%dx%d device)  dpr %.4f  %s\n",
+                          want.x, want.y, getWidth(), getHeight(),
+                          got.width(), got.height(),
+                          qRound (got.width() * dpr), qRound (got.height() * dpr),
+                          (double) dpr,
+                          ok ? "ok" : "MISMATCH (host ignored the resize)");
+        sizeReported = true;
+    }
 
     // ---- the one thing JUCE still has to do for Qt ----------------------
     // Qt has no event loop of its own inside a plug-in: the host pumps this
