@@ -17,6 +17,7 @@
 
 #include "OvSource.h"
 #include "OvParam.h"
+#include "OvBallistics.h"   // ovb::Fall — the light's ballistics
 
 class OvEngine : public QObject
 {
@@ -137,6 +138,9 @@ private:
     QTimer       m_lightTimer;
     double       m_outLight = 0.0;
     double       m_inLight  = 0.0;
+    // The ballistic state behind those two, in dB (ui/qt/OvBallistics.h).
+    ovb::Fall    m_outFall;
+    ovb::Fall    m_inFall;
     std::chrono::steady_clock::time_point m_lightAt {};
     void lightTick();
 };

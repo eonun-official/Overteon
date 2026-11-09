@@ -1,5 +1,6 @@
 #include "OvEnv.h"
 #include "OvEngine.h"
+#include "OvBallistics.h"
 #include "OvQmlTypes.h"
 #include "OvTick.h"
 
@@ -45,18 +46,13 @@ OvEngine::~OvEngine() = default;
 // ---------------------------------------------------------------------------
 //  The light behind the accent glow.
 //
-//  Same ballistics as the bars and the spectrum — an instant attack, and a
-//  release whose per-frame step is derived from the refresh rate:
-//
-//      n_frames = rate * decay_seconds
-//      step     = 1 - (target/start)^(1/n_frames)
-//
-//  (SpectrumDecayer::setDecaySpeed in ZLEqualizer.)  In the dB domain, because
-//  the mapping to 0..1 is linear in dB and a light should fade at a constant
-//  number of dB per second.
+//  The same ovb::Fall as every other meter (ui/qt/OvBallistics.h): instant
+//  attack, smootherstep-eased release, dB per SECOND.  It used to be its own
+//  copy of  step = 1 - (target/start)^(1/n_frames), which is why the light and
+//  the bars beside it fell at two different speeds.
 //
 //  Faster than the bars: a glow that lags behind the music reads as broken
-//  rather than as smooth.  120 ms to fall the full scale.
+//  rather than as smooth.  60 dB in 120 ms.
 // ---------------------------------------------------------------------------
 void OvEngine::lightTick()
 {
@@ -68,34 +64,22 @@ void OvEngine::lightTick()
                          0.0005, 0.20);
     m_lightAt = now;
 
-    auto step = [dt] (double shown, double target) -> double
-    {
-        if (target >= shown) return target;                 // instant attack
+    // The same ovb::Fall the bars use, in dB — this used to be a third copy of
+    // the release formula, and the light and the bars disagreed about how fast
+    // a fall was.  Faster than the bars (60 dB in 0.12 s against 0.35 s): a glow
+    // that lags behind the music reads as broken rather than as smooth.
+    constexpr double kLightDbPerSec = 60.0 / 0.12;
+    constexpr double kSpanDb = 60.0, kFloorDb = -60.0;
 
-        constexpr double kDecaySec = 0.12;
-        constexpr double kFloorDb  = -60.0;
+    // The measurement is already in dB; the light follows the LOUDER channel.
+    const double targetOut = std::max (m_meters.outL, m_meters.outR);
+    const double targetIn  = std::max (m_meters.inL,  m_meters.inR);
 
-        const double rate    = (dt > 1e-6) ? 1.0 / dt : 60.0;
-        const double nFrames = std::max (1.0, rate * kDecaySec);
+    m_outFall.advance (targetOut, dt, kLightDbPerSec);
+    m_inFall.advance  (targetIn,  dt, kLightDbPerSec);
 
-        const double startDb   = shown  * 60.0 - 60.0;
-        const double targetDb  = target * 60.0 - 60.0;
-        const double startDist = std::max (1e-6, startDb - kFloorDb);
-        const double goalDist  = std::max (0.0,   targetDb - kFloorDb);
-        const double ratio     = std::clamp (goalDist / startDist, 0.0, 1.0);
-        const double st        = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
-
-        const double nextDb = startDb + (startDb - kFloorDb) * -st;
-        return std::clamp ((std::max (nextDb, targetDb) + 60.0) / 60.0, 0.0, 1.0);
-    };
-
-    auto lvl = [] (double db) { return std::clamp ((db + 60.0) / 60.0, 0.0, 1.0); };
-
-    const double targetOut = std::max (lvl (m_meters.outL), lvl (m_meters.outR));
-    const double targetIn  = std::max (lvl (m_meters.inL),  lvl (m_meters.inR));
-
-    const double nextOut = step (m_outLight, targetOut);
-    const double nextIn  = step (m_inLight,  targetIn);
+    const double nextOut = ovb::dbToNorm (m_outFall.shown, kSpanDb, kFloorDb);
+    const double nextIn  = ovb::dbToNorm (m_inFall.shown,  kSpanDb, kFloorDb);
 
     // Threshold in the 0..1 domain: 0.002 is well under one pixel of glow.
     if (std::abs (nextOut - m_outLight) > 0.002 || std::abs (nextIn - m_inLight) > 0.002)
@@ -103,6 +87,14 @@ void OvEngine::lightTick()
         m_outLight = nextOut;
         m_inLight  = nextIn;
         emit lightChanged();
+    }
+
+    if (ovEnvFlag ("ONYXTEON_METERDBG"))
+    {
+        std::fprintf (stderr, "[l] %.3f  out %6.2f dB  in %6.2f dB  "
+                              "light out %.4f in %.4f\n",
+                      std::chrono::duration<double> (now.time_since_epoch()).count(),
+                      m_outFall.shown, m_inFall.shown, m_outLight, m_inLight);
     }
 }
 

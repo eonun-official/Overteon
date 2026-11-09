@@ -1,5 +1,6 @@
 #include "OvEnv.h"
 #include "OvMeterView.h"
+#include "OvBallistics.h"
 #include <QQuickWindow>
 #include "OvFrost.h"
 #include "OvEngine.h"
@@ -67,6 +68,17 @@ namespace
     {
         return std::clamp ((db + 60.0) / 60.0, 0.0, 1.0);
     }
+
+    // ---- the pod's numbers, in real units --------------------------------
+    // Every one of these used to be a per-frame coefficient somewhere in this
+    // file; expressed per second they mean the same thing at jalv's 15 Hz idle
+    // rate and at the preview's 60-120 Hz.
+    constexpr double kBarSpanDb   = 60.0;                // bottom of the bar
+    constexpr double kBarFloorDb  = -60.0;
+    constexpr double kBarDbPerSec = 20.0 / 0.35;         // 20 dB in 0.35 s
+    constexpr double kPeakDbPerSec = 0.18 * 60.0;        // 10.8 dB/s
+    constexpr double kHarmFloorDb = -48.0;
+    constexpr double kHarmDbPerSec = 48.0 / 0.45;        // full ring in 0.45 s
 
     // green plateau -> amber -> red, with a hot red in the last 3 %
     QColor harmColor (double f)
@@ -144,6 +156,26 @@ OvMeterView::OvMeterView (QQuickItem* parent) : QQuickPaintedItem (parent)
         advance (dt);
         if (stateKey() != before)
             update();
+
+        // ONYXTEON_METERDBG=1: the ballistic state, one line per display frame.
+        //
+        // "The meters move like this / not like that" is not something a
+        // screenshot can settle — a still frame looks the same whether the value
+        // arrived by a curve or by a jump.  This prints the numbers the paint
+        // uses, so the curve can be plotted (or diffed) from outside.
+        if (ovEnvFlag ("ONYXTEON_METERDBG"))
+        {
+            std::fprintf (stderr, "[m] %.3f  in %6.2f %6.2f  out %6.2f %6.2f  "
+                                  "peak in %6.2f out %6.2f  harm %.4f\n",
+                          m_clock,
+                          ovb::normToDb (m_inL.level,  60.0, -60.0),
+                          ovb::normToDb (m_inR.level,  60.0, -60.0),
+                          ovb::normToDb (m_outL.level, 60.0, -60.0),
+                          ovb::normToDb (m_outR.level, 60.0, -60.0),
+                          ovb::normToDb (m_inL.peak,   60.0, -60.0),
+                          ovb::normToDb (m_outL.peak,  60.0, -60.0),
+                          m_harmFrac);
+        }
     });
     m_last = std::chrono::steady_clock::now();
     m_timer.start();
@@ -174,14 +206,29 @@ void OvMeterView::setEngine (OvEngine* e)
 
 quint64 OvMeterView::stateKey() const
 {
-    // quantised: the pod is ~200 px wide, so 1/8192 of the range is well below
-    // one pixel
+    // Quantised: the pod is ~200 px wide, so 1/8192 of the range is well below
+    // one pixel.
+    //
+    // Nine values at 13 bits each is 117 bits, and this used to be a shift-and-
+    // or chain into a quint64: everything above the sixth value was shifted by
+    // 65, 78, 91 and 104 bits, which is UNDEFINED in C++ and warned about on
+    // every build.  On x86 the count wraps, so the last four values were
+    // aliasing onto the first four — the peak columns collided with the level
+    // columns and a repaint could be skipped while the trail was visibly
+    // moving.  Mixed instead, so all nine contribute.
     const auto q = [] (double v) { return quint64 (std::clamp (v, 0.0, 1.0) * 8191.0); };
-    return q (m_outL.level) | (q (m_outR.level) << 13)
-         | (q (m_inL.level)  << 26) | (q (m_inR.level) << 39)
-         | (q (m_outL.peak)  << 52) | (q (m_outR.peak) << 65)
-         | (q (m_inL.peak)  << 78) | (q (m_inR.peak) << 91)
-         | (q (m_harmFrac) << 104);
+    quint64 key = 1469598103934665603ull;                       // FNV-1a
+    const auto mix = [&key] (quint64 v)
+    {
+        key = (key ^ v) * 1099511628211ull;
+    };
+    for (const auto* ch : { &m_outL, &m_outR, &m_inL, &m_inR })
+    {
+        mix (q (ch->level));
+        mix (q (ch->peak));
+    }
+    mix (q (m_harmFrac));
+    return key;
 }
 
 void OvMeterView::advance (double dt)
@@ -201,99 +248,50 @@ void OvMeterView::advance (double dt)
     // drawLevel() in web_fx/index.html, step for step:
     //   new max        -> hold for 1.1 s
     //   after the hold -> fall back at about 10.8 dB/s, never below the level
+    //
+    // The motion itself comes from ovb::Fall (ui/qt/OvBallistics.h), which is
+    // the SAME code the light, the harmonic ring, the analyser and the glow
+    // bands use.  The bars used to carry their own copy of
+    //       step = 1 - (target/start)^(1/n_frames)
+    // here: an exponential, i.e. maximum speed on the first frame of a fall and
+    // an infinite tail, which is why a bar snapped to its value and then crept.
+    // Constant dB/s with a smootherstep ease-in lands exactly and starts from
+    // rest; the numbers are the same ones (20 dB in 0.35 s), only the curve is.
     for (const auto& t : list)
     {
-        const double level = levelToFraction (t.db);
+        const double targetDb = ovb::normToDb (levelToFraction (t.db), kBarSpanDb, kBarFloorDb);
+        t.ch->levelFall.advance (targetDb, dt, kBarDbPerSec);
+        t.ch->level = ovb::dbToNorm (t.ch->levelFall.shown, kBarSpanDb, kBarFloorDb);
 
-        // ---- ballistics, the way ZL Audio does it -----------------------
-        // Attack is instant so a transient shows in the frame it happens.
-        //
-        // Release is expressed as "this many decibels in this many seconds" and
-        // the per-frame step is DERIVED from the display rate:
-        //
-        //      n_frames = refresh_rate * decay_seconds
-        //      step     = 1 - (target_ratio)^(1/n_frames)
-        //
-        // which is exactly SpectrumDecayer::setDecaySpeed() in ZLEqualizer's
-        // source/dsp/analyzer/fft_analyzer/spectrum_decayer.hpp.  Deriving it
-        // from the rate matters: a fixed coefficient is a fixed number of
-        // FRAMES, so the same build falls twice as fast at 60 Hz as at 30, and
-        // at a high refresh rate the fall is over before a frame can show it —
-        // which is precisely the "values snap to exact numbers, no smoothing"
-        // that was reported.
-        //
-        // Done in the dB domain because that is where a meter's scale is linear,
-        // so the bar moves at a constant number of dB per second.
+        if (t.ch->level >= t.ch->peak)
         {
-            constexpr double kDecayDb     = 20.0;    // dB
-            constexpr double kDecaySecond = 0.35;    // seconds for those 20 dB
-            constexpr double kFloorDb     = -60.0;   // the bar's bottom
-
-            const double shownDb = t.ch->level * 60.0 - 60.0;   // 0..1 -> -60..0 dB
-            const double targetDb = level * 60.0 - 60.0;
-
-            if (targetDb >= shownDb)
-            {
-                t.ch->level = level;                            // instant attack
-            }
-            else
-            {
-                // Per-frame step towards the floor, scaled by how far this bar
-                // still has to travel, so a bar near the floor does not stop.
-                // SpectrumDecayer::setDecaySpeed(), verbatim in form:
-                //   n_frames = refresh_rate * decay_seconds
-                //   step     = 1 - (target/start)^(1/n_frames)
-                // The exponent is what makes "20 dB in 0.35 s" mean the same
-                // thing at 30 Hz and at 144 Hz.
-                const double rate    = (dt > 1e-6) ? 1.0 / dt : double (OvTiming::kMeterHz);
-                const double nFrames = std::max (1.0, rate * kDecaySecond);
-                const double start   = std::max (1e-6, shownDb - kFloorDb);
-                const double target  = std::max (0.0,   targetDb - kFloorDb);
-                const double ratio   = std::clamp (target / start, 0.0, 1.0);
-                const double step    = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
-
-                // Exponential towards the floor, which is what a dB-linear meter
-                // does; the target is honoured because the step is sized by the
-                // ratio to it.
-                const double nextDb = shownDb + (shownDb - kFloorDb) * -step;
-                t.ch->level = std::clamp ((std::max (nextDb, targetDb) + 60.0) / 60.0,
-                                          0.0, 1.0);
-            }
-        }
-
-        if (level >= t.ch->peak)
-        {
-            t.ch->peak = level;
+            t.ch->peak = t.ch->level;
             t.ch->holdUntil = m_clock + 1.1;
+            // Start the trail's fall from rest again: it is a new peak.
+            t.ch->peakFall.reset (ovb::normToDb (t.ch->peak, kBarSpanDb, kBarFloorDb));
         }
         else if (m_clock > t.ch->holdUntil)
         {
-            t.ch->peak = std::max (level, t.ch->peak - dt * 0.18);
+            // 0.18 per second of the 0..1 scale is 10.8 dB/s of a 60 dB one.
+            t.ch->peakFall.advance (ovb::normToDb (t.ch->level, kBarSpanDb, kBarFloorDb),
+                                    dt, kPeakDbPerSec);
+            t.ch->peak = ovb::dbToNorm (t.ch->peakFall.shown, kBarSpanDb, kBarFloorDb);
         }
     }
 
     // The harmonic ring is a METER too: it must move like one.  Mapping the
     // raw value snapped it between readings — in the preview the source only
     // changes `harm` when a new block is measured, so the ring sat still and
-    // then jumped.  Same rate-derived release as the bars, slower because it is
-    // a slow musical quantity.
-    double targetHarm = std::clamp ((double (m.harm) + 48.0) / 48.0, 0.0, 1.0);
+    // then jumped.
+    //
+    // It also used to release in LINEAR AMPLITUDE (v -= v*step) while every
+    // other meter released in dB, so the ring's tail had a different shape from
+    // the bars beside it.  It is a dB quantity to begin with; it now goes
+    // through the same ovb::Fall, in dB, at 48 dB in 0.45 s.
     {
-        constexpr double kHarmDecaySec = 0.45;
-        const double rate    = (dt > 1e-6) ? 1.0 / dt : double (OvTiming::kMeterHz);
-        const double nFrames = std::max (1.0, rate * kHarmDecaySec);
-
-        if (targetHarm >= m_harmFrac)
-        {
-            m_harmFrac = targetHarm;                       // instant attack
-        }
-        else
-        {
-            const double start = std::max (1e-6, m_harmFrac);
-            const double ratio = std::clamp (targetHarm / start, 0.0, 1.0);
-            const double step  = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
-            m_harmFrac = std::max (targetHarm, m_harmFrac - m_harmFrac * step);
-        }
+        const double harmDb = std::clamp (double (m.harm), kHarmFloorDb, 0.0);
+        m_harmFall.advance (harmDb, dt, kHarmDbPerSec, 0.045);
+        m_harmFrac = ovb::dbToNorm (m_harmFall.shown, -kHarmFloorDb, kHarmFloorDb);
     }
     double f = m_harmFrac;
     // test hook: ONYXTEON_HARM=0..1 pins the harmonic fraction so the ring's

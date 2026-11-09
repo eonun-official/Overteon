@@ -1454,9 +1454,6 @@ using clk = std::chrono::steady_clock;
                          0.0005, 0.20);
     m_specShownAt = now;
 
-    constexpr double kFloor   = 0.0;      // the table's own bottom
-    constexpr double kDecaySec = 0.30;    // seconds to fall the full scale
-
     float raw[128] = {};
     if (m_engine != nullptr)
     {
@@ -1469,9 +1466,6 @@ using clk = std::chrono::steady_clock;
             specRaw[i] = raw[i];
         }
     }
-
-    const double rate    = (dt > 1e-6) ? 1.0 / dt : double (OvTiming::kPlotHz);
-    const double nFrames = std::max (1.0, rate * kDecaySec);
 
     // ---- smooth along FREQUENCY -----------------------------------------
     // A single FFT bin's magnitude of noise is Rayleigh-distributed: consecutive
@@ -1507,25 +1501,31 @@ using clk = std::chrono::steady_clock;
     // the outline up in one frame and hold it.  40 ms is short enough that a
     // transient still shows immediately and long enough that the edge moves as
     // one line instead of flickering.
+    //
+    // The RELEASE, on the other hand, is now the shared ovb::Fall: the same
+    // smootherstep-eased, dB-per-second curve the bars and the light use.  It
+    // used to be a fourth private copy of 1-(target/start)^(1/n_frames), with
+    // its own 0.30 s, so the analyser fell at a different shape from the bar
+    // beside it whenever the two were compared.
     const double attackK = 1.0 - std::exp (-dt / 0.040);
+    constexpr double kSpecSpanDb  = 85.0;      // the table is 0..1 over 85 dB
+    constexpr double kSpecDbPerSec = 85.0 / 0.30;
 
     for (int i = 0; i < 128; ++i)
     {
-        const double shown  = m_specShown[i];
-        const double target = raw[i];
+        const double shownN = m_specShown[i];
+        const double targetN = raw[i];
 
-        if (target >= shown)
+        if (targetN >= shownN)
         {
-            m_specShown[i] = float (shown + (target - shown) * attackK);
+            const double next = shownN + (targetN - shownN) * attackK;
+            m_specShown[i] = float (next);
+            m_specFall[i].reset (next * kSpecSpanDb);      // keep the state in step
         }
         else
         {
-            const double start = std::max (1e-6, shown - kFloor);
-            const double goal  = std::max (0.0, target - kFloor);
-            const double ratio = std::clamp (goal / start, 0.0, 1.0);
-            const double step  = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
-            const double next  = shown + (shown - kFloor) * -step;
-            m_specShown[i] = float (std::max (next, target));
+            m_specFall[i].advance (targetN * kSpecSpanDb, dt, kSpecDbPerSec, 0.020);
+            m_specShown[i] = float (m_specFall[i].shown / kSpecSpanDb);
         }
         spec[i] = m_specShown[i];
     }
@@ -1987,8 +1987,9 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
         // ---- ballistics, per band --------------------------------------
         // The bar used to read the RAW bins (`specRaw` was passed in), so it had
         // no smoothing at all: every new FFT moved it straight to a new shape.
-        // It gets the same rate-derived release as the spectrum fill, in dB
-        // terms, so "how far it reaches from the lit edge" moves over frames.
+        // It gets the shared ovb::Fall now — the same curve as the spectrum fill,
+        // the pod's bars and the accent light — in dB, so "how far it reaches
+        // from the lit edge" moves over frames.
         {
             using clk = std::chrono::steady_clock;
             const auto now = clk::now();
@@ -1998,23 +1999,12 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
                                  0.0005, 0.20);
             m_glowShownAt = now;
 
-            constexpr double kDecaySec = 0.35;
-            const double rate    = (dt > 1e-6) ? 1.0 / dt : double (OvTiming::kPlotHz);
-            const double nFrames = std::max (1.0, rate * kDecaySec);
+            constexpr double kSpanDb    = 85.0;      // the table is 0..1 over 85 dB
+            constexpr double kDbPerSec  = 85.0 / 0.35;
 
-            const double shown = m_glowShown[b];
-            if (l >= shown)
-            {
-                m_glowShown[b] = l;                       // instant attack
-            }
-            else
-            {
-                m_glowFalling = true;
-                const double start = std::max (1e-6, shown);
-                const double ratio = std::clamp (l / start, 0.0, 1.0);
-                const double step  = std::clamp (1.0 - std::pow (ratio, 1.0 / nFrames), 0.0, 1.0);
-                m_glowShown[b] = std::max (l, shown - shown * step);
-            }
+            m_glowFall[b].advance (l * kSpanDb, dt, kDbPerSec, 0.030);
+            m_glowShown[b] = m_glowFall[b].shown / kSpanDb;
+            if (m_glowShown[b] > l + 1e-6) m_glowFalling = true;
             l = m_glowShown[b];
         }
 
@@ -2189,44 +2179,28 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
         {
             const double fx = (x + 0.5) / double (cols);
 
-            // ---- monotone cubic (PCHIP) between band centres ----------
-            // smootherstep was here and it was the wrong curve for this job.
-            // It forces the slope to ZERO at every control point, so 32 bands
-            // with any difference between neighbours become a row of separate
-            // bumps joined by flat-topped steps — beads on a string.  Blurring
-            // that softens the edges but keeps the beads, which is exactly the
-            // "the shape is too sharp" report.
+            // ---- Catmull-Rom between band centres --------------------
+            // smootherstep was here first and it was the wrong curve: it forces
+            // the slope to ZERO at every control point, so 32 bands with any
+            // difference between neighbours became a row of separate bumps
+            // joined by flat-topped steps — beads on a string.  Blurring
+            // softened the edges and kept the beads, which is the "the shape is
+            // too sharp" report.
             //
-            // A monotone cubic keeps the slope continuous across each control
-            // point and is guaranteed not to overshoot, so the curve runs
-            // THROUGH the band values instead of flattening at each of them.
-            // This is the standard PCHIP construction (Fritsch-Carlson).
+            // Catmull-Rom runs THROUGH the control points with the central
+            // differences as tangents, so a ramp stays a ramp; the limited form
+            // (ui/qt/OvBallistics.h) clamps those tangents so a segment can
+            // never leave the interval between its two endpoints.  That matters
+            // on a meter: plain Catmull-Rom overshoots, and an overshoot here
+            // draws brightness the spectrum does not contain.
             const double bt = fx * (kBands - 1);
             const int    bi = std::min (kBands - 2, int (bt));
             const double bf = bt - double (bi);
 
-            // Slopes at the two ends of this interval, from the three-point
-            // differences, then limited so no overshoot can occur.
-            auto slope = [&rel] (int i) -> double
-            {
-                const int n = kBands;
-                if (i <= 0)     return rel[1] - rel[0];
-                if (i >= n - 1) return rel[n - 1] - rel[n - 2];
-                const double d0 = rel[i] - rel[i - 1];
-                const double d1 = rel[i + 1] - rel[i];
-                if (d0 * d1 <= 0.0) return 0.0;             // a local extremum
-                return 0.5 * (d0 + d1);                     // central difference
-            };
-
-            const double m0 = slope (bi);
-            const double m1 = slope (bi + 1);
-            const double h00 = (2.0 * bf + 1.0) * (1.0 - bf) * (1.0 - bf);
-            const double h10 = bf * (1.0 - bf) * (1.0 - bf);
-            const double h01 = bf * bf * (3.0 - 2.0 * bf);
-            const double h11 = bf * bf * (bf - 1.0);
-            const double rl = std::clamp (h00 * rel[bi] + h10 * m0
-                                        + h01 * rel[bi + 1] + h11 * m1,
-                                          0.0, 1.0);
+            const double rl = ovb::catmullRomLimited (rel[std::max (0, bi - 1)],
+                                                      rel[bi], rel[bi + 1],
+                                                      rel[std::min (kBands - 1, bi + 2)],
+                                                      bf);
 
             // Per-band brightness: a loud band is near full, a quiet one a
             // third of that.  A floor is kept so the blob still reads as one

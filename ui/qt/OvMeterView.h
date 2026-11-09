@@ -12,6 +12,7 @@
 #include <QImage>
 
 #include "OvSource.h"   // OvMeters, the latched target
+#include "OvBallistics.h"   // ovb::Fall — the shared ballistics
 #include <QSize>
 #include <QVector>
 #include <QPainterPath>
@@ -83,9 +84,16 @@ private:
         double level = 0.0;
         double peak = 0.0;
         double holdUntil = 0.0;   // seconds
+
+        /// The ballistic state behind `level` and behind `peak`, in dB.
+        /// Both go through the same ovb::Fall as the ring, the light and the
+        /// analyser, so the four meters on this UI cannot drift apart again.
+        ovb::Fall levelFall;
+        ovb::Fall peakFall;
     };
 
     Channel m_outL, m_outR, m_inL, m_inR;
+    ovb::Fall m_harmFall;
     double  m_harmFrac = 0.0;
     double  m_clock = 0.0;
     std::chrono::steady_clock::time_point m_last {};

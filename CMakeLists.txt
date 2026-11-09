@@ -421,6 +421,12 @@ if(OVERTEON_QT_UI)
     target_include_directories(onyx-blur-test PRIVATE ui/qt)
     target_link_libraries(onyx-blur-test PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
     set_target_properties(onyx-blur-test PROPERTIES AUTOMOC ON)
+
+    # headless proof of the meter interpolation: smootherstep's C2 ends,
+    # Catmull-Rom not overshooting, and a fall that takes the same time at
+    # 15 Hz as at 120 Hz.  No Qt, no audio, no window -- it is arithmetic.
+    add_executable(onyx-ballistics-test tools/units/ballistics_test.cpp)
+    target_include_directories(onyx-ballistics-test PRIVATE ui/qt)
 endif()
 
 # Platform switch used by the sources: Windows vs. everything unix-like

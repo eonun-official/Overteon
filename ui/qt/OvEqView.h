@@ -26,6 +26,8 @@
 #include <chrono>
 #include <QPainterPath>
 
+#include "OvBallistics.h"   // ovb::Fall / ovb::catmullRomLimited
+
 class OvEngine;
 
 //  GPU-backed.
@@ -433,11 +435,16 @@ private:
     /// what every hardware analyser does; the data is unchanged, only its
     /// presentation.
     float  m_specShown[128] = {};
+    /// The ballistic state behind m_specShown, in dB (ui/qt/OvBallistics.h).
+    /// Keeping the state, not just the value, is what lets the release ease in
+    /// with smootherstep instead of starting at full speed.
+    ovb::Fall m_specFall[128];
     std::chrono::steady_clock::time_point m_specAdvanceAt {};   // per view
     std::chrono::steady_clock::time_point m_specShownAt {};
 
-    /// The glow bar's own ballistics: 32 band levels, rate-derived release.
+    /// The glow bar's own ballistics: 32 band levels, through the same ovb::Fall.
     double m_glowShown[32] = {};
+    ovb::Fall m_glowFall[32];
     /// True while a band is still falling towards its target; keeps the bar
     /// drawn until the release finishes instead of freezing mid-fall.
     bool   m_glowFalling = false;

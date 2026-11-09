@@ -18,8 +18,13 @@ Item {
     // .controlpit::before opacity, transition: opacity .1s linear, and the
     // CSS formula level*level*0.36
     property real glowAmount: meterLight * meterLight * 0.36   // var(--light) * .36
-    // CSS: .controlpit::before { transition: opacity .1s linear }
-    Behavior on glowAmount { NumberAnimation { duration: 100; easing.type: Easing.Linear } }
+    //
+    // NO Behavior here any more.  The CSS 0.1 s LINEAR transition was a third
+    // interpolation on top of the meter's own: meterLight already arrives
+    // through ovb::Fall (60 dB in 0.12 s, smootherstep-eased, 60 Hz), so a
+    // linear ramp here only re-shaped a curve that had been shaped once
+    // already — and linear is exactly the curve this change removes.  The
+    // squaring stays: it is the page's, and it is a mapping, not a motion.
 
     readonly property bool inactive: prefix === "sc" ? driveMode === 0 : driveMode === 2
 
