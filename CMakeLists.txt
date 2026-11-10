@@ -203,7 +203,34 @@ if(OVERTEON_QT_UI)
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
         ui/qt/OvQmlEditor.cpp
-        ui/qt/OvQtComponent.cpp)
+        ui/qt/OvQtComponent.cpp
+
+        # Fills in the glib symbols a host's bundled-but-outdated glib lacks.
+        # Qt6Qml NEEDs Qt6Network, which NEEDs libproxy -> libpxbackend, and
+        # libpxbackend is built against glib >= 2.80.  Ardour's official binary
+        # ships its own older glib first on LD_LIBRARY_PATH, so loading this
+        # plug-in failed with "libpxbackend-1.0.so: undefined symbol:
+        # g_strv_builder_unref" before any of our code ran.  See the file.
+        ui/qt/OvGlibShim.cpp)
+
+    # Those symbols are the WHOLE POINT of that file, so they have to survive
+    # to the dynamic symbol table.  Two things would otherwise remove them:
+    #
+    #   * the target is built with -fvisibility=hidden, so they have to be
+    #     compiled with default visibility (the attribute in the source is not
+    #     enough on its own for every toolchain);
+    #   * the plug-in links with -flto, and link-time optimisation internalises a
+    #     global that nothing in the program references -- which is exactly the
+    #     case here, since the reference lives in libpxbackend.  Without
+    #     -fno-lto the object is optimised away and the .so exports nothing.
+    #     Verified: nm on the .so reported 0 of them until LTO was off.
+    set_source_files_properties(ui/qt/OvGlibShim.cpp PROPERTIES
+        COMPILE_OPTIONS "-fvisibility=default;-fno-lto"
+        COMPILE_FLAGS   "-fvisibility=default -fno-lto")
+
+    # (The link-side half of this -- forcing OvGlibShim.o out of the shared
+    # archive -- is per-format and lives in the PLUGIN_FORMATS loop below,
+    # because options set on HarmonicInjector do not reach the .so.)
 
     target_include_directories(HarmonicInjector PRIVATE ui/qt src)
 
@@ -326,6 +353,31 @@ if(OVERTEON_QT_UI)
             # the same 8 MB the editor already uses -- and closing the window
             # then exits with status 0, measured over repeated runs.
             target_link_options(HarmonicInjector_${_fmt} PRIVATE "LINKER:-z,nodelete")
+
+            # Pull OvGlibShim.o out of the shared archive.
+            #
+            # Everything under the HarmonicInjector target lands in
+            # libOnyxTEON_SharedCode.a, and a static library only hands over a
+            # member for a symbol somebody references.  Nothing in our own code
+            # calls these -- the reference lives in libpxbackend, in the host's
+            # process -- so without an explicit request the linker never pulls
+            # the object in and the .so exports none of them.  `-u` marks each
+            # name undefined, which IS that request.  Measured: 0 exported
+            # before this, 14 after.
+            #
+            # It has to be attached to the per-format target, not to
+            # HarmonicInjector: that one is the shared-code archive, and options
+            # set there do not reach the .so that actually gets dlopen()ed.
+            foreach(_shim_sym
+                    g_once_init_enter_pointer g_once_init_leave_pointer
+                    g_string_replace g_memdup2
+                    g_strv_builder_new g_strv_builder_add g_strv_builder_end
+                    g_strv_builder_unref
+                    g_uri_parse g_uri_to_string g_uri_ref g_uri_unref
+                    g_uri_get_scheme g_uri_get_host g_uri_get_port)
+                target_link_options(HarmonicInjector_${_fmt} PRIVATE
+                    "LINKER:-u,${_shim_sym}")
+            endforeach()
         endif()
     endforeach()
 

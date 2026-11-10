@@ -14,6 +14,13 @@
 //  QWindow::fromWinId, and the only JUCE calls are the Component API.  There is
 //  no X11, no HWND and no NSView code anywhere in here.
 //
+//  A host may rescale a plug-in editor after it is mapped (jalv -S, Ardour's UI
+//  scale).  JUCE reports the resulting factor through the peer, and
+//  getAreaCoveredBy() already applies it, but nothing notifies this component
+//  when the change comes from the host side -- so a small timer polls the two
+//  numbers JUCE does report and resyncs when one changes.  No window-system
+//  call is involved, so the same code runs on all three platforms.
+//
 //  Why not XReparentWindow / SetParent / addSubview by hand: those are three
 //  different implementations of one idea, and every one of them hands ownership
 //  of our window to the OS in a way the host's teardown does not expect.  The
