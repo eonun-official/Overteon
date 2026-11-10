@@ -149,11 +149,14 @@ Item {
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: parent.left
-                        anchors.leftMargin: 10
+                        anchors.leftMargin: 13
                         text: itemRow.modelData
                         color: hov.containsMouse ? OvTheme.ink : OvTheme.dim
                         font.family: OvTheme.uiFont
-                        font.pixelSize: 10
+                        // 9.5 CSS px is not representable as a pixelSize
+                        // (int); pt() carries the fraction.
+                        font.pointSize: OvTheme.pt (9.5)
+                        font.letterSpacing: 1
                     }
                     MouseArea {
                         id: hov

@@ -262,7 +262,11 @@ Item {
                 }
 
                 OvDropdown {
-                    x: 659
+                    // The grid puts this group's left edge at 645: the second
+                    // separator ends at 637 and the column gap is 6.  659 left
+                    // a 22 px gap where the design has 8, and the label's ink
+                    // measured 660 here against 645 in the web.
+                    x: 645
                     anchors.verticalCenter: parent.verticalCenter
                     param: root.engine ? root.engine.param ("limiterOs") : null
                     label: "LIM OS"
@@ -337,7 +341,11 @@ Item {
 
             OvRangeBadge {
                 anchors.right: parent.right
-                anchors.rightMargin: 11
+                // .eqhdr has padding: 0 16px and the badge is its last flex
+                // child, so its right edge sits 16 px in, not 11.  Measured
+                // against the web render with Inter present: badge ink ended
+                // at 1015 web / 1021 here — a 6 px error.
+                anchors.rightMargin: 16
                 anchors.verticalCenter: parent.verticalCenter
                 param: root.engine ? root.engine.param (root.prefix + "Range") : null
                 options: root.prefix === "sc"

@@ -122,13 +122,14 @@ Item {
                         visible: rowItem.modelData.kind === "preset"
                                  || rowItem.modelData.kind === "action"
                         anchors.left: parent.left
-                        anchors.leftMargin: 10
+                        anchors.leftMargin: 12
                         anchors.verticalCenter: parent.verticalCenter
                         text: rowItem.modelData.text
                         color: rowMa.containsMouse ? OvTheme.ink : OvTheme.dim
                         Behavior on color { ColorAnimation { duration: 120 } }
                         font.family: OvTheme.uiFont
-                        font.pixelSize: 10
+                        font.pointSize: OvTheme.pt (9.5)
+                        font.letterSpacing: 1
                     }
 
                     MouseArea {

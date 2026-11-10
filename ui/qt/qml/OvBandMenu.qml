@@ -59,13 +59,14 @@ Item {
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
-                    anchors.leftMargin: 10
+                    anchors.leftMargin: 12
                     text: row.modelData
                     color: (hov.containsMouse || root.currentType === row.modelData)
                            ? OvTheme.ink : OvTheme.dim
                     Behavior on color { ColorAnimation { duration: 120 } }
                     font.family: OvTheme.uiFont
-                    font.pixelSize: 10
+                    font.pixelSize: 9
+                    font.letterSpacing: 0.5
                 }
                 MouseArea {
                     id: hov
@@ -99,11 +100,12 @@ Item {
         Text {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
-            anchors.leftMargin: 10
+            anchors.leftMargin: 12
             text: "✕ Remove"
             color: root.accent
             font.family: OvTheme.uiFont
-            font.pixelSize: 10
+            font.pixelSize: 9
+            font.letterSpacing: 0.5
         }
         MouseArea {
             id: rm

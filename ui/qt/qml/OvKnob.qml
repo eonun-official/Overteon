@@ -118,7 +118,9 @@ Item {
     // on the same rows as the page (label ink 731, value ink 750 at deck top).
     Text {
         id: lab
-        y: 51
+        // .knob gap is 4 px under a 46 px ring; with Inter the web puts the
+        // label's ink on row 733 and this was on 730.
+        y: 54
         anchors.horizontalCenter: parent.horizontalCenter
         width: root.width
         text: root.label
