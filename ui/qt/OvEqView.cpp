@@ -2826,7 +2826,7 @@ void OvEqView::hoverMoveEvent (QHoverEvent* e)
     // from the node it is bound to dismisses it.  Hover events are the
     // no-button path — the same branch the page tests with `if (drag) … else
     // { … if (editBd) { distance > 30 → closeEdit() } }`.
-    if (m_editBand >= 0 && m_editBand < 5)
+    if (m_editBand >= 0 && m_editBand < 5 && ! m_editScrub)
     {
         const double dx = e->position().x() - m_bands[m_editBand].x;
         const double dy = e->position().y() - m_bands[m_editBand].y;

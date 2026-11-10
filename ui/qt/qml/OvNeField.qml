@@ -30,13 +30,20 @@ Item {
     /// The editor this belongs to (provides paramOf / typeIndex / refresh).
     property var host: null
 
-    readonly property alias text: input.text
+    /// Two-way: the host writes the value in, and the field writes back what
+    /// was typed.  NOT `readonly` — a read-only alias refuses the assignment
+    /// and every refresh raises
+    ///     TypeError: Cannot assign to read-only property "text"
+    /// which is exactly what left the three fields empty.
+    property alias text: input.text
     /// Item.activeFocus is FINAL too, so expose it under our own name.
     readonly property bool fieldFocus: input.activeFocus
     /// Item.enabled is FINAL in QtQuick, so this one carries its own name.
     property bool fieldEnabled: true
 
     width: parent ? parent.width : 64
+    /// One row.  Kept equal to the editor's fieldH so the box's computed
+    /// height and the rows it contains cannot drift apart.
     height: 15
 
     function param () {
@@ -67,58 +74,71 @@ Item {
         // TextInput consumes Return itself, so Keys.onReturnPressed never
         // fires; onAccepted is the signal it emits instead.  editingFinished
         // covers the blur path, which is the page's `change` event.
-        onAccepted: { if (root.host) root.host.applyField (root.key, text) }
-        onEditingFinished: { if (root.host) root.host.applyField (root.key, text) }
-        Keys.onEscapePressed: { if (root.host) root.host.close () }
+        onAccepted: { if (host) host.applyField (root.key, text) }
+        onEditingFinished: { if (host) host.applyField (root.key, text) }
+        Keys.onEscapePressed: { if (host) host.close () }
 
-        // Pro-Q style scrub.  The MouseArea sits on top so the drag wins over
-        // text selection, but a press WITHOUT movement still focuses the field
-        // so the user can type — which is exactly what the page gets from
-        // having pointerdown focus the input and only `preventDefault()` once
-        // the pointer has actually moved 3 px.
-        MouseArea {
-            id: scrub
-            anchors.fill: parent
-            anchors.margins: -2
-            cursorShape: Qt.SizeVerCursor
+    }
 
-            property real startY: 0
-            property real startNorm: 0
-            property bool moved: false
+    // Pro-Q style scrub.  This sits ABOVE the TextInput and is a sibling of it,
+    // not a child: as a child of TextInput it never received a press at all
+    // (measured — the click fell through to the plot underneath), because the
+    // input's own handlers took the event first.
+    //
+    // A press without movement still focuses the field so the user can type,
+    // which is what the page gets from pointerdown focusing the input and only
+    // calling preventDefault() once the pointer has really moved 3 px.
+    MouseArea {
+        id: scrub
+        z: 10
+        x: input.x - 2
+        y: -2
+        width: input.width + 4
+        height: root.height + 4
+        cursorShape: Qt.SizeVerCursor
 
-            onPressed: (m) => {
-                startY = m.y
-                moved = false
+        property real startY: 0
+        property real startNorm: 0
+        property bool moved: false
+
+        onPressed: (m) => {
+            startY = m.y
+            moved = false
+            const p = root.param ()
+            startNorm = p ? p.norm : 0
+            if (host) host.beginScrub ()
+        }
+
+        onCanceled: {
+            if (host) host.endScrub ()
+        }
+
+        onPositionChanged: (m) => {
+            if (! pressed) return
+            const dy = startY - m.y
+            if (! moved && Math.abs (dy) < 3) return
+            const p = root.param ()
+            if (! p) return
+            if (! moved) {
+                moved = true
+                p.beginGesture ()
+                input.focus = false          // stop editing, start scrubbing
+            }
+            const k = (m.modifiers & Qt.ShiftModifier) ? 0.0012 : 0.005
+            p.setNorm (Math.max (0, Math.min (1, startNorm + dy * k)))
+            if (host) host.refresh (false)
+        }
+
+        onReleased: {
+            if (moved) {
                 const p = root.param ()
-                startNorm = p ? p.norm : 0
+                if (p) p.endGesture ()
+            } else {
+                input.forceActiveFocus ()    // a click, not a drag: type
+                input.selectAll ()
             }
-
-            onPositionChanged: (m) => {
-                if (! pressed) return
-                const dy = startY - m.y
-                if (! moved && Math.abs (dy) < 3) return
-                const p = root.param ()
-                if (! p) return
-                if (! moved) {
-                    moved = true
-                    p.beginGesture ()
-                    input.focus = false          // stop editing, start scrubbing
-                }
-                const k = (m.modifiers & Qt.ShiftModifier) ? 0.0012 : 0.005
-                p.setNorm (Math.max (0, Math.min (1, startNorm + dy * k)))
-                if (root.host) root.host.refresh (false)
-            }
-
-            onReleased: {
-                if (moved) {
-                    const p = root.param ()
-                    if (p) p.endGesture ()
-                } else {
-                    input.forceActiveFocus ()    // a click, not a drag: type
-                    input.selectAll ()
-                }
-                moved = false
-            }
+            moved = false
+            if (host) host.endScrub ()
         }
     }
 

@@ -216,6 +216,15 @@ public:
     /// apply them.
     Q_INVOKABLE void setEditingBand (int band) { m_editBand = band; }
 
+    /// True while a field of that editor is being scrubbed.
+    ///
+    /// Scrubbing freq or gain moves the NODE, and the editor follows it — so
+    /// the pointer, which stays where the user's hand is, ends up outside a box
+    /// that has walked away, and the 30 px rule would close the editor mid
+    /// gesture.  The page has the same shape of problem and answers it by
+    /// testing `if (drag)` first; this is the same idea for the numeric fields.
+    Q_INVOKABLE void setEditingScrub (bool on) { m_editScrub = on; }
+
     /// The last rendered plot image; OvSeamFrost blurs it together with the
     /// other half's.  Null until the view has painted once.
     QImage contentImage() const { return m_content; }
@@ -406,6 +415,7 @@ private:
     /// Band the page's numeric editor is bound to (-1 = closed).  See
     /// setEditingBand(): the plot owns the dismissal gestures.
     int    m_editBand = -1;
+    bool   m_editScrub = false;
 
     bool m_spectrumGate = false;
     std::chrono::steady_clock::time_point m_glowPainted {};

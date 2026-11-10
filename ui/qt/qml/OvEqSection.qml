@@ -431,7 +431,24 @@ Item {
         visible: false
         z: 50
         width: 80
-        height: neColumn.implicitHeight + 13
+
+        // The height is COMPUTED, not derived from the contents' implicit
+        // height.  `neColumn.implicitHeight` is not ready during the first
+        // layout pass, so place() read 0 and treated the box as 18 px tall:
+        // it never flipped below the node, and the third field was laid out
+        // outside the box and clipped away.  These are the page's own numbers:
+        //   padding 6 top / 7 bottom, head 13, head margin 3,
+        //   three 15 px rows with 2 px gaps
+        readonly property int padTop:    6
+        readonly property int padBottom: 7
+        readonly property int headH:     13
+        readonly property int headGap:   3
+        readonly property int fieldH:    15
+        readonly property int fieldGap:  2
+
+        height: padTop + headH + headGap
+              + fieldH * 3 + fieldGap * 2
+              + padBottom
 
         property int  band: -1
         property bool below: false
@@ -440,6 +457,22 @@ Item {
         /// later is what closes the editor — and merely appearing under a
         /// pointer that is nowhere near it does not.
         property bool wasHovered: false
+
+        /// True while a field is being scrubbed.  Scrubbing freq or gain moves
+        /// the node, the box follows it, and the pointer stays where the hand
+        /// is — so without this the 30 px rule (and the pointer-leave rule)
+        /// would close the editor in the middle of the gesture.
+        property bool scrubbing: false
+
+        function beginScrub () {
+            scrubbing = true
+            if (root.view) root.view.setEditingScrub (true)
+        }
+
+        function endScrub () {
+            scrubbing = false
+            if (root.view) root.view.setEditingScrub (false)
+        }
 
         readonly property var typeNames: [ "BELL", "NOTCH", "LOW SHELF", "HIGH SHELF",
                                            "LOW CUT 12", "LOW CUT 24",
@@ -493,14 +526,6 @@ Item {
             if (force || ! fieldF.fieldFocus) fieldF.text = pf ? String (Math.round (pf.value)) : ""
             if (force || ! fieldG.fieldFocus) fieldG.text = pg ? (pg.value * mult).toFixed (1) : ""
             if (force || ! fieldQ.fieldFocus) fieldQ.text = pq ? pq.value.toFixed (2) : ""
-
-            if (typeof ovNeDebug !== "undefined" && ovNeDebug)
-                console.log ("[ne] band", band, "type", t,
-                             "freq", fieldF.text, "gain", fieldG.text, "q", fieldQ.text,
-                             "geom", nodeEdit.x, nodeEdit.y, nodeEdit.width, nodeEdit.height,
-                             "fields", fieldF.x, fieldF.width, fieldF.height,
-                             fieldG.x, fieldG.y, fieldG.width,
-                             fieldQ.x, fieldQ.y)
         }
 
         /// Centre over the node, flip below when there is no room, clamp into
@@ -598,7 +623,8 @@ Item {
             onClicked: (m) => { m.accepted = true }
             // pointerleave closes it, as the page's listener does
             onContainsMouseChanged: {
-                if (! containsMouse && nodeEdit.visible && nodeEdit.wasHovered)
+                if (! containsMouse && nodeEdit.visible && nodeEdit.wasHovered
+                        && ! nodeEdit.scrubbing)
                     nodeEdit.close ()
                 if (containsMouse) nodeEdit.wasHovered = true
             }
@@ -607,14 +633,14 @@ Item {
         Column {
             id: neColumn
             x: 8
-            y: 6
+            y: nodeEdit.padTop
             width: parent.width - 16
             spacing: 0
 
             // .nehead { gap:5px; margin-bottom:3px }
             Item {
                 width: parent.width
-                height: 13
+                height: nodeEdit.headH
 
                 Text {
                     id: neTitle
@@ -644,12 +670,12 @@ Item {
                 }
             }
 
-            Item { width: 1; height: 3 }          // .nehead margin-bottom
+            Item { width: 1; height: nodeEdit.headGap }   // .nehead margin-bottom
 
             // .nerow { flex-direction:column; gap:2px }
             Column {
                 width: parent.width
-                spacing: 2
+                spacing: nodeEdit.fieldGap
 
                 OvNeField { id: fieldF; key: "f"; unit: "Hz"; host: nodeEdit }
                 OvNeField { id: fieldG; key: "g"; unit: "dB"; host: nodeEdit }
