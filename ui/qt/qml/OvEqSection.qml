@@ -79,6 +79,23 @@ Item {
         }
 
         function onHoverEnded () { tip.visible = false; tipTimer.stop() }
+
+        // ---- node numeric editor (double-click a node) -------------------
+        //
+        // The widget is nodeEdit, below.  These three handlers are the same
+        // contract the page has with its own canvas: a double-click on a node
+        // opens it, a double-click on empty canvas that needs a new node says
+        // so when the pool is full, and a plot gesture can take it away.
+        function onNodeEditRequested (band) { nodeEdit.open (band) }
+        function onNodeEditClosed () { nodeEdit.close () }
+
+        function onPoolExhausted () {
+            tipText.text = "ALL 5 NODES IN USE — REMOVE ONE FIRST"
+            tip.x = Math.max (4, root.width / 2 - tip.width / 2)
+            tip.y = 8
+            tip.visible = true
+            tipTimer.restart()          // 1400 ms, as flashFull() does
+        }
     }
 
     // ------------------------------------------------------ header bar area
@@ -390,6 +407,288 @@ Item {
                 pGain.setValue (idx === 0 ? 4.0 : 3.0)
 
             OvMenu.close()
+        }
+    }
+    // ======================================================================
+    //  Node numeric editor — 1:1 with .nodeedit in web_fx/index.html
+    //
+    //  Double-click a node and three bare values appear above it, each with
+    //  its unit appended.  The editor is bound to the BAND, not to a screen
+    //  position: it follows its node wherever the node goes and stays open
+    //  until dismissed — ✕, Esc, a press on empty canvas, or walking more than
+    //  30 px away.  The last two arrive as nodeEditClosed from the plot.
+    //
+    //  Geometry, colours and type sizes are the page's:
+    //      width 80   padding 6 8 7   radius 4
+    //      background rgba(22,25,31,.96)   border rgba(58,66,80,.65)
+    //      head 8 px / 700 / letter-spacing 1.2      ✕ 9 px
+    //      fields 11.5 px, right aligned, tabular figures, 46 px
+    //      units 8 px faint in a 13 px column:  Hz / dB / (none)
+    //      order: freq, gain, Q — gain greyed on cuts/notches, Q on shelves
+    // ======================================================================
+    Item {
+        id: nodeEdit
+        visible: false
+        z: 50
+        width: 80
+        height: neColumn.implicitHeight + 13
+
+        property int  band: -1
+        property bool below: false
+        property real arrowX: width / 2
+        /// True once the pointer has been inside the box, so that leaving it
+        /// later is what closes the editor — and merely appearing under a
+        /// pointer that is nowhere near it does not.
+        property bool wasHovered: false
+
+        readonly property var typeNames: [ "BELL", "NOTCH", "LOW SHELF", "HIGH SHELF",
+                                           "LOW CUT 12", "LOW CUT 24",
+                                           "HIGH CUT 12", "HIGH CUT 24" ]
+
+        function paramOf (suffix) {
+            if (! root.engine || band < 0) return null
+            return root.engine.param (root.prefix + (band + 1) + suffix)
+        }
+
+        function typeIndex () {
+            const p = paramOf ("Type")
+            return p ? Math.round (p.norm * 7) : 0
+        }
+
+        function open (b) {
+            if (b < 0 || b > 4) return
+            band = b
+            wasHovered = false
+            visible = true
+            if (root.view) root.view.setEditingBand (b)
+            refresh (true)
+            place ()
+        }
+
+        function close () {
+            if (! visible) return
+            visible = false
+            band = -1
+            if (root.view) root.view.setEditingBand (-1)
+        }
+
+        /// Fill the fields from the parameters.  `force` also overwrites the
+        /// field that has focus, so typing is never clobbered mid-entry —
+        /// updateEdit()'s `if (fill || document.activeElement !== iF)`.
+        function refresh (force) {
+            if (band < 0) return
+            const t = typeIndex ()
+            const pf = paramOf ("Freq"), pg = paramOf ("Gain"), pq = paramOf ("Q")
+            const mult = root.view ? root.view.gainDisplayMult () : 1.0
+
+            neTitle.text = "#" + (band + 1) + " " + (typeNames[t] || "?")
+
+            const gainOk = root.view ? root.view.typeHasGain (t) : true
+            const qOk    = root.view ? root.view.typeHasQ (t) : true
+
+            fieldF.fieldEnabled = true
+            fieldG.fieldEnabled = gainOk
+            fieldQ.fieldEnabled = qOk
+
+            if (force || ! fieldF.fieldFocus) fieldF.text = pf ? String (Math.round (pf.value)) : ""
+            if (force || ! fieldG.fieldFocus) fieldG.text = pg ? (pg.value * mult).toFixed (1) : ""
+            if (force || ! fieldQ.fieldFocus) fieldQ.text = pq ? pq.value.toFixed (2) : ""
+
+            if (typeof ovNeDebug !== "undefined" && ovNeDebug)
+                console.log ("[ne] band", band, "type", t,
+                             "freq", fieldF.text, "gain", fieldG.text, "q", fieldQ.text,
+                             "geom", nodeEdit.x, nodeEdit.y, nodeEdit.width, nodeEdit.height,
+                             "fields", fieldF.x, fieldF.width, fieldF.height,
+                             fieldG.x, fieldG.y, fieldG.width,
+                             fieldQ.x, fieldQ.y)
+        }
+
+        /// Centre over the node, flip below when there is no room, clamp into
+        /// the plot, and slide the pointer along the box's edge so it always
+        /// aims at the node.  updateEdit() in the page.
+        function place () {
+            if (band < 0 || ! root.view) return
+            const p = root.view.nodePosition (band)
+            const ew = width, eh = height
+
+            let px = p.x
+            let py = p.y
+            let x = px - ew * 0.5
+            x = Math.max (4, Math.min (x, root.width - ew - 4))
+
+            let y = py - eh - 14
+            below = false
+            if (y < 4) { y = py + 16; below = true }
+            y = Math.max (4, Math.min (y, root.height - eh - 4))
+
+            nodeEdit.x = x
+            nodeEdit.y = y
+            arrowX = Math.max (11, Math.min (ew - 11, px - x))
+        }
+
+        // The node moves while it is dragged, and whenever the range or the
+        // curve changes.  30 Hz is enough for a box that only has to keep up
+        // with a finger.
+        Timer {
+            running: nodeEdit.visible
+            interval: 33
+            repeat: true
+            onTriggered: nodeEdit.place ()
+        }
+
+        // ---- the box -----------------------------------------------------
+        // box-shadow: 0 8px 22px rgba(0,0,0,.5) — approximated with stacked
+        // translucent rounded rects.  A real blur here would need the box
+        // rendered to a texture and read back, and on this background the
+        // difference is invisible next to the cost.
+        Repeater {
+            model: 4
+            Rectangle {
+                x: -2 - index
+                y: 6 - 2 - index
+                width: nodeEdit.width + 4 + index * 2
+                height: nodeEdit.height + 4 + index * 2
+                radius: 4 + index
+                color: Qt.rgba (0, 0, 0, 0.13)
+            }
+        }
+
+        Rectangle {
+            id: neBody
+            anchors.fill: parent
+            radius: 4
+            color: Qt.rgba (22 / 255, 25 / 255, 31 / 255, 0.96)
+            border.width: 1
+            border.color: Qt.rgba (58 / 255, 66 / 255, 80 / 255, 0.65)
+        }
+
+        // ::before — the 8x8 diamond, rotated 45°, that ties the box to its
+        // node.  Only the two edges facing away from the box are drawn, which
+        // is what border-right + border-bottom do on the page.
+        Item {
+            width: 8; height: 8
+            x: nodeEdit.arrowX - 4
+            y: nodeEdit.below ? -4 : nodeEdit.height - 5
+            rotation: 45
+            Rectangle {
+                width: 8; height: 8; radius: 0
+                color: Qt.rgba (22 / 255, 25 / 255, 31 / 255, 0.96)
+                border.width: 1
+                border.color: Qt.rgba (58 / 255, 66 / 255, 80 / 255, 0.65)
+                z: -1
+            }
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: 1
+                color: Qt.rgba (22 / 255, 25 / 255, 31 / 255, 0.96)
+            }
+        }
+
+        // The page stops every pointer event on the editor from reaching the
+        // canvas:  ed.addEventListener("pointerdown", ev => ev.stopPropagation())
+        // Without it a press on the box's own background falls through to the
+        // plot, which then treats it as "click on empty canvas" and dismisses
+        // the editor the user is trying to use.  Declared before the fields so
+        // they, being later children, still get their own events first.
+        MouseArea {
+            id: neBlock
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+            onClicked: (m) => { m.accepted = true }
+            // pointerleave closes it, as the page's listener does
+            onContainsMouseChanged: {
+                if (! containsMouse && nodeEdit.visible && nodeEdit.wasHovered)
+                    nodeEdit.close ()
+                if (containsMouse) nodeEdit.wasHovered = true
+            }
+        }
+
+        Column {
+            id: neColumn
+            x: 8
+            y: 6
+            width: parent.width - 16
+            spacing: 0
+
+            // .nehead { gap:5px; margin-bottom:3px }
+            Item {
+                width: parent.width
+                height: 13
+
+                Text {
+                    id: neTitle
+                    color: root.accent
+                    opacity: 0.85
+                    font.family: OvTheme.uiFont
+                    font.pixelSize: 8
+                    font.weight: Font.Bold
+                    font.letterSpacing: 1.2
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                // .nex — transparent until the box is hovered, then faint
+                Text {
+                    text: "✕"
+                    color: neBlock.containsMouse ? OvTheme.faint : "transparent"
+                    font.family: OvTheme.uiFont
+                    font.pixelSize: 9
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    MouseArea {
+                        anchors.fill: parent
+                        anchors.margins: -3
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: nodeEdit.close ()
+                    }
+                }
+            }
+
+            Item { width: 1; height: 3 }          // .nehead margin-bottom
+
+            // .nerow { flex-direction:column; gap:2px }
+            Column {
+                width: parent.width
+                spacing: 2
+
+                OvNeField { id: fieldF; key: "f"; unit: "Hz"; host: nodeEdit }
+                OvNeField { id: fieldG; key: "g"; unit: "dB"; host: nodeEdit }
+                OvNeField { id: fieldQ; key: "q"; unit: "";   host: nodeEdit }
+            }
+        }
+
+
+        /// applyEditField() in the page: parse the text for one field, clamp,
+        /// write it, redraw.
+        function applyField (key, raw) {
+            if (band < 0 || ! root.view) return
+            const v = String (raw).trim ()
+            if (! v) { refresh (true); return }
+
+            if (key === "f") {
+                const m = v.match (/(-?[\d.]+)\s*(k)?/i)
+                if (! m) { refresh (true); return }
+                let hz = parseFloat (m[1])
+                if (m[2]) hz *= 1000
+                if (! isFinite (hz)) { refresh (true); return }
+                const p = paramOf ("Freq")
+                if (p) { p.beginGesture (); p.setValue (hz); p.endGesture () }
+
+            } else if (key === "g") {
+                if (! root.view.typeHasGain (typeIndex ())) { refresh (true); return }
+                const db = parseFloat (v)
+                if (! isFinite (db)) { refresh (true); return }
+                const mult = root.view.gainDisplayMult ()
+                const p = paramOf ("Gain")
+                if (p) { p.beginGesture (); p.setValue (db / (mult || 1.0)); p.endGesture () }
+
+            } else {
+                const q = parseFloat (v)
+                if (! isFinite (q)) { refresh (true); return }
+                const p = paramOf ("Q")
+                if (p) { p.beginGesture (); p.setValue (Math.max (0.1, Math.min (6, q))); p.endGesture () }
+            }
+            refresh (true)
         }
     }
 }

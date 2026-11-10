@@ -643,6 +643,8 @@ int main (int argc, char** argv)
     // labelled window-coordinate grid, for reading positions off a screenshot
     view.rootContext()->setContextProperty (
         "ovRuler", ovEnvFlag ("ONYXTEON_RULER"));
+    view.rootContext()->setContextProperty (
+        "ovNeDebug", ovEnvFlag ("ONYXTEON_NEDEBUG"));
 
     // ---- ONYXTEON_SOLO=<name>[,<name>...]: show only those widgets --------
     //

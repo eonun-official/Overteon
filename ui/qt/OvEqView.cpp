@@ -2607,6 +2607,18 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
     }
 
     const int hit = nodeAt (e->position());
+
+    // ---- the numeric editor's dismissal rules (web_fx bindCanvasEvents) ----
+    //
+    // Pressing empty canvas closes it; pressing a DIFFERENT node re-binds it to
+    // that node.  Pressing the node it is already on just starts a drag, and
+    // the editor follows.
+    if (m_editBand >= 0 && hit != m_editBand)
+    {
+        if (hit >= 0) emit nodeEditRequested (hit);   // hop to the node under the cursor
+        else          emit nodeEditClosed();
+    }
+
     if (hit < 0) { e->ignore(); return; }
 
     if (e->button() == Qt::RightButton)
@@ -2721,19 +2733,22 @@ void OvEqView::mouseDoubleClickEvent (QMouseEvent* e)
 {
     refreshNodePositions();
 
+    // A double-click on a node opens its numeric editor.
+    //
+    // It used to reset the band's gain here.  That is not what the reference
+    // page does — there a double-click binds the editor to the band and keeps
+    // it glued to it — and doing both would wipe the value the editor was
+    // about to display.
     const int hit = nodeAt (e->position());
     if (hit >= 0)
     {
-        // double click = flatten this band back into the pool (0 dB bell/shelf)
-        const QString base = m_prefix + QString::number (hit + 1);
-        if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr)
-            p->resetToDefault();
-        m_dirty = true;
+        emit nodeEditRequested (hit);
         e->accept();
         return;
     }
 
-    // double click on empty canvas = activate the nearest pooled node here
+    // Double-click on empty canvas creates the nearest pooled node here.
+    // Outside the plot nothing happens: the centre strip is not canvas.
     if (e->position().y() < m_plot.top() || e->position().y() > m_plot.bottom())
     { e->ignore(); return; }
 
@@ -2745,15 +2760,37 @@ void OvEqView::mouseDoubleClickEvent (QMouseEvent* e)
         const double d = std::abs (std::log (m_bands[i].freq) - std::log (fromX (e->position().x(), width())));
         if (d < bestD) { bestD = d; pooled = i; }
     }
-    if (pooled >= 0)
+
+    if (pooled < 0)
+    {
+        // All five are in use, and the page says so instead of doing nothing
+        // silently — which is what made this look broken.
+        emit poolExhausted();
+        e->accept();
+        return;
+    }
+
     {
         const QString base = m_prefix + QString::number (pooled + 1);
-        const double db = fromY (std::clamp (e->position().y(), m_plot.top(), m_plot.bottom()),
-                                 height(), m_rangeDb, m_plot.top(), m_plot.bottom());
-        if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr)
-            p->setValue (std::clamp (std::abs (db) < 0.5 ? 4.0 : db / displayMult(), -12.0, 12.0));
+
+        // Type 0 = BELL, exactly as the reference sets fT to normalised 0.
+        if (auto* p = m_engine ? m_engine->typedParam (base + "Type") : nullptr)
+            p->setNorm (0.0);
+
         if (auto* p = m_engine ? m_engine->typedParam (base + "Freq") : nullptr)
             p->setValue (fromX (e->position().x(), width()));
+
+        // Gain at the click, with the reference's "never dead flat" rule: a
+        // click within 0.5 dB of the line still makes an audible node
+        // (min(4, range*0.3)).
+        const double db = fromY (std::clamp (e->position().y(), m_plot.top(), m_plot.bottom()),
+                                 height(), m_rangeDb, m_plot.top(), m_plot.bottom());
+        const double gain = std::abs (db) < 0.5
+                              ? std::min (4.0, m_rangeDb * 0.3)
+                              : db / displayMult();
+        if (auto* p = m_engine ? m_engine->typedParam (base + "Gain") : nullptr)
+            p->setValue (std::clamp (gain, -m_rangeDb, m_rangeDb));
+
         m_dirty = true;
     }
     e->accept();
@@ -2784,6 +2821,18 @@ void OvEqView::wheelEvent (QWheelEvent* e)
 void OvEqView::hoverMoveEvent (QHoverEvent* e)
 {
     refreshNodePositions();
+
+    // web_fx: while the numeric editor is open, walking more than 30 px away
+    // from the node it is bound to dismisses it.  Hover events are the
+    // no-button path — the same branch the page tests with `if (drag) … else
+    // { … if (editBd) { distance > 30 → closeEdit() } }`.
+    if (m_editBand >= 0 && m_editBand < 5)
+    {
+        const double dx = e->position().x() - m_bands[m_editBand].x;
+        const double dy = e->position().y() - m_bands[m_editBand].y;
+        if (std::hypot (dx, dy) > 30.0)
+            emit nodeEditClosed();
+    }
 
     const int hit = nodeAt (e->position());
     m_hoverBand = hit;

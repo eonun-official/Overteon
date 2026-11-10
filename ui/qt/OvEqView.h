@@ -192,6 +192,30 @@ public:
     /// Node centres as "x,y" pairs, for the HUD.
     Q_INVOKABLE QString debugNodes() const;
 
+    /// The dB a parameter value is shown at: the parameter stores value/mult
+    /// and the screen shows value, exactly as mult() does in web_fx.  The
+    /// numeric editor needs it to display and to write back a gain in dB.
+    Q_INVOKABLE double gainDisplayMult() const { return displayMult(); }
+
+    /// True when this band's type has no gain control (cuts and notches), so
+    /// the editor greys that field out instead of writing a value nothing
+    /// reads.  typeHasGain() in web_fx.
+    Q_INVOKABLE static bool typeHasGain (int type) { return type == 0 || type == 2 || type == 3; }
+
+    /// Shelves ignore Q in this design; everything else uses it
+    /// (typeHasQ() in web_fx).
+    Q_INVOKABLE static bool typeHasQ (int type) { return type != 2 && type != 3; }
+
+    /// Which band the numeric editor is bound to, or -1 for none.
+    ///
+    /// The editor widget itself belongs to the page, but two of the three ways
+    /// it closes are plot gestures — web_fx dismisses it when empty canvas is
+    /// pressed, re-binds it when another node is pressed, and closes it when
+    /// the pointer walks more than 30 px from the node — and those arrive
+    /// here.  The page sets this when it opens the editor so the plot can
+    /// apply them.
+    Q_INVOKABLE void setEditingBand (int band) { m_editBand = band; }
+
     /// The last rendered plot image; OvSeamFrost blurs it together with the
     /// other half's.  Null until the view has painted once.
     QImage contentImage() const { return m_content; }
@@ -239,6 +263,17 @@ signals:
     void menuRequested (int band, QPointF pos, QString currentType);
     void hoverInfo (QString text, QPointF pos);
     void hoverEnded();
+
+    /// A node was double-clicked: show the numeric editor for `band` (0..4).
+    /// The page keeps it glued to the node until it is dismissed — same as
+    /// openEdit() in web_fx/index.html.
+    void nodeEditRequested (int band);
+    /// A double-click on empty canvas needed a new node and the pool was full.
+    /// The page shows "ALL 5 NODES IN USE — REMOVE ONE FIRST" for 1.4 s.
+    void poolExhausted();
+    /// A plot gesture dismissed the numeric editor (empty-canvas press, or the
+    /// pointer walking more than 30 px from the node it is bound to).
+    void nodeEditClosed();
 
 private:
 public:
@@ -367,6 +402,10 @@ private:
     bool   m_dragMovesGain = false;
     QPointF m_grabOffset;
     int    m_hoverBand = -1;
+
+    /// Band the page's numeric editor is bound to (-1 = closed).  See
+    /// setEditingBand(): the plot owns the dismissal gestures.
+    int    m_editBand = -1;
 
     bool m_spectrumGate = false;
     std::chrono::steady_clock::time_point m_glowPainted {};
