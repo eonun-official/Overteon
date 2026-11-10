@@ -707,6 +707,15 @@ Item {
             onClicked: (m) => { m.accepted = true }
             // pointerleave closes it, as the page's listener does
             onContainsMouseChanged: {
+                // Tell the plot the pointer is on the box, so its 30 px
+                // "walked away from the node" rule stands down.  The page gets
+                // this for free — its editor covers the canvas — but here the
+                // box is a sibling, so the plot keeps receiving hover events
+                // while the pointer is on it, and the fields sit 40-60 px from
+                // the node: without this, moving towards a field closed the
+                // editor.
+                if (root.view) root.view.setEditingPointerInside (containsMouse)
+
                 if (! containsMouse && nodeEdit.visible && nodeEdit.wasHovered
                         && ! nodeEdit.scrubbing)
                     nodeEdit.close ()

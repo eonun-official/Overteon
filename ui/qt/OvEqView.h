@@ -226,6 +226,18 @@ public:
     /// testing `if (drag)` first; this is the same idea for the numeric fields.
     Q_INVOKABLE void setEditingScrub (bool on) { m_editScrub = on; }
 
+    /// True while the pointer is over the numeric editor's own box.
+    ///
+    /// The page never has to say this: its editor swallows pointer events and
+    /// runs pointerleave to dismiss itself, so a pointer sitting on the box
+    /// simply never reaches the canvas's move handler.  Here the box is a QML
+    /// sibling of this item, so hover events keep arriving while the pointer is
+    /// on it — and the 30 px "walked away" radius around the node is SMALLER
+    /// than the box, so reaching for a field (40-60 px out) dismissed the
+    /// editor that was being reached for.  With this set, that rule is skipped
+    /// and the box's own pointerleave decides instead.
+    Q_INVOKABLE void setEditingPointerInside (bool on) { m_editPointerInside = on; }
+
     /// Repaint now, because a parameter was written from outside a plot gesture.
     ///
     /// A drag on the plot calls update() itself at the end of every mouse move,
@@ -435,6 +447,7 @@ private:
     /// setEditingBand(): the plot owns the dismissal gestures.
     int    m_editBand = -1;
     bool   m_editScrub = false;
+    bool   m_editPointerInside = false;
 
     bool m_spectrumGate = false;
     std::chrono::steady_clock::time_point m_glowPainted {};
@@ -443,6 +456,16 @@ private:
     QImage m_content;        // the plot, rendered off-screen
     QImage m_unfrosted;      // the plot before paintFrost() touched it
     std::chrono::steady_clock::time_point m_lastMoveTime;
+
+    // ---- wheel-on-Q grab lock -------------------------------------------
+    //  While the wheel changes a band's Q, that band keeps the wheel for 1.2 s
+    //  whatever the pointer does.  On a cut the node's DISPLAYED position comes
+    //  from the curve's value at f0, so it moves as Q changes; without the lock
+    //  the pointer has to chase a dot that is running away from it, and a
+    //  second notch lands on whichever node happens to be under the cursor now.
+    //  The page does exactly this (_wLock / _wUntil).
+    int    m_wheelLockBand = -1;
+    std::chrono::steady_clock::time_point m_wheelLockUntil {};
 
     // ---- static background cache ----------------------------------------
     //  The grid and the ~30 frequency/dB labels never move unless a parameter

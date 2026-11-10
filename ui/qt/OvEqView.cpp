@@ -48,6 +48,18 @@ namespace
     const double kLogMin = std::log (kFMin);
     const double kLogSpan = std::log (kFMax) - kLogMin;
 
+    // How far from a node's centre a press still grabs it, in design pixels.
+    //
+    // The page uses 12 (`if (d < 12)`) while the drawn dot is 6.5 px, i.e. a
+    // 5.5 px ring of slack.  This port had 11 — a 4.5 px ring — and 11 is a
+    // worse target for no reason anyone chose: the dot is the same size, so
+    // the only effect was that presses that land in the page grab a node did
+    // nothing here.  Matching the page is both the more faithful and the more
+    // forgiving choice, and it has to be ONE number: the proximity rule below
+    // reads it too, and when the two disagreed a press could be inside the
+    // grab radius while the editor still decided the pointer had "walked away".
+    constexpr double kNodeHitRadius = 12.0;
+
     const QColor kBg      ("#16181d");
     const QColor kMinor   ("#1e222a");
     const QColor kMajor   ("#2a2f39");
@@ -561,12 +573,12 @@ QString OvEqView::debugHit (const QPointF& pos) const
                 .arg (m_bands[i].y, 0, 'f', 1).arg (d, 0, 'f', 1);
     }
 
-    // nodeAt() accepts a hit within 11 px; report the verdict with that same
-    // threshold so the HUD states exactly what a press would do.
-    const QString verdict = (best >= 0 && bestD <= 11.0)
+    // nodeAt() accepts a hit within kNodeHitRadius; report the verdict with the
+    // same constant so the HUD states exactly what a press would do.
+    const QString verdict = (best >= 0 && bestD <= kNodeHitRadius)
         ? QStringLiteral ("GRAB node %1").arg (best)
-        : QStringLiteral ("no grab (nearest is %1 at %2 px; needs <= 11)")
-              .arg (best).arg (bestD, 0, 'f', 1);
+        : QStringLiteral ("no grab (nearest is %1 at %2 px; needs <= %3)")
+              .arg (best).arg (bestD, 0, 'f', 1).arg (kNodeHitRadius, 0, 'f', 0);
 
     return QStringLiteral ("%1   [%2 x %3]   cursor (%4, %5)\n%6\n  -> %7")
             .arg (m_prefix).arg (width(), 0, 'f', 0).arg (height(), 0, 'f', 0)
@@ -2571,7 +2583,7 @@ double OvEqView::plotRangeDb() const
 int OvEqView::nodeAt (const QPointF& pos) const
 {
     int best = -1;
-    double bestD = 11.0;
+    double bestD = kNodeHitRadius;
     for (int i = 0; i < 5; ++i)
     {
         const double dx = pos.x() - m_bands[i].x;
@@ -2619,7 +2631,28 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
         else          emit nodeEditClosed();
     }
 
-    if (hit < 0) { e->ignore(); return; }
+    // Accept inside the plot, ignore outside it.
+    //
+    // Outside is the 32 px header bar and the bottom ruler strip: those belong
+    // to the controls above and below the canvas, so the press must pass
+    // through.
+    //
+    // INSIDE the plot the press has to be ACCEPTED even though nothing here
+    // wants it.  `e->ignore()` looks harmless but Qt then stops delivering the
+    // rest of the gesture to this item, so the double-click that follows never
+    // arrives — and "double-click empty canvas to create a node" did nothing at
+    // all.  Verified: a double-click at 400 Hz on a panel with two idle bands
+    // produced two press logs and no node.  The page has no such rule; its
+    // pointerdown runs on empty canvas (closing the numeric editor) and the
+    // dblclick that follows still fires.
+    if (hit < 0)
+    {
+        if (e->position().y() < m_plot.top() || e->position().y() > m_plot.bottom())
+            e->ignore();
+        else
+            e->accept();
+        return;
+    }
 
     if (e->button() == Qt::RightButton)
     {
@@ -2752,12 +2785,23 @@ void OvEqView::mouseDoubleClickEvent (QMouseEvent* e)
     if (e->position().y() < m_plot.top() || e->position().y() > m_plot.bottom())
     { e->ignore(); return; }
 
+    // Nearest pooled node by ABSOLUTE FREQUENCY, the page's rule
+    // (`Math.abs(sv(b.fF) - f)`).
+    //
+    // This used a log-ratio distance, which is the "musical" metric but not the
+    // one the design uses, and the two disagree often enough to be visible: with
+    // idle nodes at 100 Hz and 1000 Hz, a double-click at 400 Hz takes the
+    // 100 Hz one in the page and the 1000 Hz one here.  Where the pointer landed
+    // was the same; which node came alive was not.  Trust the page here — a
+    // double-click on empty canvas is a "put a node about THERE" gesture, and
+    // linear closeness is what it promises.
+    const double clickHz = fromX (e->position().x(), width());
     int pooled = -1;
     double bestD = 1e9;
     for (int i = 0; i < 5; ++i)
     {
         if (m_bands[i].active) continue;
-        const double d = std::abs (std::log (m_bands[i].freq) - std::log (fromX (e->position().x(), width())));
+        const double d = std::abs (m_bands[i].freq - clickHz);
         if (d < bestD) { bestD = d; pooled = i; }
     }
 
@@ -2800,16 +2844,35 @@ void OvEqView::wheelEvent (QWheelEvent* e)
 {
     refreshNodePositions();
 
-    const int hit = (m_hoverBand >= 0) ? m_hoverBand : nodeAt (e->position());
+    // Which band owns this wheel notch.
+    //
+    // The page holds the band for 1.2 s after a notch (_wLock / _wUntil):
+    //    const bd = (this._wLock && now < this._wUntil) ? this._wLock
+    //                                                   : this.nodeAt(px, py);
+    //
+    // That is not a convenience.  On a cut the node's DISPLAYED y comes from
+    // the curve's value at f0, so changing Q moves the dot; without the hold the
+    // pointer loses it after one notch and the next notch drives whatever is now
+    // underneath — a different band, or nothing at all.  It reads as "the wheel
+    // only works once, and then it grabs the wrong node".
+    const auto now = std::chrono::steady_clock::now();
+    const bool locked = m_wheelLockBand >= 0 && m_wheelLockBand < 5
+                        && now < m_wheelLockUntil;
+
+    const int hit = locked ? m_wheelLockBand
+                           : ((m_hoverBand >= 0) ? m_hoverBand : nodeAt (e->position()));
     if (hit >= 0)
     {
         const QString base = m_prefix + QString::number (hit + 1);
         if (auto* p = m_engine ? m_engine->typedParam (base + "Q") : nullptr)
         {
             const double dir = e->angleDelta().y() > 0 ? 1.0 : -1.0;
+            // Shift is ×0.25 in the page; that is the 0.01 fine step here.
             const double step = (e->modifiers() & Qt::ShiftModifier) ? 0.01 : 0.04;
             p->setNorm (std::clamp (p->norm() + dir * step, 0.0, 1.0));
         }
+        m_wheelLockBand  = hit;
+        m_wheelLockUntil = now + std::chrono::milliseconds (1200);
         refreshNodePositions();
         m_dirty = true;
         e->accept();
@@ -2826,7 +2889,15 @@ void OvEqView::hoverMoveEvent (QHoverEvent* e)
     // from the node it is bound to dismisses it.  Hover events are the
     // no-button path — the same branch the page tests with `if (drag) … else
     // { … if (editBd) { distance > 30 → closeEdit() } }`.
-    if (m_editBand >= 0 && m_editBand < 5 && ! m_editScrub)
+    //
+    // The editor's own rect is exempt.  The page gets that for free: its
+    // pointerleave on the editor closes it, and its pointermove runs on the
+    // canvas, which the editor covers — so a pointer over the box never
+    // triggers the 30 px test at all.  Here the box is a QML sibling, so hover
+    // events still arrive while the pointer is on it, and a 30 px radius around
+    // the node is smaller than the box: the fields sit 40-60 px away, and
+    // merely moving towards one dismissed the very editor being reached for.
+    if (m_editBand >= 0 && m_editBand < 5 && ! m_editScrub && ! m_editPointerInside)
     {
         const double dx = e->position().x() - m_bands[m_editBand].x;
         const double dy = e->position().y() - m_bands[m_editBand].y;
