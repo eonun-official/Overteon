@@ -158,10 +158,6 @@ Item {
         return soloed (name) ? soloOpacityFor (name) : 0
     }
 
-    // ONYXTEON_NEDEBUG=1: the node editor prints what it put in each field and
-    // where it placed itself.  Temporary, for bringing the widget up.
-    readonly property bool neDebug: (typeof ovNeDebug !== "undefined") ? ovNeDebug : false
-
     // ONYXTEON_NOFOG=1: the fog off, for a reference capture.
     property bool anyFog: ! ((typeof ovNoFog !== "undefined") && ovNoFog)
 

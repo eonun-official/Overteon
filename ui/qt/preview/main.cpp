@@ -643,8 +643,14 @@ int main (int argc, char** argv)
     // labelled window-coordinate grid, for reading positions off a screenshot
     view.rootContext()->setContextProperty (
         "ovRuler", ovEnvFlag ("ONYXTEON_RULER"));
-    view.rootContext()->setContextProperty (
-        "ovNeDebug", ovEnvFlag ("ONYXTEON_NEDEBUG"));
+    // ONYXTEON_NETEST=<band> opens the node editor at start-up, for captures.
+    {
+        const QString ne = qEnvironmentVariable ("ONYXTEON_NETEST");
+        view.rootContext()->setContextProperty (
+            "ovNeTest", ne.isEmpty() ? -1 : ne.toInt());
+        view.rootContext()->setContextProperty (
+            "ovNeTestSide", qEnvironmentVariable ("ONYXTEON_NETEST_SIDE", "sc"));
+    }
 
     // ---- ONYXTEON_SOLO=<name>[,<name>...]: show only those widgets --------
     //

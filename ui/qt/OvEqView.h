@@ -1,4 +1,5 @@
 #pragma once
+#include "OvEnv.h"
 // ============================================================
 //  OnyxTEON Qt/QML UI — EQ plot.
 //
@@ -224,6 +225,24 @@ public:
     /// gesture.  The page has the same shape of problem and answers it by
     /// testing `if (drag)` first; this is the same idea for the numeric fields.
     Q_INVOKABLE void setEditingScrub (bool on) { m_editScrub = on; }
+
+    /// Repaint now, because a parameter was written from outside a plot gesture.
+    ///
+    /// A drag on the plot calls update() itself at the end of every mouse move,
+    /// which is why dragging a node feels immediate.  The numeric editor writes
+    /// the same parameters but is not a mouse move on this item, so without this
+    /// the curve and the node only caught up on the next repaint timer tick —
+    /// 30 Hz at best, and nothing at all while the spectrum is idle.  Measured
+    /// symptom: scrubbing Freq moves the node in the editor's own readout but
+    /// the plot underneath does not move.
+    ///
+    /// m_dirty is set as well as update(): the drag path does the same, and it
+    /// is what keeps a spectrum tick from swallowing the change.
+    Q_INVOKABLE void repaintForParamEdit()
+    {
+        m_dirty = true;
+        update();
+    }
 
     /// The last rendered plot image; OvSeamFrost blurs it together with the
     /// other half's.  Null until the view has painted once.

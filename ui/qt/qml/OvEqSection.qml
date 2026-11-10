@@ -6,6 +6,7 @@ import OnyxTEON 1.0
 Item {
     id: root
 
+
     property var engine: null
     property string prefix: "sc"
     property bool headerTop: true
@@ -375,6 +376,29 @@ Item {
         }
     }
 
+    // ONYXTEON_NETEST=<band>: open the numeric editor as soon as the section is
+    // built, on the half named by ONYXTEON_NETEST_SIDE (default "sc").
+    //
+    // Driving it with a real double-click and then measuring the result through
+    // a screenshot is unreliable — the editor closes when the pointer leaves,
+    // and the box moves with the node — so this makes the state deterministic
+    // for a capture.
+    Component.onCompleted: {
+        if (typeof ovNeTest !== "undefined" && ovNeTest >= 0
+                && root.prefix === ((typeof ovNeTestSide !== "undefined") ? ovNeTestSide : "sc")) {
+            // Deferred: root.view is not assigned yet at completion, so place()
+            // would have no node position to aim at and the box would sit at 0,0.
+            neTestTimer.start ()
+        }
+    }
+
+    Timer {
+        id: neTestTimer
+        interval: 400
+        repeat: false
+        onTriggered: { if (root.view) nodeEdit.open (ovNeTest) }
+    }
+
     OvBandMenu {
         id: bandMenu
         engine: root.engine
@@ -429,7 +453,7 @@ Item {
     Item {
         id: nodeEdit
         visible: false
-        z: 50
+        z: 1000
         width: 80
 
         // The height is COMPUTED, not derived from the contents' implicit
@@ -467,6 +491,14 @@ Item {
         function beginScrub () {
             scrubbing = true
             if (root.view) root.view.setEditingScrub (true)
+        }
+
+        /// Ask the plot to repaint now, the way one of its own drags does.
+        /// The editor writes the same parameters a node drag writes, but it is
+        /// not a mouse move on the plot, so nothing would repaint until the
+        /// next timer tick.
+        function plotRepaint () {
+            if (root.view) root.view.repaintForParamEdit ()
         }
 
         function endScrub () {
@@ -526,6 +558,13 @@ Item {
             if (force || ! fieldF.fieldFocus) fieldF.text = pf ? String (Math.round (pf.value)) : ""
             if (force || ! fieldG.fieldFocus) fieldG.text = pg ? (pg.value * mult).toFixed (1) : ""
             if (force || ! fieldQ.fieldFocus) fieldQ.text = pq ? pq.value.toFixed (2) : ""
+
+            // Any refresh is the result of a parameter having been written —
+            // by a scrub, by a commit, or by the host.  Repaint the plot in
+            // this frame rather than waiting for the 30 Hz parameter poll: the
+            // number in the field and the node it belongs to have to move
+            // together, and the poll alone left them a frame or two apart.
+            if (! force) plotRepaint ()
         }
 
         /// Centre over the node, flip below when there is no room, clamp into
@@ -551,30 +590,53 @@ Item {
             arrowX = Math.max (11, Math.min (ew - 11, px - x))
         }
 
-        // The node moves while it is dragged, and whenever the range or the
-        // curve changes.  30 Hz is enough for a box that only has to keep up
-        // with a finger.
+        // The node moves whenever a parameter moves it — a drag, a scrub, a
+        // preset — and the box has to keep up.
+        //
+        // It follows the PLOT'S OWN frame signal rather than a timer.  The plot
+        // emits contentChanged once per frame it actually produced (queued from
+        // the render thread), so the box moves in the same frame as the node it
+        // is pointing at: no lag behind its own target, and no work at all when
+        // the plot is idle.  A 30 Hz timer here was measurably behind the node
+        // during a scrub, which reads as the box swimming around the dot.
+        Connections {
+            target: root.view
+            enabled: root.view !== null
+            function onContentChanged () { if (nodeEdit.visible) nodeEdit.place () }
+        }
+
+        // Safety net for the case where the plot produces no frame at all
+        // (nothing playing, no repaint pending) but the node still moved —
+        // cheap, and it does nothing when place() is already up to date.
         Timer {
             running: nodeEdit.visible
-            interval: 33
+            interval: 16
             repeat: true
             onTriggered: nodeEdit.place ()
         }
 
         // ---- the box -----------------------------------------------------
-        // box-shadow: 0 8px 22px rgba(0,0,0,.5) — approximated with stacked
-        // translucent rounded rects.  A real blur here would need the box
-        // rendered to a texture and read back, and on this background the
-        // difference is invisible next to the cost.
+        // The page:
+        //     background: rgba(22,25,31,.96)
+        //     border:     1px solid rgba(58,66,80,.65)
+        //     border-radius: 4px
+        //     box-shadow: 0 8px 22px rgba(0,0,0,.5)
+        //
+        // The background and border are those values exactly.  The shadow is
+        // approximated by a few rounded rects growing outward and fading, all
+        // offset DOWN by the page's 8 px: a real 22 px Gaussian would need the
+        // box rendered to a texture and blurred, and at this size the layers
+        // below are indistinguishable from it while costing nothing.
         Repeater {
-            model: 4
+            model: 6
             Rectangle {
-                x: -2 - index
-                y: 6 - 2 - index
-                width: nodeEdit.width + 4 + index * 2
-                height: nodeEdit.height + 4 + index * 2
-                radius: 4 + index
-                color: Qt.rgba (0, 0, 0, 0.13)
+                readonly property int i: index + 1
+                x: -i * 1.5
+                y: 8 - i * 1.5
+                width: nodeEdit.width + i * 3
+                height: nodeEdit.height + i * 3
+                radius: 4 + i
+                color: Qt.rgba (0, 0, 0, 0.5 / (i + 2.2))
             }
         }
 
@@ -615,11 +677,25 @@ Item {
         // plot, which then treats it as "click on empty canvas" and dismisses
         // the editor the user is trying to use.  Declared before the fields so
         // they, being later children, still get their own events first.
+
         MouseArea {
             id: neBlock
-            anchors.fill: parent
+            // Explicit, not anchors.fill: parent.  parent was not resolving to
+            // this Item at run time — the debug rectangle painted over the
+            // whole window, which means this MouseArea had been hoisted out of
+            // nodeEdit by an earlier edit and was covering the entire section,
+            // eating every press before it could reach a field.
+            x: 0
+            y: 0
+            width: nodeEdit.width
+            height: nodeEdit.height
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+
+            // The FIELDS are above this (later siblings, own z), so a press on
+            // one of them reaches them first.  Everything else lands here and
+            // is swallowed, which is what keeps the plot from reading it as a
+            // click on empty canvas.
             onClicked: (m) => { m.accepted = true }
             // pointerleave closes it, as the page's listener does
             onContainsMouseChanged: {
@@ -715,6 +791,7 @@ Item {
                 if (p) { p.beginGesture (); p.setValue (Math.max (0.1, Math.min (6, q))); p.endGesture () }
             }
             refresh (true)
+            plotRepaint ()
         }
     }
 }
