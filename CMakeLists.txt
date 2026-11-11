@@ -25,6 +25,21 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # refuses MinGW outright (juce_TargetPlatform.h), Qt does not.
 option(OVERTEON_PREVIEW_ONLY "Build only overteon-qml-preview (no JUCE plugin)" OFF)
 
+# ---- can the host resize the editor window? -------------------------------
+#
+# OFF by default.  The UI is drawn against one design size (1040x772) and scales
+# uniformly to fit whatever frame it is given, so it *can* live in any size — but
+# the design is the product, and a window a host has dragged down to 400x300 is
+# unreadable rather than flexible.
+#
+# With OFF the editor asks the host for its design size and tells it the window
+# is not resizable, so the size it asks for is the size it keeps.  With ON the
+# host may stretch it and the design follows the frame.
+#
+# This is a build decision, not a runtime switch: a fixed build cannot be
+# widened by anything, which is the point of it being a build flag.
+option(OVERTEON_RESIZABLE_WINDOW "Let the host resize the plug-in editor" OFF)
+
 if(OVERTEON_PREVIEW_ONLY)
     set(CMAKE_AUTOMOC ON)
     set(CMAKE_AUTORCC ON)
@@ -236,6 +251,12 @@ if(OVERTEON_QT_UI)
 
     target_compile_definitions(HarmonicInjector PUBLIC OVERTEON_QT_UI=1)
 
+    # Editor resizability is compiled in or out, so a fixed build cannot be
+    # widened at run time.  PUBLIC: every format target (LV2/VST3/VST/
+    # Standalone) compiles OvQmlEditor.cpp and has to agree.
+    target_compile_definitions(HarmonicInjector PUBLIC
+        OVERTEON_RESIZABLE_WINDOW=$<BOOL:${OVERTEON_RESIZABLE_WINDOW}>)
+
     # QQuickRenderControl renders the scene into a texture we own instead of
     # onto a window of Qt's own.  That is what lets the editor live inside a
     # JUCE Component on every platform: no reparenting, so no window the host
@@ -418,6 +439,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvQmlEditor.cpp ui/qt/OvQtComponent.cpp)
     target_compile_definitions(overteon-qml-preview PRIVATE
         OVERTEON_PREVIEW_HAS_DSP=1 OVERTEON_QT_UI=1
+        OVERTEON_RESIZABLE_WINDOW=$<BOOL:${OVERTEON_RESIZABLE_WINDOW}>
         # Same JUCE feature set as the plug-in target.  Without these the module
         # sources are compiled with the browser enabled and juce_gui_extra pulls
         # in gtk, which is neither needed nor installed here.

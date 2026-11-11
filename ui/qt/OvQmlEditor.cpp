@@ -130,29 +130,36 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
         // whole UI was drawn at 62 % inside a larger canvas.
         const auto want = targetSize();
 
-        // ONYXTEON_FIXED_SIZE (on unless set to 0): the window keeps its
-        // original size.
+        // ---- is the editor resizable? ----------------------------------
+        //
+        // A COMPILE-TIME choice (OVERTEON_RESIZABLE_WINDOW, default OFF), not a
+        // runtime environment switch.
         //
         // `setResizable (true, true)` tells the host it may stretch the editor,
-        // and jalv.gtk3 acts on that: its window becomes draggable to any size.
-        // For a plugin whose layout was drawn against one design size that is a
-        // liability rather than a feature — the UI does adapt, but the point of
-        // asking for the design size is that the design is what is being looked
-        // at.  With this off the host has no handle to resize, so the editor
-        // stays at exactly the size it asked for.
-        if (ovEnvFlagDefaultOn ("ONYXTEON_FIXED_SIZE"))
-        {
+        // and hosts act on it: jalv.gtk3's window becomes draggable to any size.
+        // The UI does adapt — main.qml scales the whole design to whatever frame
+        // it is given — but the design is what the plugin is FOR, and a window
+        // that can be dragged down to 400x300 makes it unreadable rather than
+        // flexible.  So it ships fixed, and being resizable is a build decision
+        // for someone who wants the editor at another size, not something a
+        // stray environment variable can turn on inside a user's session.
+        //
+        //     cmake -DOVERTEON_RESIZABLE_WINDOW=ON ..
+        //
+        // ONYXTEON_FIXED_SIZE=0 still overrides at runtime, but only in builds
+        // where the feature was compiled in — it cannot widen a fixed build.
+       #if OVERTEON_RESIZABLE_WINDOW
+        setResizable (true, true);
+        // How far the host may stretch it.  Any size works (the design scales
+        // uniformly and fills the frame given), so these limits only stop a host
+        // from dragging it down to something unreadable or up to a size that
+        // costs more than it shows.
+        setResizeLimits (OvThemeWidth / 2, OvThemeHeight / 2, 4096, 4096);
+        if (ovEnvFlag ("ONYXTEON_FIXED_SIZE"))
             setResizable (false, false);
-        }
-        else
-        {
-            setResizable (true, true);
-            // How far the host may stretch the editor.  The UI scales uniformly
-            // and fills the frame it is given (main.qml), so any size works —
-            // these limits only stop a host from dragging it down to something
-            // unreadable or up to a size that costs more than it shows.
-            setResizeLimits (OvThemeWidth / 2, OvThemeHeight / 2, 4096, 4096);
-        }
+       #else
+        setResizable (false, false);
+       #endif
 
         setSize (want.x, want.y);
 
