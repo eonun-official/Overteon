@@ -153,12 +153,30 @@ Item {
         height: root.height + 4
         cursorShape: Qt.SizeVerCursor
 
+        // The drag is measured in WINDOW coordinates, not in this item's.
+        //
+        // This is the whole of the "dragging the dB field goes wild" bug.  The
+        // numeric box is glued to its node, so scrubbing gain moves the node,
+        // which moves the box, which moves this MouseArea — and `m.y` is
+        // relative to this MouseArea.  So m.y changed even while the pointer was
+        // still, the delta fed itself, and a few pixels of hand movement drove
+        // the value across the whole range.
+        //
+        // The page is immune for a reason that is easy to miss: it reads
+        // ev.clientY, an absolute viewport coordinate, so its delta depends only
+        // on the pointer.  MouseEvent has no scenePosition in Qt 6, so the
+        // window coordinate is rebuilt here — item position plus local offset,
+        // which is exactly pointer position however the item moves.
+        readonly property var winY: function (ev) {
+            return root.mapToItem (null, ev.x, ev.y).y
+        }
+
         property real startY: 0
         property real startNorm: 0
         property bool moved: false
 
         onPressed: (m) => {
-            startY = m.y
+            startY = winY (m)
             moved = false
             const p = root.param ()
             startNorm = p ? p.norm : 0
@@ -171,7 +189,7 @@ Item {
 
         onPositionChanged: (m) => {
             if (! pressed) return
-            const dy = startY - m.y
+            const dy = startY - winY (m)
             if (! moved && Math.abs (dy) < 3) return
             const p = root.param ()
             if (! p) return
