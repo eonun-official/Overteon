@@ -580,21 +580,16 @@ Item {
         /// aims at the node.  updateEdit() in the page.
         function place () {
             if (band < 0 || ! root.view) return
-            // PINNED WHILE SCRUBBING.
+            // It DOES follow the node while a field is being scrubbed.
             //
-            // place() keeps the box glued to its node, which is what makes it
-            // readable — but during a gain drag the node moves with the value,
-            // so the box moves too, and when the node crosses the plot's middle
-            // the box flips from above it to below it: a ~90 px jump in one
-            // frame, under the finger that is dragging.  The page has the same
-            // shape of behaviour and it is equally bad there; the difference is
-            // that this box is bigger, so the jump is bigger.
-            //
-            // Holding it still while a field is being scrubbed removes the jump,
-            // and removes the whole class of "the value I am dragging is not
-            // where my hand is".  The box re-places itself the moment the drag
-            // ends.
-            if (scrubbing) return
+            // An earlier version pinned the box during a scrub, to stop it
+            // moving under the hand.  That treated a symptom: the drag ran away
+            // because it measured its delta in this MouseArea's own coordinates,
+            // and the box moving was merely what exposed it.  With the delta
+            // measured in WINDOW coordinates (OvNeField's winY) a moving box
+            // cannot affect the value at all, so there is nothing left to
+            // stabilise — and a readout that stays behind while its node slides
+            // away is strictly worse than one that follows.
             const p = root.view.nodePosition (band)
             const ew = width, eh = height
 
