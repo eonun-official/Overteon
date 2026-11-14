@@ -62,7 +62,7 @@ Item {
             }
 
             Text {
-                text: "v0.9.14 · EONUN"
+                text: "v" + ovVersion + " · EONUN"
                 color: OvTheme.faint
                 font.family: OvTheme.uiFont
                 font.pixelSize: 10
@@ -104,7 +104,7 @@ Item {
                 color: OvTheme.dim
                 font.family: OvTheme.uiFont
                 font.pixelSize: 10
-                text: "COPY QML UI · EONUN"
+                text: "COPY EONUN"
                 opacity: 0.6
             }
 

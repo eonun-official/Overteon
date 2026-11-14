@@ -608,6 +608,8 @@ int main (int argc, char** argv)
         widget->setClearColor (QColor (0x16, 0x18, 0x1d));
         widget->rootContext()->setContextProperty ("engine", engine.get());
         widget->rootContext()->setContextProperty ("ovUiScale", uiScale());
+        widget->rootContext()->setContextProperty (
+            "ovVersion", QStringLiteral (OVERTEON_VERSION));
         // Same solo switches as the QQuickView path below: the compat widget is
         // the only one that runs under wine, so the debug views have to work
         // there too.
@@ -692,6 +694,8 @@ int main (int argc, char** argv)
     // logicalDpi / 96: OvTheme.pt() divides by this so font sizes stay in
     // logical pixels on a scaled display (see OvTheme.qml).
     view.rootContext()->setContextProperty ("ovUiScale", uiScale());
+    view.rootContext()->setContextProperty (
+        "ovVersion", QStringLiteral (OVERTEON_VERSION));
     // OVERTEON_NOSIGNAL=1 makes the mock generate silence, so nothing is drawn
     // over the plots and the glass can be measured on a clean background.
     if (ovEnvFlag ("OVERTEON_NOSIGNAL"))

@@ -216,6 +216,11 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
         if (auto* scr = QGuiApplication::primaryScreen())
             scale = scr->logicalDotsPerInch() / 96.0;
         impl->view->rootContext()->setContextProperty ("ovUiScale", scale);
+        // The About panel shows the version, so it comes from the build where
+        // the version is defined (CMakeLists' project(VERSION ...)) instead of
+        // being typed into the QML -- it had drifted three releases behind.
+        impl->view->rootContext()->setContextProperty (
+            "ovVersion", QStringLiteral (OVERTEON_VERSION));
         impl->view->rootContext()->setContextProperty (
             "ovCpuFrost", qEnvironmentVariableIsSet ("OVERTEON_CPUFROST"));
         impl->view->rootContext()->setContextProperty (

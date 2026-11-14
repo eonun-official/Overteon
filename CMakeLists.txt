@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 #   * own LV2 URI / bundle id / plug-in code
 #   * own bundle + product name (Overteon.lv2, Overteon.vst3)
 #   * identical parameter IDs, so .hinj presets stay interchangeable.
-project(Overteon VERSION 0.9.16)
+project(Overteon VERSION 2.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -258,6 +258,11 @@ if(OVERTEON_QT_UI)
 
     target_compile_definitions(HarmonicInjector PUBLIC OVERTEON_QT_UI=1)
 
+    # One source of truth for the version string: the About panel shows it, so
+    # it comes from project(VERSION) rather than being typed into the QML.
+    target_compile_definitions(HarmonicInjector PUBLIC
+        OVERTEON_VERSION="${PROJECT_VERSION}")
+
     # Editor resizability is compiled in or out, so a fixed build cannot be
     # widened at run time.  PUBLIC: every format target (LV2/VST3/VST/
     # Standalone) compiles OvQmlEditor.cpp and has to agree.
@@ -447,6 +452,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvQmlEditor.cpp ui/qt/OvQtComponent.cpp)
     target_compile_definitions(overteon-qml-preview PRIVATE
         OVERTEON_PREVIEW_HAS_DSP=1 OVERTEON_QT_UI=1
+        OVERTEON_VERSION="${PROJECT_VERSION}"
         OVERTEON_RESIZABLE_WINDOW=$<BOOL:${OVERTEON_RESIZABLE_WINDOW}>
         # Same JUCE feature set as the plug-in target.  Without these the module
         # sources are compiled with the browser enabled and juce_gui_extra pulls
