@@ -1,5 +1,5 @@
 // ===========================================================================
-//  Overteon / OnyxTEON preview server (vibe.d)
+//  Overteon / Overteon preview server (vibe.d)
 //
 //  Serves the editor UIs over HTTP so they can be rendered by a real browser
 //  engine (Gecko/Firefox, Blink/Chromium, WebKit) instead of a plug-in host.
@@ -7,7 +7,7 @@
 //    /                landing page with links
 //    /original        the ORIGINAL HTML+CSS, extracted from ~/SupersawOmega.rar
 //                     (the pristine design, no modifications)
-//    /current         the current UI (ONYX|TEON; same HTML, only the wordmark
+//    /current         the current UI (OVER|TEON; same HTML, only the wordmark
 //                     differs — the glass is plain CSS backdrop-filter, as in
 //                     the original, because the blur that matters lives in the
 //                     Qt front end and the page is the reference)
@@ -514,7 +514,7 @@ string mockBackendScript ()
   // different data, every comparison between them was meaningless.
   //
   // ?freeze=1 pins the clock to 1.000 s and ?t=SECONDS pins it anywhere, so a
-  // Qt capture taken with ONYXTEON_T can be compared against the same instant.
+  // Qt capture taken with OVERTEON_T can be compared against the same instant.
   const FROZEN  = /[?&]freeze=1/.test(location.search);
   const mT      = /[?&]t=([0-9.]+)/.exec(location.search);
 
@@ -731,7 +731,7 @@ string landingPage ()
 <ul>
   <li><a href="/original">/original</a> — the original HTML+CSS
       <code>web_fx/index.html</code> from SupersawOmega.rar</li>
-  <li><a href="/current">/current</a> — the same page with the ONYX|TEON
+  <li><a href="/current">/current</a> — the same page with the OVER|TEON
       wordmark <code>(identical rendering)</code></li>
   <li><a href="/compare">/compare</a> — both side by side</li>
   <li><a href="/raw/original">/raw/original</a>,
@@ -757,7 +757,7 @@ string comparePage ()
 </style>
 <figure><figcaption class="a">ORIGINAL (from the rar)</figcaption>
   <iframe src="/original"></iframe></figure>
-<figure><figcaption class="b">CURRENT (ONYX|TEON)</figcaption>
+<figure><figcaption class="b">CURRENT (OVER|TEON)</figcaption>
   <iframe src="/current"></iframe></figure>
 `;
 }

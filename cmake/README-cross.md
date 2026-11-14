@@ -71,7 +71,7 @@ environment variables needed:
    that was never presented has no surface, so grabWindow() returns an empty
    image and the widget stays blank.)
 
-Verified in wine 9.21, `wine explorer /desktop=onyxteon,1100x830 ...` on a
+Verified in wine 9.21, `wine explorer /desktop=overteon,1100x830 ...` on a
 nested display: 40000-50000 px change per frame, full UI, deck border at the
 expected scaled row.
 

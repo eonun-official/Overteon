@@ -109,11 +109,11 @@ void OvSeamFrost::setBottomView (OvEqView* v)
 // saturate, bilinear upscale, veil, then the radial mask.
 QImage OvSeamFrost::renderGlass()
 {
-    // ONYXTEON_NOFROST means no glass anywhere, so a reference capture really
+    // OVERTEON_NOFROST means no glass anywhere, so a reference capture really
     // has none.  (It used to skip only the control pits, which made an A/B of
     // the seam look like the seam was not painting.)
-    if (ovEnvFlag ("ONYXTEON_NOFROST")) return QImage();
-    if (ovEnvFlag ("ONYXTEON_NOSEAM")) return QImage();
+    if (ovEnvFlag ("OVERTEON_NOFROST")) return QImage();
+    if (ovEnvFlag ("OVERTEON_NOSEAM")) return QImage();
     if (m_top == nullptr || m_bottom == nullptr) return QImage();
 
     // unfrostedImage(): the page's FrostEngine samples the raw plot canvases.
@@ -210,13 +210,13 @@ QImage OvSeamFrost::renderGlass()
     m_cacheKey = key;
     m_cache = out;
 
-    if (ovEnvFlag ("ONYXTEON_FROSTDEBUG"))
+    if (ovEnvFlag ("OVERTEON_FROSTDEBUG"))
         std::fprintf (stderr, "[seam] %gx%g capture=%dx%d dpr=%.2f top=%dx%d bottom=%dx%d\n",
                       w, h, capture.width(), capture.height(), double (dpr),
                       top.width(), top.height(), bottom.width(), bottom.height());
 
     // debug: dump what the glass actually produced
-    if (ovEnvFlag ("ONYXTEON_SEAMDUMP"))
+    if (ovEnvFlag ("OVERTEON_SEAMDUMP"))
     {
         static int n = 0;
         out.save (QStringLiteral ("/tmp/seam_%1.png").arg (n++));

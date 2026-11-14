@@ -321,7 +321,7 @@ public:
     /// The name a ring is published under, for a reader process.
     static std::string ringNameFor (int pid, Producer p)
     {
-        return "/onyxteon-tick-" + std::to_string (pid) + "-" + producerName (p);
+        return "/overteon-tick-" + std::to_string (pid) + "-" + producerName (p);
     }
 
     /// ---- consumer ------------------------------------------------------

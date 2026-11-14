@@ -6,9 +6,9 @@
 //  whether the variable EXISTS.  That makes `NAME=0` mean the opposite of what
 //  it says: it is still non-null, so the switch is ON.
 //
-//  This is not theoretical.  `ONYXTEON_ONLYBG=1` hides the spectrum fill so the
+//  This is not theoretical.  `OVERTEON_ONLYBG=1` hides the spectrum fill so the
 //  background layer can be inspected on its own; turning it back off with
-//  `ONYXTEON_ONLYBG=0` left the fill hidden and read as "the spectrum is gone".
+//  `OVERTEON_ONLYBG=0` left the fill hidden and read as "the spectrum is gone".
 //  The same trap sits on every other switch here, and it only ever bites in the
 //  one direction nobody expects.
 //

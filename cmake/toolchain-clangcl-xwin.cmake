@@ -1,4 +1,4 @@
-# Cross-compile OnyxTEON for Windows from Linux with clang-cl + lld-link,
+# Cross-compile Overteon for Windows from Linux with clang-cl + lld-link,
 # using the MSVC SDK headers and import libraries fetched by xwin.
 #
 #   cargo install xwin

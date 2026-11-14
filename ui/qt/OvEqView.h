@@ -1,7 +1,7 @@
 #pragma once
 #include "OvEnv.h"
 // ============================================================
-//  OnyxTEON Qt/QML UI — EQ plot.
+//  Overteon Qt/QML UI — EQ plot.
 //
 //  A direct port of the canvas EQ engine in web_fx/index.html:
 //  same log frequency axis (5 Hz..24 kHz), same RBJ coefficient maths,
@@ -171,7 +171,7 @@ public:
     /// means reading the framebuffer back to the CPU — the very cost this class
     /// no longer pays.  QML sets this when it falls back to OvSeamFrost.
     /// Frames this plot actually painted in the last second, measured inside
-    /// paint() itself.  ONYXTEON_SOLO shows it, so the number describes THIS
+    /// paint() itself.  OVERTEON_SOLO shows it, so the number describes THIS
     /// widget rather than the window it happens to be in.
     Q_PROPERTY(double paintFps READ paintFps NOTIFY paintFpsChanged)
     double paintFps() const { return m_paintFps; }
@@ -270,7 +270,7 @@ public:
     /// to this: without it the seam glass never learns that the plots changed,
     /// so it paints once while m_content is still null and then sits blank
     /// forever.  (Measured: 0 px of the seam strip differed between a run with
-    /// the glass and one with ONYXTEON_NOFROST, while the control pits — which
+    /// the glass and one with OVERTEON_NOFROST, while the control pits — which
     /// repaint from their own paint() — differed by 15936 px.)
 
     /// Two-pass separable Gaussian (the "dual Gaussian": one horizontal, one

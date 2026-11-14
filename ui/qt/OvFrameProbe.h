@@ -2,7 +2,7 @@
 // ============================================================
 //  OvFrameProbe — how many frames a WIDGET was actually rendered in.
 //
-//  ONYXTEON_SOLO needs one number per widget, and a window frame rate cannot
+//  OVERTEON_SOLO needs one number per widget, and a window frame rate cannot
 //  give it: the window presents whether or not a given widget redrew.  The
 //  painted widgets can count inside their own paint(); a QML widget made of
 //  ShaderEffects has no such callback at all.

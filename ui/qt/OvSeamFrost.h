@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  OnyxTEON Qt/QML UI — seam frost.
+//  Overteon Qt/QML UI — seam frost.
 //
 //  #hdr::before in the design is a 550x68 elliptical backdrop blur sitting on
 //  the boundary between the two EQ halves, so its source spans both plots.

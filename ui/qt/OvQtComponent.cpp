@@ -118,7 +118,7 @@ public:
         // wrong scale and clipped at the edges.
         const qreal dpr = window->devicePixelRatio();
 
-        if (std::getenv ("ONYXTEON_EMSIZEDBG") != nullptr)
+        if (std::getenv ("OVERTEON_EMSIZEDBG") != nullptr)
         {
             // Every scale in play, because they are four different quantities
             // and picking the wrong one is what left the Qt window at the
@@ -239,7 +239,7 @@ public:
         lastW     = w;
         lastH     = h;
 
-        if (std::getenv ("ONYXTEON_EMSIZEDBG") != nullptr)
+        if (std::getenv ("OVERTEON_EMSIZEDBG") != nullptr)
             std::fprintf (stderr, "[emsize] timer: scale %.4f size %dx%d -> resync\n",
                           (double) scale, w, h);
 

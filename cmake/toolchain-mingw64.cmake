@@ -1,4 +1,4 @@
-# Cross-compile OnyxTEON for Windows from Linux (MinGW-w64).
+# Cross-compile Overteon for Windows from Linux (MinGW-w64).
 #
 #   cmake -S . -B build-mingw -G Ninja \
 #         -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake \

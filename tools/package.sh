@@ -3,7 +3,7 @@
 #  package.sh — build and install the LV2 bundle.
 #
 #  JUCE writes a fresh bundle to
-#      build/HarmonicInjector_artefacts/Release/LV2/OnyxTEON.lv2
+#      build/HarmonicInjector_artefacts/Release/LV2/Overteon.lv2
 #  on every build.  This copies it to ~/.lv2 (or $LV2_DEST) so hosts can load
 #  it, and verifies the copy afterwards — a stale bundle is easy to miss and
 #  then every "the plug-in still has the old bug" report is really about the
@@ -20,10 +20,10 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
-BUILT="$ROOT/build/HarmonicInjector_artefacts/Release/LV2/OnyxTEON.lv2"
+BUILT="$ROOT/build/HarmonicInjector_artefacts/Release/LV2/Overteon.lv2"
 DEST_ROOT=${LV2_DEST:-$HOME/.lv2}
-DEST="$DEST_ROOT/OnyxTEON.lv2"
-URI="https://eonun.com/plugins/OnyxTEON"
+DEST="$DEST_ROOT/Overteon.lv2"
+URI="https://eonun.com/plugins/Overteon"
 
 build=1
 check_only=0
@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) build=0 ;;
         --check)    check_only=1 ;;
-        --dest)     shift; DEST_ROOT=$1; DEST="$DEST_ROOT/OnyxTEON.lv2" ;;
+        --dest)     shift; DEST_ROOT=$1; DEST="$DEST_ROOT/Overteon.lv2" ;;
         *) echo "usage: $0 [--no-build] [--check] [--dest DIR]" >&2; exit 2 ;;
     esac
     shift
@@ -47,12 +47,12 @@ if [ "$build" = 1 ] && [ "$check_only" = 0 ]; then
     fi
 fi
 
-[ -f "$BUILT/libOnyxTEON.so" ] || {
+[ -f "$BUILT/libOverteon.so" ] || {
     echo "no bundle at $BUILT — build first" >&2; exit 1; }
 
 # ---- 2. compare ------------------------------------------------------------
 same=0
-if [ -f "$DEST/libOnyxTEON.so" ] && cmp -s "$BUILT/libOnyxTEON.so" "$DEST/libOnyxTEON.so"; then
+if [ -f "$DEST/libOverteon.so" ] && cmp -s "$BUILT/libOverteon.so" "$DEST/libOverteon.so"; then
     same=1
 fi
 
@@ -62,7 +62,7 @@ if [ "$check_only" = 1 ]; then
         exit 0
     fi
     echo "installed bundle DIFFERS from the build: $DEST" >&2
-    [ -f "$DEST/libOnyxTEON.so" ] && ls -la "$DEST/libOnyxTEON.so" "$BUILT/libOnyxTEON.so" >&2
+    [ -f "$DEST/libOverteon.so" ] && ls -la "$DEST/libOverteon.so" "$BUILT/libOverteon.so" >&2
     exit 1
 fi
 
@@ -85,11 +85,11 @@ mv "$TMP" "$DEST"
 rm -rf "$DEST.old.$$"
 
 # ---- 4. verify -------------------------------------------------------------
-if ! cmp -s "$BUILT/libOnyxTEON.so" "$DEST/libOnyxTEON.so"; then
+if ! cmp -s "$BUILT/libOverteon.so" "$DEST/libOverteon.so"; then
     echo "installed copy does not match the build — something is wrong" >&2
     exit 1
 fi
-for f in manifest.ttl dsp.ttl ui.ttl libOnyxTEON.so; do
+for f in manifest.ttl dsp.ttl ui.ttl libOverteon.so; do
     [ -f "$DEST/$f" ] || { echo "bundle is missing $f" >&2; exit 1; }
 done
 grep -q "$URI" "$DEST/manifest.ttl" || {

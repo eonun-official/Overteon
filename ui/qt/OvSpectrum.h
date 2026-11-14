@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  OnyxTEON — the analyser's averaging, in ONE testable place.
+//  Overteon — the analyser's averaging, in ONE testable place.
 //
 //  The spectrum fill is the one display that is fed raw FFT magnitudes, and an
 //  FFT magnitude of noise is Rayleigh-distributed: consecutive bins and
@@ -47,7 +47,7 @@
 //      release, once the signal stops
 //          old 283 dB/s   new 16.6 dB/s
 //
-//  And on real audio (ONYXTEON_SPECDBG=all, one frame's 128 bins per line):
+//  And on real audio (OVERTEON_SPECDBG=all, one frame's 128 bins per line):
 //  frame-to-frame change has a median of 0.43 dB and a 95th percentile of
 //  1.6-2.0 dB, the tail above that being the music itself.
 // ============================================================

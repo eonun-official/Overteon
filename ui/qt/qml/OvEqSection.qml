@@ -1,5 +1,5 @@
 import QtQuick
-import OnyxTEON 1.0
+import Overteon 1.0
 
 // One EQ half: the plot, the glazed header bar with its frosted trapezoid,
 // and the controls that sit inside that trapezoid.
@@ -14,7 +14,7 @@ Item {
     property string title: "SIDECHAIN EQ"
     property int driveMode: 1
     property real meterLight: 0.0      // 0..1, drives the accent glow
-    property bool cpuFrost: false      // ONYXTEON_CPUFROST=1
+    property bool cpuFrost: false      // OVERTEON_CPUFROST=1
 
     // .controlpit::before opacity, transition: opacity .1s linear, and the
     // CSS formula level*level*0.36
@@ -114,7 +114,7 @@ Item {
         // fragment passes and costs the CPU nothing.
         OvGpuGlass {
             dbgName: root.prefix + "-pod"
-            // ONYXTEON_NOFROST must switch this one off too: the reference
+            // OVERTEON_NOFROST must switch this one off too: the reference
             // capture has to be free of glass, or a comparison against it
             // silently hides whatever this surface draws.
             visible: ! root.cpuFrost
@@ -384,8 +384,8 @@ Item {
         }
     }
 
-    // ONYXTEON_NETEST=<band>: open the numeric editor as soon as the section is
-    // built, on the half named by ONYXTEON_NETEST_SIDE (default "sc").
+    // OVERTEON_NETEST=<band>: open the numeric editor as soon as the section is
+    // built, on the half named by OVERTEON_NETEST_SIDE (default "sc").
     //
     // Driving it with a real double-click and then measuring the result through
     // a screenshot is unreliable — the editor closes when the pointer leaves,

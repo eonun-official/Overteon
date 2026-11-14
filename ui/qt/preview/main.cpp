@@ -412,11 +412,11 @@ int main (int argc, char** argv)
     bool hud = false;             // --hud: separate read-out window
     QPointF probe (-1, -1);       // --probe x,y: ask the hit-test about a point
                                   // without moving the real pointer
-    bool compat = wine || ovEnvFlag ("ONYXTEON_COMPAT");
+    bool compat = wine || ovEnvFlag ("OVERTEON_COMPAT");
     int tickReadPid = 0;   // --tick-read <pid>
     QStringList presets;          // id=value pairs, applied before the first frame
     QStringList presetFiles;      // .hinj files, also applied before the first frame
-    QString jackName = QStringLiteral ("onyxpreview");   // --jack-name
+    QString jackName = QStringLiteral ("overpreview");   // --jack-name
 
     for (int i = 1; i < argc; ++i)
     {
@@ -612,9 +612,9 @@ int main (int argc, char** argv)
         // the only one that runs under wine, so the debug views have to work
         // there too.
         widget->rootContext()->setContextProperty (
-            "ovSolo", qEnvironmentVariable ("ONYXTEON_SOLO"));
+            "ovSolo", qEnvironmentVariable ("OVERTEON_SOLO"));
         widget->rootContext()->setContextProperty (
-            "ovSoloOpacity", qEnvironmentVariable ("ONYXTEON_SOLO_OPACITY"));
+            "ovSoloOpacity", qEnvironmentVariable ("OVERTEON_SOLO_OPACITY"));
 
         // QQuickWidget renders into an FBO, which needs a GL/RHI context; the
         // software backend has none.  Under wine the OpenGL RHI is already
@@ -692,27 +692,27 @@ int main (int argc, char** argv)
     // logicalDpi / 96: OvTheme.pt() divides by this so font sizes stay in
     // logical pixels on a scaled display (see OvTheme.qml).
     view.rootContext()->setContextProperty ("ovUiScale", uiScale());
-    // ONYXTEON_NOSIGNAL=1 makes the mock generate silence, so nothing is drawn
+    // OVERTEON_NOSIGNAL=1 makes the mock generate silence, so nothing is drawn
     // over the plots and the glass can be measured on a clean background.
-    if (ovEnvFlag ("ONYXTEON_NOSIGNAL"))
-        std::fprintf (stderr, "[preview] ONYXTEON_NOSIGNAL is gone: connect "
+    if (ovEnvFlag ("OVERTEON_NOSIGNAL"))
+        std::fprintf (stderr, "[preview] OVERTEON_NOSIGNAL is gone: connect "
                               "nothing to the JACK inputs for silence\n");
 
-    // ONYXTEON_CPUFROST=1 forces the QImage glass instead of the GPU shaders.
+    // OVERTEON_CPUFROST=1 forces the QImage glass instead of the GPU shaders.
     view.rootContext()->setContextProperty (
-        "ovCpuFrost", ovEnvFlag ("ONYXTEON_CPUFROST"));
+        "ovCpuFrost", ovEnvFlag ("OVERTEON_CPUFROST"));
     view.rootContext()->setContextProperty (
-        "ovNoFrost", ovEnvFlag ("ONYXTEON_NOFROST"));
-    // ONYXTEON_NOFOG=1 turns the EQ overflow fog off as well, for a capture
+        "ovNoFrost", ovEnvFlag ("OVERTEON_NOFROST"));
+    // OVERTEON_NOFOG=1 turns the EQ overflow fog off as well, for a capture
     // that has to contain none of it.
     view.rootContext()->setContextProperty (
-        "ovNoFog", ovEnvFlag ("ONYXTEON_NOFOG"));
-    // ONYXTEON_FOGRAW=1 shows the fog's strokes before the blur, for checking
+        "ovNoFog", ovEnvFlag ("OVERTEON_NOFOG"));
+    // OVERTEON_FOGRAW=1 shows the fog's strokes before the blur, for checking
     // what the source contains on its own.
     view.rootContext()->setContextProperty (
-        "ovFogRaw", ovEnvFlag ("ONYXTEON_FOGRAW"));
+        "ovFogRaw", ovEnvFlag ("OVERTEON_FOGRAW"));
     view.rootContext()->setContextProperty (
-        "ovGlassSigma", qEnvironmentVariable("ONYXTEON_GLASSSIGMA", "1.0").toDouble());
+        "ovGlassSigma", qEnvironmentVariable("OVERTEON_GLASSSIGMA", "1.0").toDouble());
     // Logical-to-device ratio the QML glass chain must render at.  Taken from
     // the screen the window opens on; 1.0 when unknown.
     {
@@ -721,20 +721,20 @@ int main (int argc, char** argv)
             "ovDpr", scr ? scr->devicePixelRatio() : 1.0);
     }
     view.rootContext()->setContextProperty (
-        "ovGlassDebug", ovEnvFlag ("ONYXTEON_GLASSDEBUG"));
+        "ovGlassDebug", ovEnvFlag ("OVERTEON_GLASSDEBUG"));
     // labelled window-coordinate grid, for reading positions off a screenshot
     view.rootContext()->setContextProperty (
-        "ovRuler", ovEnvFlag ("ONYXTEON_RULER"));
-    // ONYXTEON_NETEST=<band> opens the node editor at start-up, for captures.
+        "ovRuler", ovEnvFlag ("OVERTEON_RULER"));
+    // OVERTEON_NETEST=<band> opens the node editor at start-up, for captures.
     {
-        const QString ne = qEnvironmentVariable ("ONYXTEON_NETEST");
+        const QString ne = qEnvironmentVariable ("OVERTEON_NETEST");
         view.rootContext()->setContextProperty (
             "ovNeTest", ne.isEmpty() ? -1 : ne.toInt());
         view.rootContext()->setContextProperty (
-            "ovNeTestSide", qEnvironmentVariable ("ONYXTEON_NETEST_SIDE", "sc"));
+            "ovNeTestSide", qEnvironmentVariable ("OVERTEON_NETEST_SIDE", "sc"));
     }
 
-    // ---- ONYXTEON_SOLO=<name>[,<name>...]: show only those widgets --------
+    // ---- OVERTEON_SOLO=<name>[,<name>...]: show only those widgets --------
     //
     // A frame-rate number for the whole window says nothing about which part
     // spends it.  Hiding everything except one widget attributes the cost: run
@@ -744,12 +744,12 @@ int main (int argc, char** argv)
     // deck, bars).  `each` runs every one in turn and reports a rate for each,
     // which is the only honest way to attribute a frame budget.
     {
-        const QString solo = qEnvironmentVariable ("ONYXTEON_SOLO");
+        const QString solo = qEnvironmentVariable ("OVERTEON_SOLO");
         view.rootContext()->setContextProperty ("ovSolo", solo);
         if (! solo.isEmpty())
             std::fprintf (stderr, "[solo] showing only: %s\n", solo.toUtf8().constData());
 
-        // ONYXTEON_SOLO_OPACITY: how faintly those widgets are drawn.
+        // OVERTEON_SOLO_OPACITY: how faintly those widgets are drawn.
         //
         // Solo hides everything else, so two widgets can never be seen at once —
         // which is fine for attributing a frame cost and useless for finding
@@ -758,9 +758,9 @@ int main (int argc, char** argv)
         // edge instead of one picture hiding the other.
         //
         // A bare number fades every soloed widget; `name=value` pairs override
-        // it per widget.  Ignored without ONYXTEON_SOLO, so a normal run can
+        // it per widget.  Ignored without OVERTEON_SOLO, so a normal run can
         // never be faded by a stray environment variable.
-        const QString op = qEnvironmentVariable ("ONYXTEON_SOLO_OPACITY");
+        const QString op = qEnvironmentVariable ("OVERTEON_SOLO_OPACITY");
         view.rootContext()->setContextProperty ("ovSoloOpacity", op);
         if (! solo.isEmpty() && ! op.isEmpty())
             std::fprintf (stderr, "[solo] opacity: %s\n", op.toUtf8().constData());
@@ -877,7 +877,7 @@ int main (int argc, char** argv)
         }
         else
         {
-            if (ovEnvFlag ("ONYXTEON_CTLDEBUG"))
+            if (ovEnvFlag ("OVERTEON_CTLDEBUG"))
             {
                 auto& src = engine->source();
                 for (int i = 0; i < src.count(); ++i)
@@ -924,7 +924,7 @@ int main (int argc, char** argv)
                                                           .trimmed());
                         cur[i]  = p ? p->value() : tgt[i];
                         live[i] = (p != nullptr);
-                        if (ovEnvFlag ("ONYXTEON_CTLDEBUG"))
+                        if (ovEnvFlag ("OVERTEON_CTLDEBUG"))
                             std::fprintf (stderr, "[ctl] slot %d id '%s' target %g tau %g -> %s\n",
                                           i, sl.id, tgt[i], tau[i],
                                           p ? "param found" : "NO SUCH PARAM");
@@ -971,7 +971,7 @@ int main (int argc, char** argv)
     // drag it and the node itself are not together" complaint, asked as a
     // number: press on a node, move to a known point, and compare the node's
     // resulting position with that point.
-    if (ovEnvFlag ("ONYXTEON_DRAGFOLLOW"))
+    if (ovEnvFlag ("OVERTEON_DRAGFOLLOW"))
     {
         QTimer::singleShot (900, [&] {
             OvEqView* v = nullptr;
@@ -1009,7 +1009,7 @@ int main (int argc, char** argv)
 
     // Regression harness for the stuck-drag bug: press in empty space, then
     // move with no button held.  No node may move.
-    if (ovEnvFlag ("ONYXTEON_DRAGTEST2"))
+    if (ovEnvFlag ("OVERTEON_DRAGTEST2"))
     {
         QTimer::singleShot (900, [&] {
             OvEqView* eqView = nullptr;
@@ -1078,7 +1078,7 @@ int main (int argc, char** argv)
         });
     }
 
-    if (ovEnvFlag ("ONYXTEON_METERS"))
+    if (ovEnvFlag ("OVERTEON_METERS"))
     {
         auto* t = new QTimer (app.get());
         QObject::connect (t, &QTimer::timeout, [&] {
@@ -1090,7 +1090,7 @@ int main (int argc, char** argv)
         t->start (500);
     }
 
-    if (ovEnvFlag ("ONYXTEON_DUMP"))
+    if (ovEnvFlag ("OVERTEON_DUMP"))
     {
         QTimer::singleShot (1500, [&view] {
             auto* r = view.rootObject();
@@ -1146,10 +1146,10 @@ int main (int argc, char** argv)
     // never appeared).
     std::unique_ptr<QWidget> hudWin;
 
-    // Window-level event trace (ONYXTEON_HITTEST): every press the QQuickWindow
+    // Window-level event trace (OVERTEON_HITTEST): every press the QQuickWindow
     // receives, plus the item Qt finds under it.  This separates "the window
     // never got the click" from "an item above the plot swallowed it".
-    if (ovEnvFlag ("ONYXTEON_HITTEST"))
+    if (ovEnvFlag ("OVERTEON_HITTEST"))
     {
         struct Trace : QObject
         {
@@ -1188,7 +1188,7 @@ int main (int argc, char** argv)
         if (hud)
         {
             auto* win = new QWidget (nullptr, Qt::Tool | Qt::WindowStaysOnTopHint);
-            win->setWindowTitle (QStringLiteral ("OnyxTEON hit-test"));
+            win->setWindowTitle (QStringLiteral ("Overteon hit-test"));
             win->setStyleSheet (QStringLiteral (
                 "QWidget{background:#16181d;color:#e7ebf2}"
                 "QLabel{font-family:monospace;font-size:11px;color:#e7ebf2}"
@@ -1288,7 +1288,7 @@ int main (int argc, char** argv)
 
         // Prove the event loop is alive independently of the render loop: a
         // plain QTimer that fires even if nothing is ever painted.
-        if (ovEnvFlag ("ONYXTEON_FPS"))
+        if (ovEnvFlag ("OVERTEON_FPS"))
         {
             auto* beat = new QTimer (&view);
             beat->setInterval (1000);
@@ -1302,7 +1302,7 @@ int main (int argc, char** argv)
         }
 
         // The only honest frame-rate number: frames the window presented.
-        if (ovEnvFlag ("ONYXTEON_FPS"))
+        if (ovEnvFlag ("OVERTEON_FPS"))
         {
             // Is the window exposed at all?  A QQuickWindow that never gets an
             // expose does not run its render loop.

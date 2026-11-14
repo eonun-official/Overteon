@@ -35,7 +35,7 @@
 namespace ovctl
 {
 
-inline constexpr std::uint64_t kMagic   = 0x4F4E5958'43544C42ull;  // "ONYX CTLB"
+inline constexpr std::uint64_t kMagic   = 0x4F564552'43544C42ull;  // "OVER CTLB"
 inline constexpr int           kSlots   = 256;
 inline constexpr int           kIdChars = 40;
 inline constexpr double        kDefaultTau = 0.35;   // seconds; a human-ish drag

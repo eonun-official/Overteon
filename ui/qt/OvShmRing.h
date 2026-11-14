@@ -83,7 +83,7 @@ struct Header
     alignas (kCacheLine) std::atomic<std::uint64_t> timestampNs { 0 };
 };
 
-inline constexpr std::uint64_t kMagic = 0x4F4E5958'52494E47ull;   // "ONYX RING"
+inline constexpr std::uint64_t kMagic = 0x4F564552'52494E47ull;   // "OVER RING"
 
 /// A mapped ring of T.  Create or attach; both sides get the same object.
 template <typename T, std::size_t Capacity>

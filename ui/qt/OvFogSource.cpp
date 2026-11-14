@@ -114,7 +114,7 @@ QSGNode* OvFogSource::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
         {
             m_paintFps = frames / dt;
             frames = 0; t0 = std::chrono::steady_clock::now();
-            if (ovEnvFlag ("ONYXTEON_FOGRATE"))
+            if (ovEnvFlag ("OVERTEON_FOGRATE"))
                 std::fprintf (stderr, "[fogr] repaint %.1f/s\n", m_paintFps);
         }
     }

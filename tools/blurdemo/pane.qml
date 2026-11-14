@@ -1,5 +1,5 @@
 import QtQuick
-import OnyxTEON 1.0
+import Overteon 1.0
 
 // 2x2 in ONE image file:
 //   left column   the photo, untouched

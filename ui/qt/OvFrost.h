@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  OnyxTEON Qt/QML UI — the design's frosted glass.
+//  Overteon Qt/QML UI — the design's frosted glass.
 //
 //  web_fx/index.html does not use backdrop-filter for the glass: plug-in hosts
 //  ignore it, so the page computes the blur itself in FrostEngine.  This is the

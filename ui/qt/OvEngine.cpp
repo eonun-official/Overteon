@@ -95,7 +95,7 @@ void OvEngine::lightTick()
         emit lightChanged();
     }
 
-    if (ovEnvFlag ("ONYXTEON_METERDBG"))
+    if (ovEnvFlag ("OVERTEON_METERDBG"))
     {
         std::fprintf (stderr, "[l] %.3f  out %6.2f dB  in %6.2f dB  "
                               "light out %.4f in %.4f\n",
@@ -252,7 +252,7 @@ void OvEngine::tick()
                     changed = true;
                 }
             }
-        // ONYXTEON_ENGDBG: what the poll actually saw, once a second.
+        // OVERTEON_ENGDBG: what the poll actually saw, once a second.
         //
         // Without this, "the spectrum is not moving" has a dozen possible
         // causes that all look identical on screen.  These three counters
@@ -261,7 +261,7 @@ void OvEngine::tick()
         // three at zero means the audio never arrived; changed at zero with the
         // other two moving means the data is constant, which is what a muted
         // or unconnected input looks like.
-        if (ovEnvFlag ("ONYXTEON_ENGDBG"))
+        if (ovEnvFlag ("OVERTEON_ENGDBG"))
         {
             static int nIn = 0, nOut = 0, nCh = 0, nPoll = 0;
             static auto t0 = std::chrono::steady_clock::now();

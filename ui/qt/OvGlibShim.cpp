@@ -3,7 +3,7 @@
 // WHY THIS EXISTS
 //
 // A JUCE LV2 UI on Linux can only be an X11UI, so the host has to load
-// libOnyxTEON.so into its own process.  That pulls in Qt6Network:
+// libOverteon.so into its own process.  That pulls in Qt6Network:
 //
 //     Qt6Qml's CMake target has Qt6Network in __qt_Qml_target_deps, and
 //     libQt6Qml.so.6 both NEEDs it and references 18 QNetwork* symbols, so it
@@ -16,7 +16,7 @@
 // that copy predates g_uri_parse (glib 2.66), g_strv_builder_* and
 // g_string_replace (2.68).  So the moment the host dlopen()s the plug-in:
 //
-//     lilv_lib_open(): error: Failed to open library .../libOnyxTEON.so
+//     lilv_lib_open(): error: Failed to open library .../libOverteon.so
 //     (/usr/lib/libproxy/libpxbackend-1.0.so: undefined symbol:
 //      g_strv_builder_unref)
 //

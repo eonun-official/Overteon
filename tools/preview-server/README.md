@@ -19,7 +19,7 @@ dub build --compiler=ldc2 --build=release     # first build fetches vibe.d
 |---|---|
 | `/` | landing page |
 | `/original` | the **original** HTML+CSS — `web_fx/index.html` extracted from `~/SupersawOmega.rar` into `reference/original/web_fx` |
-| `/current` | the current UI (FrostEngine dual-Kawase blur, ONYX\|TEON) |
+| `/current` | the current UI (FrostEngine dual-Kawase blur, OVER\|TEON) |
 | `/compare` | both side by side in iframes |
 | `/raw/original`, `/raw/current` | the untouched `index.html` files |
 | `/edix.otf`, `/eonun_logo.png` | assets (identical in both trees) |

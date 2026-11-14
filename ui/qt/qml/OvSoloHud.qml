@@ -3,7 +3,7 @@ import QtQuick
 // ============================================================================
 //  The solo read-out: one rate per widget, measured by that widget.
 //
-//  ONYXTEON_SOLO=each (or a list) hides everything but the named widgets, and
+//  OVERTEON_SOLO=each (or a list) hides everything but the named widgets, and
 //  this panel says how fast each of them is actually updating.  The numbers are
 //  the widgets' own — a plot counts inside its paint(), the fog inside its own —
 //  so they answer "how expensive is THIS", which a window frame rate cannot:
@@ -95,7 +95,7 @@ Item {
                 }
                 Text {
                     // The alpha this widget is drawn at.  Only shown when
-                    // ONYXTEON_SOLO_OPACITY faded something, so a capture
+                    // OVERTEON_SOLO_OPACITY faded something, so a capture
                     // always says how faint the picture was when it was
                     // taken — a diff against a full-strength shot would
                     // otherwise be noise.

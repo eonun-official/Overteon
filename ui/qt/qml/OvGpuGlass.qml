@@ -46,7 +46,7 @@ Item {
     property color  accent: "transparent"
     property real   glow: 0.0               // 0..1, already level^2
     property real   saturation: 0.85
-    /// ONYXTEON_NOFROST=1 turns every glass surface off, so a reference capture
+    /// OVERTEON_NOFROST=1 turns every glass surface off, so a reference capture
     /// really has none.  Without this the "no frost" image still carried the GPU
     /// glass and every A/B against it read as zero difference.
     /// Whether this glass draws at all.  NOT named `enabled`: QQuickItem

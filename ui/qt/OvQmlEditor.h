@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  OnyxTEON Qt/QML UI — JUCE editor that hosts the QML front end.
+//  Overteon Qt/QML UI — JUCE editor that hosts the QML front end.
 //
 //  The plug-in keeps JUCE for DSP / parameters / host integration; only the
 //  editor is Qt.  One QGuiApplication is created lazily for the whole process,

@@ -54,10 +54,10 @@ inline void ovRegisterQmlTypes()
     if (done) return;
     done = true;
 
-    qmlRegisterType<OvEqView>   ("OnyxTEON", 1, 0, "OvEqView");
-    qmlRegisterType<OvFogSource> ("OnyxTEON", 1, 0, "OvFogSource");
-    qmlRegisterType<OvFrameProbe>("OnyxTEON", 1, 0, "OvFrameProbe");
-    qmlRegisterType<OvMeterView>("OnyxTEON", 1, 0, "OvMeterView");
-    qmlRegisterType<OvSeamFrost>("OnyxTEON", 1, 0, "OvSeamFrost");
-    qmlRegisterType<OvBlurTest>("OnyxTEON", 1, 0, "OvBlurTest");
+    qmlRegisterType<OvEqView>   ("Overteon", 1, 0, "OvEqView");
+    qmlRegisterType<OvFogSource> ("Overteon", 1, 0, "OvFogSource");
+    qmlRegisterType<OvFrameProbe>("Overteon", 1, 0, "OvFrameProbe");
+    qmlRegisterType<OvMeterView>("Overteon", 1, 0, "OvMeterView");
+    qmlRegisterType<OvSeamFrost>("Overteon", 1, 0, "OvSeamFrost");
+    qmlRegisterType<OvBlurTest>("Overteon", 1, 0, "OvBlurTest");
 }

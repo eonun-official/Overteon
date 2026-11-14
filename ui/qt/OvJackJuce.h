@@ -38,7 +38,7 @@
 class OvJackJuce : public OvJuceSource
 {
 public:
-    OvJackJuce (InjectorProcessor& processor, const std::string& clientName = "onyxpreview")
+    OvJackJuce (InjectorProcessor& processor, const std::string& clientName = "overpreview")
         : OvJuceSource (processor), proc (processor)
     {
         jack_status_t st {};
@@ -126,15 +126,15 @@ private:
         m_midi.clear();
         proc.processBlock (m_buf, m_midi);
 
-        // ONYXTEON_JACKDBG: the peak of the audio the callback actually got.
+        // OVERTEON_JACKDBG: the peak of the audio the callback actually got.
         //
         // The first thing to check when both spectra sit at zero: JACK names
         // clients, and a second client asking for a name that is taken is
-        // silently renamed ("onyxpreview" -> "onyxpreview-01").  Ports you then
+        // silently renamed ("overpreview" -> "overpreview-01").  Ports you then
         // connect by the old name belong to the OTHER process, this one sees
         // silence, and it reads exactly like a broken analyser.  A non-zero
         // peak here with zero spectra would mean the DSP, not the plumbing.
-        if (ovEnvFlag ("ONYXTEON_JACKDBG"))
+        if (ovEnvFlag ("OVERTEON_JACKDBG"))
         {
             float pk = 0.0f;
             for (int c = 0; c < 2; ++c)

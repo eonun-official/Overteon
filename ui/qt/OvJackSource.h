@@ -36,7 +36,7 @@
 class OvJackSource : public OvSource
 {
 public:
-    explicit OvJackSource (const std::string& clientName = "onyxpreview")
+    explicit OvJackSource (const std::string& clientName = "overpreview")
     {
         buildTable();
 

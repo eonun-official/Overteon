@@ -131,11 +131,11 @@ void bindQtToRealLibcrypto()
     static std::once_flag once;
     std::call_once (once, []
     {
-        const bool verbose = ovEnvFlag ("ONYXTEON_CRYPTOFIX_DEBUG");
+        const bool verbose = ovEnvFlag ("OVERTEON_CRYPTOFIX_DEBUG");
 
-        if (ovEnvFlag ("ONYXTEON_NOCRYPTFIX"))
+        if (ovEnvFlag ("OVERTEON_NOCRYPTFIX"))
         {
-            if (verbose) std::fprintf (stderr, "[crypto] disabled by ONYXTEON_NOCRYPTFIX\n");
+            if (verbose) std::fprintf (stderr, "[crypto] disabled by OVERTEON_NOCRYPTFIX\n");
             return;
         }
 

@@ -176,13 +176,13 @@ OvMeterView::OvMeterView (QQuickItem* parent) : QQuickPaintedItem (parent)
         if (stateKey() != before)
             update();
 
-        // ONYXTEON_METERDBG=1: the ballistic state, one line per display frame.
+        // OVERTEON_METERDBG=1: the ballistic state, one line per display frame.
         //
         // "The meters move like this / not like that" is not something a
         // screenshot can settle — a still frame looks the same whether the value
         // arrived by a curve or by a jump.  This prints the numbers the paint
         // uses, so the curve can be plotted (or diffed) from outside.
-        if (ovEnvFlag ("ONYXTEON_METERDBG"))
+        if (ovEnvFlag ("OVERTEON_METERDBG"))
         {
             std::fprintf (stderr, "[m] %.3f  in %6.2f %6.2f  out %6.2f %6.2f  "
                                   "peak in %6.2f out %6.2f  harm %.4f\n",
@@ -313,9 +313,9 @@ void OvMeterView::advance (double dt)
         m_harmFrac = ovb::dbToNorm (m_harmFall.shown, -kHarmFloorDb, kHarmFloorDb);
     }
     double f = m_harmFrac;
-    // test hook: ONYXTEON_HARM=0..1 pins the harmonic fraction so the ring's
+    // test hook: OVERTEON_HARM=0..1 pins the harmonic fraction so the ring's
     // colour ramp can be inspected at known values.
-    if (const char* h = std::getenv ("ONYXTEON_HARM"))
+    if (const char* h = std::getenv ("OVERTEON_HARM"))
         f = std::clamp (std::atof (h), 0.0, 1.0);
     m_harmFrac = f;
 }
@@ -458,7 +458,7 @@ void OvMeterView::drawPod (QPainter* g, PodPass pass)
 void OvMeterView::paint (QPainter* g)
 {
     ovtick::markKind ("paint-meter", ovtick::TickKind::PaintMeter);
-    if (ovEnvFlag ("ONYXTEON_FPS"))
+    if (ovEnvFlag ("OVERTEON_FPS"))
     {
         static int frames = 0;
         static auto t0 = std::chrono::steady_clock::now();
@@ -488,7 +488,7 @@ void OvMeterView::paint (QPainter* g)
     //  bleed must exceed 3 sigma of the widest (2.5 * 1.146 * 3 = 8.6 px) and
     //  the item must be taller than the art, or a painted item clips the halo
     //  at its own bounds — the SVG uses overflow:visible for the same reason.
-    if (! ovEnvFlag ("ONYXTEON_NOGLOW"))
+    if (! ovEnvFlag ("OVERTEON_NOGLOW"))
     {
         // Half device resolution for the halo.  A halo is only ever seen
         // through a 3 px Gaussian, so the extra pixels cannot be resolved;

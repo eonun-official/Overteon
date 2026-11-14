@@ -25,7 +25,7 @@ QSGNode* OvFrameProbe::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 {
     // This is the tick: the renderer reached this widget's subtree.
     m_frames++;
-    if (ovEnvFlag ("ONYXTEON_PROBEDEBUG") && m_frames % 120 == 0)
+    if (ovEnvFlag ("OVERTEON_PROBEDEBUG") && m_frames % 120 == 0)
         std::fprintf (stderr, "[probe] %s %llu\n",
                       qPrintable (objectName()), (unsigned long long) m_frames);
     // No node: nothing to draw.  Returning null does not stop Qt from calling

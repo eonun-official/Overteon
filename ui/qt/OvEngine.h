@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  OnyxTEON Qt/QML UI — engine facade handed to QML as `engine`.
+//  Overteon Qt/QML UI — engine facade handed to QML as `engine`.
 //
 //  Everything QML needs lives here: the parameter map (objects with
 //  bindable norm/value/display), metering, spectrum, presets and the

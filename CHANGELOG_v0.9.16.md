@@ -1,8 +1,8 @@
-# OnyxTEON v0.9.16 — 改动日志
+# Overteon v0.9.16 — 改动日志
 
 记录时间：2026-11-11
 上一版本：**`~/SupersawOmega.rar` 里的原始工程**（Overteon，WebView/HTML+CSS+JS 编辑器）
-当前版本：**OnyxTEON v0.9.16**（Qt6/QML 编辑器，RHI 渲染）
+当前版本：**Overteon v0.9.16**（Qt6/QML 编辑器，RHI 渲染）
 工作目录：`/home/x_x/build/Onyx-z/OnyxTEON`
 基线提交：`59f03d7 Initial import: Overteon JUCE plugin (LV2/VST3/Standalone) with CMake+Ninja build`
 当前提交：`5802aec Node editor: the box follows its node while a field is scrubbed`
@@ -26,22 +26,25 @@
 
 ## 一、版本与产品身份
 
-为了新旧两版能在同一个宿主里并排加载，OnyxTEON 用了独立身份。
-**参数 ID 一个都没改**，所以预设互通。
+产品身份保持**原版的**那一套 —— 名字、URI、bundle id、插件代码全部沿用，
+所以用旧版存过的工程打开后不需要重映射，`.hinj` 预设双向通用。
 
-| 项目 | 原始工程（Overteon） | 本版（OnyxTEON） |
-|------|---------------------|------------------|
-| 产品名 | `Overteon` | `OnyxTEON` |
-| LV2 URI | `https://eonun.com/plugins/Overteon` | `https://eonun.com/plugins/OnyxTEON` |
-| bundle id | `com.eonun.overteon` | `com.eonun.onyxteon` |
-| 插件代码 | `Ovtn` | `Onyx` |
-| bundle 名 | `Overteon.lv2` / `.vst3` | `OnyxTEON.lv2` / `.vst3` |
-| 预设目录 | `~/Eonun/Overteon Presets` | `~/Eonun/OnyxTEON Presets` |
-| QML import 命名空间 | — | `OnyxTEON 1.0` |
-| wordmark | `OVER\|TEON` | `ONYX\|TEON` |
-| 参数数量 | 58 | **58（完全相同）** |
-| 编辑器技术 | WebView + HTML/CSS/JS | Qt6/QML + RHI 场景图 |
-| 许可证 | BSD | BSD（仅动态链接 LGPL 的 Qt 模块） |
+| 项目 | 值 |
+|------|-----|
+| 产品名 | `Overteon` |
+| LV2 URI | `https://eonun.com/plugins/Overteon` |
+| bundle id | `com.eonun.overteon` |
+| 插件代码 | `Ovtn` |
+| bundle 名 | `Overteon.lv2` / `Overteon.vst3` |
+| 预设目录 | `~/Eonun/Overteon Presets` |
+| QML import 命名空间 | `Overteon 1.0` |
+| wordmark | `OVER\|TEON` |
+| 参数数量 | 58（与原版完全相同） |
+| 编辑器技术 | Qt6/QML + RHI 场景图 |
+| 许可证 | BSD（仅动态链接 LGPL 的 Qt 模块） |
+
+> 因为身份就是原版的那一套，这个构建和原版 WebView 构建**不能并排安装** ——
+> 二选一。开发期为了让两者共存曾用过独立的 `ONYXTEON` 身份，现已取消。
 
 ---
 
@@ -160,7 +163,7 @@ Qt 6 **没有** RHI 版的 QPainter 引擎 —— 只有 `raster`（CPU）和
 
 - **`efe6184`** 雾化重新跟随实时拖动；`ovctl` 通过 MIT SHM 驱动参数
 - **`1259985`** `ovctl` 改为**附着**而非创建，命令之间不再互相擦除
-- **`307f8d1`** `ONYXTEON_SOLO_OPACITY`，单独看某个控件时能透视到下层
+- **`307f8d1`** `OVERTEON_SOLO_OPACITY`，单独看某个控件时能透视到下层
 
 ```sh
 ./build/overteon-qml-preview --size 1040x772 --preset /tmp/flat.hinj --ctl ovctl
@@ -252,7 +255,7 @@ cmake -DOVERTEON_RESIZABLE_WINDOW=ON ..   # 允许宿主拉伸编辑器
 
 关与开在构建产物里的差别是可查的：
 
-| 构建 | 生成的 `OnyxTEON.lv2/ui.ttl` 里 |
+| 构建 | 生成的 `Overteon.lv2/ui.ttl` 里 |
 |------|--------------------------------|
 | 默认（OFF） | `lv2:optionalFeature ui:noUserResize` |
 | `-DOVERTEON_RESIZABLE_WINDOW=ON` | `lv2:optionalFeature ui:resize` |
@@ -360,18 +363,18 @@ cmake -S . -B build -G Ninja -DOVERTEON_RESIZABLE_WINDOW=ON
 产物：
 
 ```
-build/HarmonicInjector_artefacts/Release/LV2/OnyxTEON.lv2/libOnyxTEON.so
-build/HarmonicInjector_artefacts/Release/VST3/OnyxTEON.vst3/Contents/x86_64-linux/OnyxTEON.so
-build/HarmonicInjector_artefacts/Release/VST/libOnyxTEON.so
+build/HarmonicInjector_artefacts/Release/LV2/Overteon.lv2/libOverteon.so
+build/HarmonicInjector_artefacts/Release/VST3/Overteon.vst3/Contents/x86_64-linux/Overteon.so
+build/HarmonicInjector_artefacts/Release/VST/libOverteon.so
 ```
 
-安装（VST2 的文件名必须是 `<Name>.so`，不能是 `libOnyxTEON.so`）：
+安装（VST2 的文件名必须是 `<Name>.so`，不能是 `libOverteon.so`）：
 
 ```sh
-cp build/HarmonicInjector_artefacts/Release/LV2/OnyxTEON.lv2/*    ~/.lv2/OnyxTEON.lv2/
-cp build/HarmonicInjector_artefacts/Release/VST3/OnyxTEON.vst3/Contents/x86_64-linux/OnyxTEON.so \
-   ~/.vst3/OnyxTEON.vst3/Contents/x86_64-linux/
-cp build/HarmonicInjector_artefacts/Release/VST/libOnyxTEON.so ~/.vst/OnyxTEON.so
+cp build/HarmonicInjector_artefacts/Release/LV2/Overteon.lv2/*    ~/.lv2/Overteon.lv2/
+cp build/HarmonicInjector_artefacts/Release/VST3/Overteon.vst3/Contents/x86_64-linux/Overteon.so \
+   ~/.vst3/Overteon.vst3/Contents/x86_64-linux/
+cp build/HarmonicInjector_artefacts/Release/VST/libOverteon.so ~/.vst/Overteon.so
 ```
 
 ### 运行环境的几条硬性规定

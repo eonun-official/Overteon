@@ -13,17 +13,17 @@
 #    ./demo.sh wine start|stop|status [extra args]
 #    ./demo.sh all start|stop|status
 #
-#  RUN_DIR defaults to /tmp/onyxteon-demo
+#  RUN_DIR defaults to /tmp/overteon-demo
 # ===========================================================================
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
-RUN_DIR=${RUN_DIR:-/tmp/onyxteon-demo}
+RUN_DIR=${RUN_DIR:-/tmp/overteon-demo}
 mkdir -p "$RUN_DIR"
 
 LV2_DEFAULT="$ROOT/build/HarmonicInjector_artefacts/Release/LV2"
-URI_OnyxTEON="https://eonun.com/plugins/OnyxTEON"
+URI_Overteon="https://eonun.com/plugins/Overteon"
 
 # ---- helpers --------------------------------------------------------------
 pid_of()      { [ -f "$RUN_DIR/$1.pid" ] && cat "$RUN_DIR/$1.pid" || echo ""; }
@@ -91,7 +91,7 @@ do_jalv() {
                 DISPLAY=:3 \
                 JACK_DEFAULT_SERVER=ovtest \
                 LV2_PATH="$lv2:$HOME/.lv2:/usr/lib/lv2" \
-                jalv.gtk3 -s "$URI_OnyxTEON" ;;
+                jalv.gtk3 -s "$URI_Overteon" ;;
         stop)   stop_name jalv ;;
         status) status_name jalv ;;
     esac
@@ -123,7 +123,7 @@ do_wine() {
                 WINEPREFIX="$HOME/.wine-onyx" \
                 DISPLAY="${WINE_DISPLAY:-:3}" \
                 WINEDEBUG=-all \
-                ${WINE_FPS:+ONYXTEON_FPS=1} \
+                ${WINE_FPS:+OVERTEON_FPS=1} \
                 wine "$EXE" --size "${WINE_SIZE:-1040x772}" "${@:2}" ;;
         stop)   stop_name wine ;;
         status) status_name wine ;;

@@ -1,5 +1,5 @@
 import QtQuick
-import OnyxTEON 1.0
+import Overteon 1.0
 
 // Overteon — Qt6/QML front end.
 // Layout numbers come straight from web_fx/index.html (#wrap is 1040x772);
@@ -21,9 +21,9 @@ Item {
 
     property var engine: null
 
-    // ONYXTEON_CPUFROST=1 falls back to the QImage glass, for comparisons.
+    // OVERTEON_CPUFROST=1 falls back to the QImage glass, for comparisons.
     property bool cpuFrost: (typeof ovCpuFrost !== "undefined") ? ovCpuFrost : false
-    // ONYXTEON_NOFROST: no glass of any kind, for reference captures.
+    // OVERTEON_NOFROST: no glass of any kind, for reference captures.
     property bool anyFrost: ! ((typeof ovNoFrost !== "undefined") && ovNoFrost)
 
     // The root fills the window, whatever size it is.
@@ -81,16 +81,16 @@ Item {
         return Math.round (designPx * fitScale) / fitScale
     }
 
-    // ---- ONYXTEON_SOLO: show only the named widgets ----------------------
+    // ---- OVERTEON_SOLO: show only the named widgets ----------------------
     //
     // A frame rate for the whole window cannot say WHERE the time goes.  This
     // lets a run hide everything except one widget, so the cost can be
     // attributed instead of guessed:
     //
-    //     ONYXTEON_SOLO=plots      only the two EQ plots
-    //     ONYXTEON_SOLO=fog        only the overflow fog
-    //     ONYXTEON_SOLO=seam       only the seam glass
-    //     ONYXTEON_SOLO=deck       only the bottom strip
+    //     OVERTEON_SOLO=plots      only the two EQ plots
+    //     OVERTEON_SOLO=fog        only the overflow fog
+    //     OVERTEON_SOLO=seam       only the seam glass
+    //     OVERTEON_SOLO=deck       only the bottom strip
     //
     // Empty means "everything", which is the normal case.
     readonly property var soloList: {
@@ -104,7 +104,7 @@ Item {
         return soloList === null || soloList.indexOf (name) >= 0
     }
 
-    // ---- ONYXTEON_SOLO_OPACITY: fade what survives the solo ---------------
+    // ---- OVERTEON_SOLO_OPACITY: fade what survives the solo ---------------
     //
     // Solo HIDES every widget it was not given.  That is right for attributing
     // a frame cost, but useless for comparing two renders: one widget per run
@@ -112,14 +112,14 @@ Item {
     // solo path exactly as it is — same composite, same probes, same numbers —
     // and lets the named widgets be seen through:
     //
-    //     ONYXTEON_SOLO=plots,fog ONYXTEON_SOLO_OPACITY=0.5
+    //     OVERTEON_SOLO=plots,fog OVERTEON_SOLO_OPACITY=0.5
     //         both at half strength, so a one-pixel disagreement reads as a
     //         doubled edge instead of being hidden behind the top one
     //
-    //     ONYXTEON_SOLO_OPACITY=plots=1,fog=0.25,seam=0.4
+    //     OVERTEON_SOLO_OPACITY=plots=1,fog=0.25,seam=0.4
     //         per widget; a bare number sets the default for the rest
     //
-    // A value of 1 (the default) is no fade at all, and with no ONYXTEON_SOLO
+    // A value of 1 (the default) is no fade at all, and with no OVERTEON_SOLO
     // the setting is ignored entirely — a normal run is untouched, because
     // fading the real UI is not something this switch should ever do by itself.
     readonly property var soloOpacityMap: {
@@ -158,7 +158,7 @@ Item {
         return soloed (name) ? soloOpacityFor (name) : 0
     }
 
-    // ONYXTEON_NOFOG=1: the fog off, for a reference capture.
+    // OVERTEON_NOFOG=1: the fog off, for a reference capture.
     property bool anyFog: ! ((typeof ovNoFog !== "undefined") && ovNoFog)
 
     // The seam frost's height ON SCREEN, in logical pixels: 68 at 1:1, and 68
@@ -446,7 +446,7 @@ Item {
 
     Keys.onEscapePressed: { OvMenu.close(); about.close() }
     focus: true
-    // ---- ONYXTEON_SOLO read-out ------------------------------------------
+    // ---- OVERTEON_SOLO read-out ------------------------------------------
     // Each row is a widget's OWN rate, taken from that widget: the plots count
     // inside paint(), the fog inside its own paint.  Widgets that are pure QML
     // (the seam glass, the header, the deck) have no paint callback to count in,
@@ -496,7 +496,7 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
-    //  ONYXTEON_RULER=1 overlay: a labelled grid in WINDOW coordinates, drawn on
+    //  OVERTEON_RULER=1 overlay: a labelled grid in WINDOW coordinates, drawn on
     //  top of everything.  A screenshot then shows exactly where each element sits
     //  without any inference from item geometry or mapping APIs.
     // ---------------------------------------------------------------------------

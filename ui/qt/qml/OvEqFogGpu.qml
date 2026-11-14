@@ -1,5 +1,5 @@
 import QtQuick
-import OnyxTEON 1.0
+import Overteon 1.0
 
 // ============================================================================
 //  The EQ overflow fog, on the GPU, as ONE surface.
@@ -39,12 +39,12 @@ Item {
     /// See OvGpuGlass: `enabled` is QQuickItem's own property, so the fog uses
     /// its own name instead of shadowing it.
     property bool   active: true
-    /// ONYXTEON_FOGRAW=1: show the unblurred strokes.
+    /// OVERTEON_FOGRAW=1: show the unblurred strokes.
     property bool   raw: (typeof ovFogRaw !== "undefined") ? ovFogRaw : false
 
     visible: active && topView !== null && bottomView !== null
 
-    /// The surface's own paint rate, for ONYXTEON_SOLO.
+    /// The surface's own paint rate, for OVERTEON_SOLO.
     readonly property alias paintFps: srcItem.paintFps
 
     // srcItem emits the curve as QSGGeometry, so it renders on whatever RHI
@@ -167,6 +167,6 @@ Item {
     onYChanged:       settle.restart()
     onFitScaleChanged: settle.restart()
 
-    // ONYXTEON_FOGRAW: the unblurred strokes, to check the source on its own.
+    // OVERTEON_FOGRAW: the unblurred strokes, to check the source on its own.
 
 }

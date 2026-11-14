@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  OnyxTEON Qt/QML UI — header meter pod.
+//  Overteon Qt/QML UI — header meter pod.
 //
 //  Port of the #hpod SVG in web_fx/index.html: four hooked paths
 //  (OUT L/R in pink, IN L/R in teal) with a trailing peak-hold bar,

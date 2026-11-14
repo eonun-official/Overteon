@@ -1,8 +1,8 @@
 import QtQuick
-import OnyxTEON 1.0
+import Overteon 1.0
 
 // The floating header that sits on the seam between the two EQ halves:
-// ONYX|TEON wordmark, the curved meter pod with the harmonic ring, INIT.
+// OVER|TEON wordmark, the curved meter pod with the harmonic ring, INIT.
 // The soft frost behind the pod is .hdr::before in the design: an elliptical
 // backdrop blur of the EQ canvas underneath.
 Item {
@@ -34,7 +34,7 @@ Item {
         Row {
             id: logoRow
             Text {
-                text: "ONYX"
+                text: "OVER"
                 color: OvTheme.ink
                 font.family: OvTheme.displayFont
                 font.pixelSize: 18

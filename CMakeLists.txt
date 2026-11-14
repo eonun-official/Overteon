@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
-# OnyxTEON — the Qt6/QML fork of Overteon.  Separate product identity so both
+# Overteon — the Qt6/QML fork of Overteon.  Separate product identity so both
 # can be installed and loaded side by side in the same host:
 #   * own LV2 URI / bundle id / plug-in code
-#   * own bundle + product name (OnyxTEON.lv2, OnyxTEON.vst3)
+#   * own bundle + product name (Overteon.lv2, Overteon.vst3)
 #   * identical parameter IDs, so .hinj presets stay interchangeable.
-project(OnyxTEON VERSION 0.9.16)
+project(Overteon VERSION 0.9.16)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -168,11 +168,11 @@ juce_add_plugin(HarmonicInjector
     COMPANY_NAME "Eonun"
     COMPANY_WEBSITE "https://eonun.com"
     # Stable LV2 URIs/ids must never change after release, or hosts lose settings.
-    LV2URI "https://eonun.com/plugins/OnyxTEON"
+    LV2URI "https://eonun.com/plugins/Overteon"
     PLUGIN_MANUFACTURER_CODE Eonu
-    BUNDLE_ID com.eonun.onyxteon
+    BUNDLE_ID com.eonun.overteon
     HARDENED_RUNTIME_ENABLED TRUE
-    PLUGIN_CODE Onyx
+    PLUGIN_CODE Ovtn
     FORMATS ${PLUGIN_FORMATS}
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
@@ -181,7 +181,7 @@ juce_add_plugin(HarmonicInjector
     NEEDS_WEB_BROWSER ${OVERTEON_NEEDS_WEB_BROWSER}
     NEEDS_WEBVIEW2 ${OVERTEON_NEEDS_WEBVIEW2}
     COPY_PLUGIN_AFTER_BUILD FALSE
-    PRODUCT_NAME "OnyxTEON")
+    PRODUCT_NAME "Overteon")
 
 target_sources(HarmonicInjector PRIVATE
     src/FxProcessor.cpp)
@@ -276,7 +276,7 @@ if(OVERTEON_QT_UI)
         find_package(X11 REQUIRED)
         target_link_libraries(HarmonicInjector PRIVATE X11::X11)
         # XShapeCombineRectangles (input shape, used by the optional
-        # ONYXTEON_CLEAR_INPUT path) lives in libXext
+        # OVERTEON_CLEAR_INPUT path) lives in libXext
         foreach(_x11_ext X11::Xext Xext)
             if(TARGET ${_x11_ext})
                 target_link_libraries(HarmonicInjector PRIVATE ${_x11_ext})
@@ -385,7 +385,7 @@ if(OVERTEON_QT_UI)
             # Pull OvGlibShim.o out of the shared archive.
             #
             # Everything under the HarmonicInjector target lands in
-            # libOnyxTEON_SharedCode.a, and a static library only hands over a
+            # libOverteon_SharedCode.a, and a static library only hands over a
             # member for a symbol somebody references.  Nothing in our own code
             # calls these -- the reference lives in libpxbackend, in the host's
             # process -- so without an explicit request the linker never pulls
@@ -491,7 +491,7 @@ if(OVERTEON_QT_UI)
     endif()
 
     # headless check that the dual-Gaussian really blurs
-    add_executable(onyx-blur-test
+    add_executable(over-blur-test
         tools/units/blur_test.cpp
         ui/qt/OvEngine.cpp
         ui/qt/OvParam.cpp
@@ -500,22 +500,22 @@ if(OVERTEON_QT_UI)
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp)
-    target_include_directories(onyx-blur-test PRIVATE ui/qt)
-    target_link_libraries(onyx-blur-test PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
-    set_target_properties(onyx-blur-test PROPERTIES AUTOMOC ON)
+    target_include_directories(over-blur-test PRIVATE ui/qt)
+    target_link_libraries(over-blur-test PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+    set_target_properties(over-blur-test PROPERTIES AUTOMOC ON)
 
     # headless proof of the meter interpolation: smootherstep's C2 ends,
     # Catmull-Rom not overshooting, and a fall that takes the same time at
     # 15 Hz as at 120 Hz.  No Qt, no audio, no window -- it is arithmetic.
-    add_executable(onyx-ballistics-test tools/units/ballistics_test.cpp)
-    target_include_directories(onyx-ballistics-test PRIVATE ui/qt)
+    add_executable(over-ballistics-test tools/units/ballistics_test.cpp)
+    target_include_directories(over-ballistics-test PRIVATE ui/qt)
 
     # headless proof that the analyser is smooth: a steady signal's outline must
     # not move more than ~1 dB a frame, and the old 1/6-octave/dB-domain chain is
     # built beside it for comparison.  Same conditions, same source, so the two
     # numbers are a measurement rather than a memory.
-    add_executable(onyx-spectrum-test tools/units/spectrum_test.cpp)
-    target_include_directories(onyx-spectrum-test PRIVATE ui/qt)
+    add_executable(over-spectrum-test tools/units/spectrum_test.cpp)
+    target_include_directories(over-spectrum-test PRIVATE ui/qt)
 endif()
 
 # Platform switch used by the sources: Windows vs. everything unix-like

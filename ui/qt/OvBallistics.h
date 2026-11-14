@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  OnyxTEON — how every meter moves.  ONE file, because it was five.
+//  Overteon — how every meter moves.  ONE file, because it was five.
 //
 //  The bars, the peak trail, the harmonic ring, the accent light, the spectrum
 //  fill and the 32 glow bands each carried their own copy of this maths, and

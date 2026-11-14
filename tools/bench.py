@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bench.py — measure the OnyxTEON preview: CPU, FPS and pixel drift.
+"""bench.py — measure the Overteon preview: CPU, FPS and pixel drift.
 
 Three numbers, because "it feels slow" and "it uses CPU" are different things:
 
@@ -38,7 +38,7 @@ from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXE = os.path.join(ROOT, "build", "overteon-qml-preview")
-RUN = os.path.join(tempfile.gettempdir(), "onyx-bench")
+RUN = os.path.join(tempfile.gettempdir(), "over-bench")
 
 
 # --------------------------------------------------------------------------
@@ -231,9 +231,9 @@ def editor_window(display, pid=None):
 
     jalv.gtk3 nests it several levels down:
 
-        0x800000b "OnyxTEON"  846x694   the gtk toplevel
+        0x800000b "Overteon"  846x694   the gtk toplevel
           ...
-            0xd000011 "OnyxTEON" 1094x813  <-- the Qt editor itself
+            0xd000011 "Overteon" 1094x813  <-- the Qt editor itself
 
     Two things had to be learned the hard way here:
 
@@ -244,7 +244,7 @@ def editor_window(display, pid=None):
     * `wmctrl -lp` does not list this window on a real desktop (it is not
       managed by the WM there), so looking it up by PID finds nothing on :0
       while working on Xephyr.  The X class is the reliable handle: the editor
-      is the window whose WM_CLASS is OnyxTEON.
+      is the window whose WM_CLASS is Overteon.
 
     Note the editor is LARGER than its parent on a HiDPI display (1094x813 for
     a 840x624 socket at 1.302) — the Qt window is sized in device pixels.
@@ -254,10 +254,10 @@ def editor_window(display, pid=None):
                           capture_output=True, text=True).stdout
     best = None
     for line in tree.splitlines():
-        # The editor's X class.  jalv.gtk3 names its wrapper window "OnyxTEON"
+        # The editor's X class.  jalv.gtk3 names its wrapper window "Overteon"
         # too but with class Jalv.gtk3, so the class is what separates the Qt
         # window from the host's frame.
-        if '"OnyxTEON" "OnyxTEON"' not in line and '("OnyxTEON" "OnyxTEON")' not in line:
+        if '"Overteon" "Overteon"' not in line and '("Overteon" "Overteon")' not in line:
             continue
         m = re.match(r"^(\s*)(0x[0-9a-f]+)\s", line)
         if not m:
@@ -287,10 +287,10 @@ def editor_window_state(display):
                           capture_output=True, text=True).stdout
     best = None
     for line in tree.splitlines():
-        # The editor's X class.  jalv.gtk3 names its wrapper window "OnyxTEON"
+        # The editor's X class.  jalv.gtk3 names its wrapper window "Overteon"
         # too but with class Jalv.gtk3, so the class is what separates the Qt
         # window from the host's frame.
-        if '"OnyxTEON" "OnyxTEON"' not in line and '("OnyxTEON" "OnyxTEON")' not in line:
+        if '"Overteon" "Overteon"' not in line and '("Overteon" "Overteon")' not in line:
             continue
         m = re.match(r"^(\s*)(0x[0-9a-f]+)\s", line)
         sz = re.search(r"(\d+)x(\d+)\+", line)
@@ -403,7 +403,7 @@ def shots_from_exe(size="1040x772", display=":3"):
 #
 #  The chain built here is:
 #
-#      mpv --ao=jack ──► OnyxTEON (jalv) ──► system playback
+#      mpv --ao=jack ──► Overteon (jalv) ──► system playback
 #         FLAC file        the plug-in          JACK
 #
 #  A PRIVATE jackd is started for this (`-n ovtest -d dummy`), so the user's own
@@ -672,7 +672,7 @@ def run_standalone(args):
                                    "--jack-name", args.jack_name], "preview",
                        {"DISPLAY": args.display,
                         "JACK_DEFAULT_SERVER": JACK_SERVER,
-                        "ONYXTEON_FPS": "1", **vgl_env})
+                        "OVERTEON_FPS": "1", **vgl_env})
 
         # The client is named explicitly, so this cannot pick up another
         # preview's ports.  JACK appends nothing when the name is free; when it
@@ -844,7 +844,7 @@ def run_carla(args):
         # Carla registers the ports under the plug-in name, not a short client
         # name, so they are looked up by the plug-in's own name.
         def carla_ports():
-            return [x for x in jack_ports() if x.startswith("OnyxTEON:")]
+            return [x for x in jack_ports() if x.startswith("Overteon:")]
         if not carla.wait_port(lambda: len(carla_ports()) >= 4, timeout=40):
             print("FAIL: carla never registered the plug-in's ports")
             print((carla.log_text() or "")[-1500:])
@@ -896,7 +896,7 @@ def run_carla(args):
                                   capture_output=True, text=True).stdout
             best = None
             for line in tree.splitlines():
-                if '"OnyxTEON" "OnyxTEON"' not in line:
+                if '"Overteon" "Overteon"' not in line:
                     continue
                 m = re.match(r"^(\s*)(0x[0-9a-f]+)\s", line)
                 sz = re.search(r"(\d+)x(\d+)\+", line)
@@ -1028,7 +1028,7 @@ def run_jalv(args):
         # `-i` (non-interactive) is dropped for -G: it swallows keyboard input
         # that the gtk host needs for the embedded editor.
         binary = "jalv.gtk3" if args.ui else "jalv"
-        jalv_argv = [binary, "-l", "1024", "-n", "onyx"]
+        jalv_argv = [binary, "-l", "1024", "-n", "over"]
         jalv_argv += ["-s"] if args.ui else ["-i"]
         jalv_argv.append(LV2_URI)
         print(f"jalv          {binary}{' with the plug-in UI' if args.ui else ' headless'}"
@@ -1040,7 +1040,7 @@ def run_jalv(args):
         else:
             vgl_argv, vgl_env = [], {}
         jalv = Proc(vgl_argv + jalv_argv, "jalv", {**jalv_env, **vgl_env})
-        if not jalv.wait_port(lambda: len(jack_ports("onyx:")) > 2, timeout=25):
+        if not jalv.wait_port(lambda: len(jack_ports("over:")) > 2, timeout=25):
             print("FAIL: the plug-in did not register its JACK ports")
             print((jalv.log_text() or "")[-2000:])
             return finish(results, args)
@@ -1048,10 +1048,10 @@ def run_jalv(args):
         # are sorted by the trailing number rather than trusted to arrive in
         # order — connecting L to R is silent and looks like a broken plug-in.
         def numbered(prefix):
-            got = [p for p in jack_ports("onyx:") if p.startswith("onyx:" + prefix)]
+            got = [p for p in jack_ports("over:") if p.startswith("over:" + prefix)]
             return sorted(got, key=lambda q: int(re.sub(r"\D", "", q) or 0))
         ports_in, ports_out = numbered("audio_in_"), numbered("audio_out_")
-        results["jalv"] = {"pid": jalv.pid, "ports": jack_ports("onyx:"),
+        results["jalv"] = {"pid": jalv.pid, "ports": jack_ports("over:"),
                            "inputs": ports_in, "outputs": ports_out}
         print(f"              {len(jack_ports('onyx:'))} ports, "
               f"{len(ports_in)} in / {len(ports_out)} out")
@@ -1266,7 +1266,7 @@ def main():
                     help="audio file mpv plays into the plug-in (--jalv only)")
     ap.add_argument("--seconds", type=float, default=6.0,
                     help="measurement window in seconds (--jalv only)")
-    ap.add_argument("--jack-name", default="onyxpreview",
+    ap.add_argument("--jack-name", default="overpreview",
                     help="JACK client name for the preview (-Gs). Two previews "
                          "on one server CANNOT share it: JACK silently renames "
                          "the second to name-01, so the ports this bench then "
@@ -1310,7 +1310,7 @@ def main():
         print(f"reference written to {args.ref_save}")
         return 0
 
-    print(f"OnyxTEON benchmark — display {args.display}, {args.size}\n")
+    print(f"Overteon benchmark — display {args.display}, {args.size}\n")
 
     # ---- style: two renders of the same build must be identical -----------
     print("style (determinism)")
@@ -1333,7 +1333,7 @@ def main():
     # ---- live: cpu, fps, animation ---------------------------------------
     print("\nlive  (mock meters running)")
     inst = Instance(args.display, ["--size", args.size],
-                    {"ONYXTEON_FPS": "1"})
+                    {"OVERTEON_FPS": "1"})
     try:
         if not inst.wait_ready():
             print("  FAIL  the window never appeared")
@@ -1375,7 +1375,7 @@ def main():
     if not args.quick:
         print("\nidle  (--freeze: mock data pinned, nothing to redraw)")
         inst = Instance(args.display, ["--size", args.size, "--freeze"],
-                        {"ONYXTEON_FPS": "1"})
+                        {"OVERTEON_FPS": "1"})
         try:
             if not inst.wait_ready():
                 print("  FAIL  the window never appeared")

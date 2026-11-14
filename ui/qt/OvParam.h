@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================
-//  OnyxTEON Qt/QML UI — one parameter, exposed to QML as an object.
+//  Overteon Qt/QML UI — one parameter, exposed to QML as an object.
 // ============================================================
 #include <QObject>
 #include <QString>

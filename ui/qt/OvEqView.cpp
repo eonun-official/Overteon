@@ -235,7 +235,7 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickItem (parent)
         }
         if (std::exchange (m_dirty, false))
         {
-            if (ovEnvFlag ("ONYXTEON_NODECOUNT"))
+            if (ovEnvFlag ("OVERTEON_NODECOUNT"))
             {
                 static int k = 0;
                 if (k++ < 30)
@@ -255,9 +255,9 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickItem (parent)
     // judgements about a particular kind of material, and the person making
     // them should not have to wait for a build:
     //
-    //     ONYXTEON_SPECREL=0.15   seconds; the outline falls 4.343/tau dB/s
-    //     ONYXTEON_SPECATT=0.06   seconds
-    //     ONYXTEON_SPECSIGMA=1.7  bins; 1.7 ~ 1/3 octave, 2.5 ~ 1/2 octave
+    //     OVERTEON_SPECREL=0.15   seconds; the outline falls 4.343/tau dB/s
+    //     OVERTEON_SPECATT=0.06   seconds
+    //     OVERTEON_SPECSIGMA=1.7  bins; 1.7 ~ 1/3 octave, 2.5 ~ 1/2 octave
     //
     // Ignored when the value is not a positive number, so a typo cannot turn
     // the analyser off.
@@ -269,9 +269,9 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickItem (parent)
             if (std::isfinite (d) && d > 0.0) dst = d;
         }
     };
-    tune ("ONYXTEON_SPECATT",   m_specBall.attackTau);
-    tune ("ONYXTEON_SPECREL",   m_specBall.releaseTau);
-    tune ("ONYXTEON_SPECSIGMA", m_specBall.freqSigma);
+    tune ("OVERTEON_SPECATT",   m_specBall.attackTau);
+    tune ("OVERTEON_SPECREL",   m_specBall.releaseTau);
+    tune ("OVERTEON_SPECSIGMA", m_specBall.freqSigma);
 }
 
 void OvEqView::setEngine (OvEngine* e)
@@ -303,7 +303,7 @@ void OvEqView::setEngine (OvEngine* e)
         // window 158 fps, 109 % of one core).  That is 5 MB of texture per
         // frame for data that had not changed.
         connect (m_engine, &OvEngine::spectrumChanged, this, [this] {
-            if (ovEnvFlag ("ONYXTEON_NODECOUNT"))
+            if (ovEnvFlag ("OVERTEON_NODECOUNT"))
             {
                 static int k = 0;
                 if (k++ < 3) std::fprintf (stderr, "[nc] %s spectrumChanged\n",
@@ -602,7 +602,7 @@ struct OvPaintTimer
     const char* name;
     explicit OvPaintTimer (const char* n) : name (n)
     {
-        if (ovEnvFlag ("ONYXTEON_PROFILE")) t0 = std::chrono::steady_clock::now();
+        if (ovEnvFlag ("OVERTEON_PROFILE")) t0 = std::chrono::steady_clock::now();
         else t0 = std::chrono::steady_clock::time_point();
     }
     ~OvPaintTimer()
@@ -835,7 +835,7 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     // drag frame leaked a 1040x333 texture and the window slowed down as it ran.
     for (QSGTexture* t : m_texRetired) delete t;
     m_texRetired.clear();
-    if (ovEnvFlag ("ONYXTEON_NODERATE"))
+    if (ovEnvFlag ("OVERTEON_NODERATE"))
     {
         static int n = 0;
         static auto t0 = std::chrono::steady_clock::now();
@@ -876,7 +876,7 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     }
     if (window() == nullptr) return old;
 
-    if (ovEnvFlag ("ONYXTEON_NONODE")) return old;
+    if (ovEnvFlag ("OVERTEON_NONODE")) return old;
 
     OvEqView::Layers L;
     buildLayers (L);
@@ -933,7 +933,7 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     // zero vertices.
     {
         auto* sp = static_cast<SpectrumNode*> (m_sgSpectrum);
-        const int n = ovEnvFlag ("ONYXTEON_ONLYBG")
+        const int n = ovEnvFlag ("OVERTEON_ONLYBG")
                     ? sp->rebuild (QVector<QPointF>(), 0.0, 1.0, L.accent)
                     : sp->rebuild (L.spectrum, L.spectrumBottom, L.spectrumTop, L.accent);
         if (n > 0 && ! m_spAttached)
@@ -1011,7 +1011,7 @@ void OvEqView::paint (QPainter* g)
     OvPaintTimer _p (m_prefix == QStringLiteral ("sc") ? "sc" : "pq");
 
     // This widget's own rate, counted where it actually paints.  Published to
-    // QML continuously (it is a few bytes per second) so ONYXTEON_SOLO can show
+    // QML continuously (it is a few bytes per second) so OVERTEON_SOLO can show
     // it; printed only when asked.
     {
         static int frames = 0;
@@ -1023,7 +1023,7 @@ void OvEqView::paint (QPainter* g)
         {
             m_paintFps = frames / dt;
             emit paintFpsChanged();
-            if (ovEnvFlag ("ONYXTEON_FPS"))
+            if (ovEnvFlag ("OVERTEON_FPS"))
                 std::fprintf (stderr, "[fps] %s %.1f fps\n",
                               m_prefix.toStdString().c_str(), m_paintFps);
             frames = 0;
@@ -1037,7 +1037,7 @@ void OvEqView::paint (QPainter* g)
     const double w = width(), h = height();
     const QColor accent (m_accent);
 
-    const bool prof = ovEnvFlag ("ONYXTEON_PROFILE");
+    const bool prof = ovEnvFlag ("OVERTEON_PROFILE");
     const auto tRender0 = std::chrono::steady_clock::now();
 
     // ---- draw, on the GPU ------------------------------------------------
@@ -1070,7 +1070,7 @@ void OvEqView::paint (QPainter* g)
         }
     }
 
-    if (ovEnvFlag ("ONYXTEON_HITTEST"))
+    if (ovEnvFlag ("OVERTEON_HITTEST"))
     {
         std::fprintf (stderr, "[paint] %s size=%.1fx%.1f nodes:",
                       m_prefix.toStdString().c_str(), w, h);
@@ -1137,7 +1137,7 @@ namespace
     SectionClock g_sections;
 }
 
-#define OV_MARK(label) do { if (ovEnvFlag ("ONYXTEON_PROFILE")) g_sections.mark (label); } while (0)
+#define OV_MARK(label) do { if (ovEnvFlag ("OVERTEON_PROFILE")) g_sections.mark (label); } while (0)
 
 const std::vector<double>& OvEqView::totalCurveY (double w, double h,
                                                  double top, double bottom, int step)
@@ -1571,15 +1571,15 @@ void OvEqView::buildLayers (Layers& out)
         float specRaw[128] = {};
         advanceSpectrum (spec, specRaw);
 
-        if (ovEnvFlag ("ONYXTEON_SPECDBG"))
+        if (ovEnvFlag ("OVERTEON_SPECDBG"))
         {
-            // ONYXTEON_SPECDBG=1 prints every 30th frame (a readable trace);
-            // ONYXTEON_SPECDBG=all prints every frame, which is what a
+            // OVERTEON_SPECDBG=1 prints every 30th frame (a readable trace);
+            // OVERTEON_SPECDBG=all prints every frame, which is what a
             // frame-to-frame smoothness measurement needs.  The whole 128-bin
             // array is printed either way: "it shakes" is a statement about
             // neighbouring bins, so 16 of them cannot answer it.
             static int n = 0;
-            const bool everyFrame = qEnvironmentVariable ("ONYXTEON_SPECDBG")
+            const bool everyFrame = qEnvironmentVariable ("OVERTEON_SPECDBG")
                                         .compare ("all", Qt::CaseInsensitive) == 0;
             if (everyFrame || ++n % 30 == 0)
             {
@@ -1652,7 +1652,7 @@ void OvEqView::fogSegments (const QPointF& origin, QVector<FogSegment>& out)
 {
     out.clear();
     if (m_engine == nullptr) return;
-    if (ovEnvFlag ("ONYXTEON_NOFOG")) return;
+    if (ovEnvFlag ("OVERTEON_NOFOG")) return;
 
     const double w = width(), h = height();
     if (w < 2.0 || h < 2.0) return;
@@ -1920,7 +1920,7 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
     }
 
     // The GPU glass in QML owns this surface now unless the CPU path is forced.
-    if (ovEnvFlag ("ONYXTEON_CPUFROST"))
+    if (ovEnvFlag ("OVERTEON_CPUFROST"))
         paintFrost (g, m_content, w, h, accent);
 }
 
@@ -1945,7 +1945,7 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
 bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
                               const float* spec, QRectF& dest)
 {
-    if (ovEnvFlag ("ONYXTEON_NOGLOW")) return false;
+    if (ovEnvFlag ("OVERTEON_NOGLOW")) return false;
     if (w < 8.0 || h < OvThemeBarHeight) return false;
 
     //   .controlpit{ left:50%; width:640px; height:32px; transform:translateX(-50%) }
@@ -2020,7 +2020,7 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
             if (m_glowShown[b] > 0.002) { anyFalling = true; }
         }
         m_glowFalling = anyFalling;
-        if (ovEnvFlag ("ONYXTEON_GLOWDBG"))
+        if (ovEnvFlag ("OVERTEON_GLOWDBG"))
         {
             static int n = 0;
             if (++n % 10 == 0)
@@ -2235,7 +2235,7 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
             // This is the glow that goes INTO the plot image; in the normal
             // (GPU glass) build the pod's glow is drawn by the shader on top of
             // this and this particular one is covered up.  It still has to be
-            // right, because ONYXTEON_CPUFROST=1 is the fallback for machines
+            // right, because OVERTEON_CPUFROST=1 is the fallback for machines
             // without working GL.
             //
             // 0.229 — measured, see the long note in glass.frag for the table
@@ -2423,7 +2423,7 @@ QImage OvEqView::gaussianBlur (const QImage& src, double sigma, double sat)
 void OvEqView::paintFrost (QPainter* g, const QImage& content,
                            double w, double h, const QColor& accent)
 {
-    if (ovEnvFlag ("ONYXTEON_NOFROST")) return;
+    if (ovEnvFlag ("OVERTEON_NOFROST")) return;
     if (content.isNull()) return;
 
     // The content image is in DEVICE pixels but is deliberately left untagged
@@ -2467,7 +2467,7 @@ void OvEqView::paintFrost (QPainter* g, const QImage& content,
         Q_UNUSED (scale);
     }
 
-    if (ovEnvFlag ("ONYXTEON_FROSTDEBUG"))
+    if (ovEnvFlag ("OVERTEON_FROSTDEBUG"))
     {
         std::fprintf (stderr, "[frost] %s strip=%.0fx%.0f capture=%dx%d dpr=%.2f\n",
                       m_prefix.toStdString().c_str(), strip.width(), strip.height(),
@@ -2596,7 +2596,7 @@ int OvEqView::nodeAt (const QPointF& pos) const
 
 void OvEqView::mousePressEvent (QMouseEvent* e)
 {
-    if (ovEnvFlag ("ONYXTEON_HITTEST"))
+    if (ovEnvFlag ("OVERTEON_HITTEST"))
         std::fprintf (stderr, "[eqpress] %s at (%.0f,%.0f) accepted=%d\n",
                       qPrintable (m_prefix), e->position().x(), e->position().y(),
                       int (acceptedMouseButtons()));
@@ -2608,7 +2608,7 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
 
     refreshNodePositions();
 
-    if (ovEnvFlag ("ONYXTEON_HITTEST"))
+    if (ovEnvFlag ("OVERTEON_HITTEST"))
     {
         std::fprintf (stderr, "[hit] %s size=%.1fx%.1f press=(%.1f,%.1f) nodes:",
                       m_prefix.toStdString().c_str(), width(), height(),

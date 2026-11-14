@@ -62,7 +62,7 @@ namespace
         // because the host owns the thread.  That is true for correctness of
         // the GUI thread, but it is exactly what makes the frame rate hostage
         // to the host's heartbeat.  Overridable for A/B measurement.
-        qputenv ("QSG_RENDER_LOOP", qEnvironmentVariable ("ONYXTEON_RENDERLOOP", "threaded").toLatin1());
+        qputenv ("QSG_RENDER_LOOP", qEnvironmentVariable ("OVERTEON_RENDERLOOP", "threaded").toLatin1());
         qputenv ("QT_QUICK_BACKEND", "opengl");
         QQuickWindow::setGraphicsApi (QSGRendererInterface::OpenGL);
 
@@ -75,7 +75,7 @@ namespace
         QCoreApplication::setAttribute (Qt::AA_PluginApplication);
 
         static int argc = 1;
-        static char arg0[] = "OnyxTEON";
+        static char arg0[] = "Overteon";
         static char* argv[] = { arg0, nullptr };
         new QGuiApplication (argc, argv);
 
@@ -154,7 +154,7 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
         //
         //     cmake -DOVERTEON_RESIZABLE_WINDOW=ON ..
         //
-        // ONYXTEON_FIXED_SIZE=0 still overrides at runtime, but only in builds
+        // OVERTEON_FIXED_SIZE=0 still overrides at runtime, but only in builds
         // where the feature was compiled in — it cannot widen a fixed build.
        #if OVERTEON_RESIZABLE_WINDOW
         setResizable (true, true);
@@ -163,7 +163,7 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
         // from dragging it down to something unreadable or up to a size that
         // costs more than it shows.
         setResizeLimits (OvThemeWidth / 2, OvThemeHeight / 2, 4096, 4096);
-        if (ovEnvFlag ("ONYXTEON_FIXED_SIZE"))
+        if (ovEnvFlag ("OVERTEON_FIXED_SIZE"))
             setResizable (false, false);
        #else
         setResizable (false, false);
@@ -171,7 +171,7 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
 
         setSize (want.x, want.y);
 
-        if (ovEnvFlag ("ONYXTEON_SIZEDBG"))
+        if (ovEnvFlag ("OVERTEON_SIZEDBG"))
         {
             const qreal dpr = QGuiApplication::primaryScreen()
                                 ? QGuiApplication::primaryScreen()->devicePixelRatio()
@@ -217,12 +217,12 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
             scale = scr->logicalDotsPerInch() / 96.0;
         impl->view->rootContext()->setContextProperty ("ovUiScale", scale);
         impl->view->rootContext()->setContextProperty (
-            "ovCpuFrost", qEnvironmentVariableIsSet ("ONYXTEON_CPUFROST"));
+            "ovCpuFrost", qEnvironmentVariableIsSet ("OVERTEON_CPUFROST"));
         impl->view->rootContext()->setContextProperty (
-            "ovNoFrost", qEnvironmentVariableIsSet ("ONYXTEON_NOFROST"));
+            "ovNoFrost", qEnvironmentVariableIsSet ("OVERTEON_NOFROST"));
         impl->view->rootContext()->setContextProperty (
             "ovGlassSigma",
-            qEnvironmentVariable ("ONYXTEON_GLASSSIGMA", "1.0").toDouble());
+            qEnvironmentVariable ("OVERTEON_GLASSSIGMA", "1.0").toDouble());
         // The glass chain renders at device resolution; it needs the ratio.
         {
             QScreen* scr = impl->view->screen();
@@ -270,7 +270,7 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
                 const auto want = targetSize();
                 if (want.x != getWidth() || want.y != getHeight())
                 {
-                    if (ovEnvFlag ("ONYXTEON_SIZEDBG"))
+                    if (ovEnvFlag ("OVERTEON_SIZEDBG"))
                         std::fprintf (stderr, "[size] re-applying %dx%d (was %dx%d)\n",
                                       want.x, want.y, getWidth(), getHeight());
                     setSize (want.x, want.y);
@@ -327,7 +327,7 @@ void OvQmlEditor::paint (juce::Graphics& g)
     {
         g.setColour (juce::Colour (0xffe7ebf2));
         g.setFont (juce::Font (juce::FontOptions (13.0f)));
-        g.drawFittedText ("OnyxTEON: the Qt6/QML UI could not be started.\n"
+        g.drawFittedText ("Overteon: the Qt6/QML UI could not be started.\n"
                           "Check that the Qt xcb platform plugin is installed.",
                           getLocalBounds().reduced (24), juce::Justification::centred, 3);
     }
@@ -403,7 +403,7 @@ void OvQmlEditor::timerCallback()
     // through the host (ui:resize), so the only trustworthy answer to "is the
     // editor the size it asked for" is to read it back once the window has been
     // up for a moment.  A mismatch is a real fault and is reported even
-    // without ONYXTEON_SIZEDBG -- it is the difference between a UI that is
+    // without OVERTEON_SIZEDBG -- it is the difference between a UI that is
     // laid out correctly and one that is a stretched copy of itself.
     if (sizeCheckIn > 0 && --sizeCheckIn == 0 && impl->view != nullptr)
     {
@@ -415,7 +415,7 @@ void OvQmlEditor::timerCallback()
         // Both numbers, because they are in different units and mixing them up
         // is what hid this bug for two rounds: the editor is in device pixels
         // (what the host canvas is measured in), the QWindow in DIPs.
-        if (! ok || ovEnvFlag ("ONYXTEON_SIZEDBG"))
+        if (! ok || ovEnvFlag ("OVERTEON_SIZEDBG"))
             std::fprintf (stderr,
                           "[size] asked %dx%d  editor %dx%d  qwindow %dx%d dip "
                           "(%dx%d device)  dpr %.4f  %s\n",
