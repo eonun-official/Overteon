@@ -220,6 +220,13 @@ if(OVERTEON_QT_UI)
         ui/qt/OvQmlEditor.cpp
         ui/qt/OvQtComponent.cpp
 
+        # Repairs libQt6Core's OpenSSL imports when the host has let another
+        # plug-in's statically-linked OpenSSL win the process symbol scope.
+        # Ardour/Mixbus ship Harrison LV2 plug-ins that do exactly that, and
+        # without this the first QML compile jumps to a garbage address.  See
+        # the file for the whole chain.
+        ui/qt/OvCryptoShim.cpp
+
         # Fills in the glib symbols a host's bundled-but-outdated glib lacks.
         # Qt6Qml NEEDs Qt6Network, which NEEDs libproxy -> libpxbackend, and
         # libpxbackend is built against glib >= 2.80.  Ardour's official binary
@@ -412,6 +419,7 @@ if(OVERTEON_QT_UI)
         ui/qt/OvMeterView.cpp
         ui/qt/OvSeamFrost.cpp ui/qt/OvBlurTest.cpp
         ui/qt/OvFrost.cpp
+        ui/qt/OvCryptoShim.cpp
         ui/qt/ov_ui.qrc
         ${OVERTEON_SHADER_QRC})
 

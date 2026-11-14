@@ -27,6 +27,7 @@
 #include "OvQmlTypes.h"
 #include "OvCtl.h"
 #include "OvEqView.h"
+#include "OvCryptoShim.h"
 
 #include <QApplication>
 #include <QGuiApplication>
@@ -548,6 +549,11 @@ int main (int argc, char** argv)
         f.setStyleStrategy (QFont::NoSubpixelAntialias);
         app->setFont (f);
     }
+
+    // Same repair the plug-in does: if something in this process exported an
+    // OpenSSL older than the one libQt6Core was built against, Qt's QML
+    // compiler would call it with a structure it cannot read.
+    ovqt::bindQtToRealLibcrypto();
 
     ovRegisterQmlTypes();
 

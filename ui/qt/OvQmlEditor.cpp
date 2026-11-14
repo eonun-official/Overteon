@@ -1,5 +1,6 @@
 #include "OvQmlEditor.h"
 #include "OvQtComponent.h"
+#include "OvCryptoShim.h"
 #include "OvEnv.h"
 
 #include "FxProcessor.h"
@@ -112,6 +113,13 @@ OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
 {
     impl = std::make_unique<Impl>();
     setOpaque (true);
+
+    // Before any QML exists, repair Qt's OpenSSL bindings if the host has let
+    // another plug-in's statically-linked OpenSSL win the process symbol scope
+    // (Ardour/Mixbus ship exactly such plug-ins).  Without this the first QML
+    // compilation jumps to a garbage address inside QCryptographicHash.  A
+    // no-op in a clean process -- see OvCryptoShim.cpp.
+    ovqt::bindQtToRealLibcrypto();
 
     // Qt FIRST, then the size.
     //
