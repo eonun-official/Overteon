@@ -40,6 +40,8 @@
 #include <QScreen>
 #include <QGuiApplication>
 #include <QTimer>
+#include <QResizeEvent>
+#include <QWindow>
 
 #include <chrono>
 #include <future>
@@ -74,6 +76,76 @@ namespace
 {
     /// #wrap in web_fx/index.html: every layout number is derived from it.
     constexpr double OvThemeDesignW = 1040.0;
+    constexpr double OvThemeDesignH = 772.0;
+
+    // ---- keeping the preview window's aspect -------------------------------
+    //
+    // The editor is a DESIGN: 1040x772, and main.qml scales that whole design
+    // uniformly into whatever frame it is given.  A window dragged to a
+    // different aspect therefore does not stretch the UI (it letterboxes it),
+    // so letting the frame go free only ever adds empty margin.
+    //
+    // Two behaviours, matching the plug-in's OVERTEON_RESIZABLE_WINDOW:
+    //   OFF (default) — the window is fixed at the design's size * ratio; there
+    //                   is no handle to drag, exactly as in a host.
+    //   ON            — the window may be dragged, but the ratio is held: a
+    //                   resize from any edge is answered with the height that
+    //                   goes with the width (or the width that goes with the
+    //                   height, when the user dragged the bottom edge).
+    //
+    //  This has to be done by hand: QWindow has minimum and maximum sizes but
+    //  no aspect-ratio hint that a window manager on every platform honours.
+    class AspectLock : public QObject
+    {
+    public:
+        AspectLock (QWindow* win, double aspect)
+            : window (win), ratio (aspect) {}
+
+    protected:
+        bool eventFilter (QObject* o, QEvent* e) override
+        {
+            if (e->type() == QEvent::Resize && ! correcting)
+            {
+                const auto* re = static_cast<QResizeEvent*> (e);
+                const QSize s = re->size();
+
+                if (s.width() > 0 && s.height() > 0)
+                {
+                    // Which edge moved?  The dimension the user changed more is
+                    // the one to keep; the other follows from the ratio.  Doing
+                    // it the other way round makes a vertical drag snap the
+                    // width back and the window fights the pointer.
+                    const double dw = last.isValid() && last.width() > 0
+                                        ? std::abs (double (s.width() - last.width()) / last.width())
+                                        : 0.0;
+                    const double dh = last.isValid() && last.height() > 0
+                                        ? std::abs (double (s.height() - last.height()) / last.height())
+                                        : 0.0;
+
+                    const QSize want = (dw >= dh)
+                        ? QSize (s.width(), int (std::lround (s.width() / ratio)))
+                        : QSize (int (std::lround (s.height() * ratio)), s.height());
+
+                    if (want != s)
+                    {
+                        correcting = true;
+                        window->resize (want);
+                        correcting = false;
+                    }
+
+                    last = want;
+                }
+            }
+
+            return QObject::eventFilter (o, e);
+        }
+
+    private:
+        QWindow* window;
+        double ratio;
+        QSize last;
+        bool correcting = false;
+    };
 
     // ---- compatibility mode ------------------------------------------------
     //
@@ -582,7 +654,11 @@ int main (int argc, char** argv)
                 prm->setValue (pv.mid (eq + 1).toDouble());
         }
 
+       #if OVERTEON_RESIZABLE_WINDOW
         widget->setMinimumSize (520, 386);   // half the design size
+       #else
+        widget->setFixedSize (w, h);         // same fixed window as the view path
+       #endif
         widget->resize (w, h);
         widget->show();
 
@@ -1041,7 +1117,20 @@ int main (int argc, char** argv)
     // A floor, so the UI cannot be dragged down to an unreadable sliver.  Half
     // the design size (1040x772, see OvTheme.designW/H) is still a legible
     // layout; below that the 550 px seam glass and the header stop fitting.
+    //
+    // OVERTEON_RESIZABLE_WINDOW=OFF (the default) makes this window FixedSize
+    // instead: the preview then behaves the way the plug-in does in a host, at
+    // the design's aspect and no handle to drag it off.
+   #if OVERTEON_RESIZABLE_WINDOW
     view.setMinimumSize (QSize (520, 386));
+
+    // Dragging is allowed, but the design's ratio is held.
+    auto* lock = new AspectLock (&view, OvThemeDesignW / OvThemeDesignH);
+    view.installEventFilter (lock);
+   #else
+    view.setMinimumSize (QSize (w, h));
+    view.setMaximumSize (QSize (w, h));
+   #endif
 
     view.resize (w, h);
 
