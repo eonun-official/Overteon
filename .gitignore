@@ -33,3 +33,6 @@ tools/preview-server/overteon-preview-server
 tools/preview-server/.dub/
 tools/preview-server/dub.selections.json
 __pycache__/
+
+# ---- secrets --------------------------------------------------------
+CI_PASSWD.txt

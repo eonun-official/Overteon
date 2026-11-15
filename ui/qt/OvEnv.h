@@ -18,7 +18,15 @@
 // ============================================================
 #include <cstdlib>
 #include <cstring>
-#include <strings.h>
+
+// strcasecmp is POSIX; MSVC spells it _stricmp and declares it in <string.h>.
+// Everything below needs a case-insensitive compare, so map the name once.
+#if defined(_WIN32)
+ #define ov_strcasecmp _stricmp
+#else
+ #include <strings.h>
+ #define ov_strcasecmp strcasecmp
+#endif
 
 /// True when `name` is set to something that is not an explicit false.
 inline bool ovEnvFlag (const char* name)
@@ -27,12 +35,10 @@ inline bool ovEnvFlag (const char* name)
     if (v == nullptr) return false;
     if (*v == '\0')   return true;
 
-    // strcasecmp is POSIX; the empty-string and nullptr cases above already
-    // cover the platforms where it does not exist, so no fallback is needed.
-    return ! (strcasecmp (v, "0")     == 0
-           || strcasecmp (v, "false") == 0
-           || strcasecmp (v, "no")    == 0
-           || strcasecmp (v, "off")   == 0);
+    return ! (ov_strcasecmp (v, "0")     == 0
+           || ov_strcasecmp (v, "false") == 0
+           || ov_strcasecmp (v, "no")    == 0
+           || ov_strcasecmp (v, "off")   == 0);
 }
 
 /// Same parsing, but ON unless it is explicitly turned off.
@@ -47,8 +53,8 @@ inline bool ovEnvFlagDefaultOn (const char* name)
     if (v == nullptr) return true;
     if (*v == '\0')   return true;
 
-    return ! (strcasecmp (v, "0")     == 0
-           || strcasecmp (v, "false") == 0
-           || strcasecmp (v, "no")    == 0
-           || strcasecmp (v, "off")   == 0);
+    return ! (ov_strcasecmp (v, "0")     == 0
+           || ov_strcasecmp (v, "false") == 0
+           || ov_strcasecmp (v, "no")    == 0
+           || ov_strcasecmp (v, "off")   == 0);
 }

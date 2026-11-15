@@ -333,9 +333,15 @@ if(OVERTEON_QT_UI)
     # ---- ovctl: drive a running preview through shared memory -------------
     # Small enough to be a plain executable with no Qt dependency, so it can be
     # run from a script while the UI is busy.
-    add_executable(ovctl tools/ovctl.cpp)
-    target_include_directories(ovctl PRIVATE ui/qt)
-    target_link_libraries(ovctl PRIVATE ${CMAKE_THREAD_LIBS_INIT})
+    #
+    # POSIX only: OvCtl.h is a POSIX shared-memory block (shm_open/mmap) and the
+    # header has no Windows path.  It is a development tool for driving the
+    # preview, so a Windows build simply does not produce one.
+    if(NOT WIN32)
+        add_executable(ovctl tools/ovctl.cpp)
+        target_include_directories(ovctl PRIVATE ui/qt)
+        target_link_libraries(ovctl PRIVATE ${CMAKE_THREAD_LIBS_INIT})
+    endif()
 
     set(OVERTEON_SHADER_QRC "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/ov_shaders.qrc")
     file(WRITE ${OVERTEON_SHADER_QRC}
@@ -385,7 +391,11 @@ if(OVERTEON_QT_UI)
             # Keeping the module resident costs nothing that matters -- it is
             # the same 8 MB the editor already uses -- and closing the window
             # then exits with status 0, measured over repeated runs.
-            target_link_options(HarmonicInjector_${_fmt} PRIVATE "LINKER:-z,nodelete")
+            # ELF only.  Windows has no equivalent, and lld-link reads "-z"
+            # as a file name ("could not open 'nodelete'").
+            if(UNIX AND NOT APPLE)
+                target_link_options(HarmonicInjector_${_fmt} PRIVATE "LINKER:-z,nodelete")
+            endif()
 
             # Pull OvGlibShim.o out of the shared archive.
             #
@@ -401,20 +411,31 @@ if(OVERTEON_QT_UI)
             # It has to be attached to the per-format target, not to
             # HarmonicInjector: that one is the shared-code archive, and options
             # set there do not reach the .so that actually gets dlopen()ed.
-            foreach(_shim_sym
-                    g_once_init_enter_pointer g_once_init_leave_pointer
-                    g_string_replace g_memdup2
-                    g_strv_builder_new g_strv_builder_add g_strv_builder_end
-                    g_strv_builder_unref
-                    g_uri_parse g_uri_to_string g_uri_ref g_uri_unref
-                    g_uri_get_scheme g_uri_get_host g_uri_get_port)
-                target_link_options(HarmonicInjector_${_fmt} PRIVATE
-                    "LINKER:-u,${_shim_sym}")
-            endforeach()
+            # Linux only: the glib shim exists for a host that ships an old
+            # glib (Ardour's bundled build), and neither the problem nor the
+            # `-u` linker flag exists on Windows.
+            if(UNIX AND NOT APPLE)
+                foreach(_shim_sym
+                        g_once_init_enter_pointer g_once_init_leave_pointer
+                        g_string_replace g_memdup2
+                        g_strv_builder_new g_strv_builder_add g_strv_builder_end
+                        g_strv_builder_unref
+                        g_uri_parse g_uri_to_string g_uri_ref g_uri_unref
+                        g_uri_get_scheme g_uri_get_host g_uri_get_port)
+                    target_link_options(HarmonicInjector_${_fmt} PRIVATE
+                        "LINKER:-u,${_shim_sym}")
+                endforeach()
+            endif()
         endif()
     endforeach()
 
     # host-free viewer: same QML, mock parameter source
+    #
+    # Not built for Windows.  It is a development instrument -- it opens its own
+    # window, reads parameters from a POSIX shared-memory block (ovctl) and, with
+    # --jack, is a JACK client -- none of which exists on Windows.  The plug-in
+    # is what ships; the viewer stays a Linux tool.
+    if(NOT WIN32)
     add_executable(overteon-qml-preview
         ui/qt/preview/main.cpp
         ui/qt/OvEngine.cpp
@@ -492,10 +513,14 @@ if(OVERTEON_QT_UI)
     endif()
     set_target_properties(overteon-qml-preview PROPERTIES
         AUTOMOC ON AUTORCC ON)
-    if(NOT WIN32)
-        target_compile_definitions(overteon-qml-preview PRIVATE BUILD_UNIXLIKE=1)
-    endif()
+    target_compile_definitions(overteon-qml-preview PRIVATE BUILD_UNIXLIKE=1)
+    endif()   # NOT WIN32 -- overteon-qml-preview
 
+    # The three headless checks below are developer tools and POSIX programs:
+    # blur_test.cpp and the sources it links pull in OvEnv.h, which includes
+    # <strings.h>, and the tests print to a terminal and are run by hand.  A
+    # Windows build has no use for them and they do not compile there.
+    if(NOT WIN32)
     # headless check that the dual-Gaussian really blurs
     add_executable(over-blur-test
         tools/units/blur_test.cpp
@@ -522,12 +547,21 @@ if(OVERTEON_QT_UI)
     # numbers are a measurement rather than a memory.
     add_executable(over-spectrum-test tools/units/spectrum_test.cpp)
     target_include_directories(over-spectrum-test PRIVATE ui/qt)
+    endif()
 endif()
 
 # Platform switch used by the sources: Windows vs. everything unix-like
 # (Linux, macOS, BSD). Mirrors JUCE_WINDOWS and costs nothing.
 if(NOT WIN32)
     set(OVERTEON_UNIXLIKE TRUE)
+else()
+    # MSVC's <cmath> hides M_PI unless this is defined, and the ballistics and
+    # spectrum code uses it directly.  Defining it here rather than in each
+    # source keeps the arithmetic identical on both platforms.
+    add_compile_definitions(_USE_MATH_DEFINES)
+    # Windows headers are noisy about the CRT's "unsafe" functions; the port
+    # does not use any of them, but JUCE and the SDK headers do.
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
 # JUCE_WEB_BROWSER=1 pulls juce::WebBrowserComponent in, which on Linux means

@@ -773,9 +773,15 @@ public:
     {
         QSGGeometry* geom = geometry();
         const int n = top.size();
-        if (n < 2) { geom->setVertexCount (0); markDirty (QSGNode::DirtyGeometry); return 0; }
-        if (geom->vertexCount() < n * 2)
-            geom->allocate (n * 2);
+        // The fill is exactly 2 vertices per point -- one on the signal, one on
+        // the floor -- so the count is known before anything is written.  That
+        // matters because QSGGeometry::setVertexCount() only exists from Qt
+        // 6.10; sizing the buffer here is both older and cheaper than trimming
+        // afterwards, and it behaves identically on 6.12.
+        const int want = n < 2 ? 0 : n * 2;
+        if (geom->vertexCount() != want)
+            geom->allocate (want);            // before the writes, never after
+        if (want == 0) { markDirty (QSGNode::DirtyGeometry); return 0; }
 
         // The painter path's gradient, in 0..1:
         //     QLinearGradient grad (0, top, 0, bottom)
@@ -811,7 +817,9 @@ public:
             put (v[k], QPointF (p.x(), bottom), bottom);
             ++k;
         }
-        geom->setVertexCount (k);
+        // No setVertexCount(): the buffer was already sized to `want` above,
+        // and k == want by construction.
+        Q_ASSERT (k == want);
         markDirty (QSGNode::DirtyGeometry);
         return k;
     }

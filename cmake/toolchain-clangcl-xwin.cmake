@@ -3,10 +3,29 @@
 #
 #   cargo install xwin
 #   xwin --accept-license splat --output ~/.xwin-cache
+# Cross-compiling the full plug-in (not just the preview) also needs three
+# things beyond this file:
+#
+#   * the vendored JUCE patched so its nested vst3_helper build is told to
+#     cross-compile -- see cmake/patches/juce-vst3-helper-cross.patch;
+#   * WINEPATH pointing at the Qt bin directory when running ninja, so the
+#     helper binary can load Qt6Core.dll under wine:
+#         WINEPATH=$HOME/Qt-msvc/6.9.3/msvc2022_64/bin ninja -C build-win
+#   * case-insensitive aliases for a few SDK headers and import libraries
+#     (Dbghelp.h, DbgHelp.lib, Dwrite.lib, ...): Windows resolves these
+#     case-insensitively, a Linux filesystem does not.
+#
+#   # everything (LV2 + VST3 + VST2 + Standalone)
+#   cmake -S . -B build-win -G Ninja \
+#         -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-clangcl-xwin.cmake \
+#         -DCMAKE_BUILD_TYPE=Release \
+#         -DCMAKE_PREFIX_PATH=$HOME/Qt-msvc/6.9.3/msvc2022_64
+#   WINEPATH=$HOME/Qt-msvc/6.9.3/msvc2022_64/bin ninja -C build-win
+#
+#   # the host-free viewer only (no JUCE, no wine, no helper)
 #   cmake -S . -B build-win -G Ninja \
 #         -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-clangcl-xwin.cmake \
 #         -DOVERTEON_PREVIEW_ONLY=ON
-#   ninja -C build-win
 #
 # This produces a real PE32+ binary that links against the MSVC CRT, which is
 # what wine, the MSVC-built Qt, and any Windows host expect.  No MinGW.
@@ -56,6 +75,26 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT
     "/libpath:${_crt}/lib/x86_64 /libpath:${_sdk}/lib/um/x86_64 /libpath:${_sdk}/lib/ucrt/x86_64")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT}")
 set(CMAKE_MODULE_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT}")
+
+# The resource compiler needs the same include path as the compiler: JUCE emits
+# a .rc that does `#include <windows.h>`, and llvm-rc otherwise reports
+# "'windows.h' file not found" and the whole plug-in fails to link.
+string(REPLACE "/imsvc" "/I" _rc_includes "${_includes}")
+string(REPLACE ";" " " _rc_flags "${_rc_includes}")
+set(CMAKE_RC_FLAGS_INIT "${_rc_flags}")
+
+# Programs built for the target cannot run on the build host.  JUCE runs two of
+# them while building: juceaide (configure time, already forced to the host via
+# JUCE_BUILD_EXTRAS) and juce_vst3_helper (build time, to write
+# moduleinfo.json).  Wine is the only way to execute the latter here.  Set
+# OVERTEON_NO_WINE=ON to skip VST3 and build only the formats that do not need
+# a helper binary.
+if(NOT DEFINED OVERTEON_NO_WINE)
+    find_program(_ov_wine NAMES wine wine64)
+    if(_ov_wine)
+        set(CMAKE_CROSSCOMPILING_EMULATOR "${_ov_wine}")
+    endif()
+endif()
 
 # find headers/libs only in the target tree; run programs on the host
 set(CMAKE_FIND_ROOT_PATH "${_sdk}" "${_crt}")

@@ -53,11 +53,18 @@
 
 #include "OvEnv.h"
 
+// ELF-only.  This whole file repairs libQt6Core's OpenSSL bindings inside a
+// host that has loaded another plug-in's statically-linked OpenSSL -- a Linux
+// problem (Ardour/Mixbus ship such plug-ins, and a JUCE LV2 UI runs in the
+// host's process).  Windows hosts load VST3 in-process too, but there is no ELF
+// dynamic section to walk, so the entry point below is an empty function.
+#if !defined(_WIN32)
 #include <link.h>
 #include <dlfcn.h>
 #include <elf.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 
 #include <cstdio>
 #include <cstring>
@@ -65,7 +72,7 @@
 #include <string>
 #include <vector>
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && !defined(_WIN32)
  #define OV_ELF_MACHINE_OK 1
 #endif
 

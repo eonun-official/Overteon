@@ -52,6 +52,46 @@
 #include <cstring>
 #include <string>
 
+#if defined(_WIN32)
+// POSIX shared memory (shm_open/mmap) does not exist on Windows.  This header
+// backs OVTICK's cross-process sampling ring, which is a development
+// instrument: an external reader attaches to the block and prints the rate
+// statistics.  On Windows the ring keeps the same interface and reports itself
+// as not-open, so push() is a no-op and pop() finds nothing.  The per-interval
+// timing that OVTICK computes in-process is unaffected -- only the
+// cross-process tap is missing.
+namespace ovshm
+{
+
+constexpr std::size_t kCacheLine = 64;
+
+template <typename T, std::size_t Capacity>
+class Ring
+{
+public:
+    static_assert ((Capacity & (Capacity - 1)) == 0,
+                   "Capacity must be a power of two");
+
+    Ring() = default;
+    Ring (const Ring&) = delete;
+    Ring& operator= (const Ring&) = delete;
+
+    bool open (const std::string&, bool) { return false; }
+    void close() {}
+    bool ok() const { return false; }
+    bool push (const T&) { return false; }
+    bool pop (T&) { return false; }
+    template <typename Fn> int drain (Fn&&) { return 0; }
+    std::uint64_t available() const { return 0; }
+    std::uint64_t dropped() const { return 0; }
+    std::uint64_t produced() const { return 0; }
+    std::uint64_t consumed() const { return 0; }
+};
+
+} // namespace ovshm
+
+#else
+
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -265,3 +305,6 @@ private:
 };
 
 } // namespace ovshm
+
+#endif   // !_WIN32
+

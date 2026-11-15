@@ -1,0 +1,31 @@
+Subject: [JUCE] pass the toolchain to the nested vst3_helper build
+
+JUCE builds juce_vst3_helper as a SEPARATE CMake project (it configures and
+builds its own tree at build time).  That nested configure only received the
+compiler paths, so under a cross-compile it saw the HOST platform and probed
+clang-cl as if it were native:
+
+    clang-cl: error: unable to execute command: posix_spawn failed
+
+and the whole VST3 build died before linking.
+
+The fix forwards three more settings to the nested configure:
+
+  CMAKE_TOOLCHAIN_FILE          so it is a Windows configure at all
+  CMAKE_CROSSCOMPILING_EMULATOR so its try_run() probes go through wine
+  CMAKE_BUILD_TYPE              otherwise it defaults to Debug, and the xwin
+                                splat ships the release CRT only
+
+Apply inside JUCE/extras/Build/CMake/JUCEUtils.cmake, in
+juce_add_vst3_manifest_step (or the helper-target function), right after the
+CMAKE_RC_COMPILER passthrough:
+
+    if(CMAKE_TOOLCHAIN_FILE)
+        list(APPEND PASSTHROUGH_ARGS "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
+    endif()
+    if(CMAKE_CROSSCOMPILING_EMULATOR)
+        list(APPEND PASSTHROUGH_ARGS "-DCMAKE_CROSSCOMPILING_EMULATOR=${CMAKE_CROSSCOMPILING_EMULATOR}")
+    endif()
+    if(CMAKE_BUILD_TYPE)
+        list(APPEND PASSTHROUGH_ARGS "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
+    endif()
