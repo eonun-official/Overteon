@@ -308,7 +308,7 @@ if(OVERTEON_QT_UI)
         ../Source/ui/qt/shaders/blur.vert  ../Source/ui/qt/shaders/blur.frag
         ../Source/ui/qt/shaders/glass.vert ../Source/ui/qt/shaders/glass.frag)
         get_filename_component(_shname ${_sh} NAME)
-        set(_qsb "${CMAKE_CURRENT_BINARY_DIR}/../Assets/ov_shaders/${_shname}.qsb")
+        set(_qsb "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/${_shname}.qsb")
         set(_src "${CMAKE_CURRENT_SOURCE_DIR}/${_sh}")
 
         if(_shname STREQUAL "blur.frag")
@@ -316,7 +316,7 @@ if(OVERTEON_QT_UI)
             # a single #version — GLSL requires it to be the first statement.
             file(READ ${_src} _body)
             string(REGEX REPLACE "^#version[^\n]*\n" "" _body "${_body}")
-            set(_src "${CMAKE_CURRENT_BINARY_DIR}/../Assets/ov_shaders/${_shname}.glsl")
+            set(_src "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/${_shname}.glsl")
             file(WRITE ${_src} "#version 440\n${_ov_blurfunc_src}\n${_body}")
             set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
                          ${CMAKE_CURRENT_SOURCE_DIR}/${_sh})
@@ -344,7 +344,7 @@ if(OVERTEON_QT_UI)
         target_link_libraries(ovctl PRIVATE ${CMAKE_THREAD_LIBS_INIT})
     endif()
 
-    set(OVERTEON_SHADER_QRC "${CMAKE_CURRENT_BINARY_DIR}/../Assets/ov_shaders/ov_shaders.qrc")
+    set(OVERTEON_SHADER_QRC "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/ov_shaders.qrc")
     file(WRITE ${OVERTEON_SHADER_QRC}
         "<RCC><qresource prefix=\"/shaders\">\n"
         "  <file alias=\"blur.vert.qsb\">blur.vert.qsb</file>\n"
