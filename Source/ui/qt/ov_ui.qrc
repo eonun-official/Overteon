@@ -20,6 +20,7 @@
         <file alias="OvBlur.qml">qml/OvBlur.qml</file>
         <file alias="OvSoloHud.qml">qml/OvSoloHud.qml</file>
         <file alias="OvAbout.qml">qml/OvAbout.qml</file>
+        <file alias="OvSettings.qml">qml/OvSettings.qml</file>
     </qresource>
     <qresource prefix="/res">
         <file alias="Inter-Regular.ttf">res/Inter-Regular.ttf</file>

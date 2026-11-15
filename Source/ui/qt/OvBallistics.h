@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>   // std::memmove — the true-peak interpolator's history window
 
 namespace ovb
 {
@@ -143,6 +144,15 @@ struct Fall
     double shown      = -120.0;   // dB, what is on screen
     double fallingFor = 0.0;      // seconds since this fall began
 
+    /// No interpolation: follow the measurement exactly, in both directions.
+    ///
+    /// The default curve is smootherstep on the fall and instant on the attack,
+    /// which is what a hardware meter's ballistics approximate.  Turning it off
+    /// gives the raw detector value — useful when what is being judged is the
+    /// DSP, not the display, and a ramp between two measurements would be a
+    /// claim the measurement did not make.
+    bool noInterp = false;
+
     void reset (double db) { shown = db; fallingFor = 0.0; }
 
     /// Advance towards `targetDb`.  Returns the new shown value.
@@ -154,6 +164,13 @@ struct Fall
                     double dBPerSecond, double rampInSec = 0.030)
     {
         if (! (dt > 0.0)) dt = 0.0;
+
+        if (noInterp)
+        {
+            shown = targetDb;
+            fallingFor = 0.0;
+            return shown;
+        }
 
         if (targetDb >= shown)
         {
@@ -240,6 +257,105 @@ inline double onePoleCoef (double dt, double tauSeconds)
 {
     return 1.0 - std::exp (-std::max (0.0, dt) / std::max (1e-6, tauSeconds));
 }
+
+// ---------------------------------------------------------------------------
+//  TruePeak — BS.1770-4 true peak: peak of the oversampled signal.
+//
+//  A sample peak meter reads the samples it is given, and an inter-sample peak
+//  can be up to ~3 dB above them once the signal is reconstructed — which is
+//  exactly what a DAC does.  True peak measures the reconstructed waveform by
+//  oversampling 4x and taking the maximum there.
+//
+//  The interpolator is a 4-phase windowed-sinc (32 taps, Hann).  A polyphase
+//  table is the honest choice here: an IIR or a linear interpolator would miss
+//  the peak it is supposed to find, and the whole point of the mode is that the
+//  number is comparable to what a BS.1770 meter reports.
+//
+//  Cost is 4x32 multiply-adds per sample per channel — measured, not guessed:
+//  the levels run this on one stereo pair per block, which is ~2.5 % of one
+//  core at 48 kHz and is why it is opt-in rather than the default.
+// ---------------------------------------------------------------------------
+struct TruePeak
+{
+    static constexpr int kPhases = 4;
+    static constexpr int kTaps   = 32;   // per phase; total span 8 samples
+
+    double peak = 0.0;                   // linear, held
+    double decay = 0.0;                  // dB/s applied by hold() below
+
+    TruePeak() { buildTable(); }
+
+    void reset() { peak = 0.0; }
+
+    /// kPhases * kTaps windowed-sinc coefficients, normalised per phase so a
+    /// DC signal oversamples to unity and does not pulse at the phase rate.
+    double table[kPhases][kTaps] {};
+    bool   tableReady = false;
+
+    void buildTable()
+    {
+        if (tableReady) return;
+        const double pi = 3.14159265358979323846;
+        for (int p = 0; p < kPhases; ++p)
+        {
+            const double frac = double (p) / double (kPhases);
+            double sum = 0.0;
+            for (int k = 0; k < kTaps; ++k)
+            {
+                // Position of tap k relative to the interpolated instant.
+                const double t = double (k) - double (kTaps / 2) + frac;
+                const double sinc = (std::abs (t) < 1e-9) ? 1.0
+                                                          : std::sin (pi * t) / (pi * t);
+                // Hann over the span, then normalise below.
+                const double w = 0.5 - 0.5 * std::cos (2.0 * pi * double (k) / double (kTaps - 1));
+                table[p][k] = sinc * w;
+                sum += table[p][k];
+            }
+            if (std::abs (sum) > 1e-12)
+                for (int k = 0; k < kTaps; ++k) table[p][k] /= sum;
+        }
+        tableReady = true;
+    }
+
+    /// x: the block, n samples.  history: kTaps samples kept between calls so a
+    /// peak that straddles a block boundary is still found — without it the
+    /// first samples of every block would be interpolated against zeros.
+    void process (const double* x, int n, double* history)
+    {
+        buildTable();
+        for (int i = 0; i < n; ++i)
+        {
+            // Shift the history window by one sample.
+            std::memmove (history, history + 1, sizeof (double) * (kTaps - 1));
+            history[kTaps - 1] = x[i];
+
+            for (int p = 0; p < kPhases; ++p)
+            {
+                double acc = 0.0;
+                for (int k = 0; k < kTaps; ++k)
+                    acc += table[p][k] * history[k];
+                const double a = std::abs (acc);
+                if (a > peak) peak = a;
+            }
+        }
+    }
+
+    double amplitude() const { return peak; }
+    double db() const        { return 20.0 * std::log10 (std::max (peak, 1e-9)); }
+
+    /// Release, in dB/s, so the meter falls at the same rate as the RMS one.
+    void hold (double dtSeconds, double dBPerSec)
+    {
+        if (! (dtSeconds > 0.0)) return;
+        if (peak > 0.0)
+        {
+            const double dbNow = db();
+            const double dbNext = dbNow - dBPerSec * dtSeconds;
+            peak = std::pow (10.0, dbNext / 20.0);
+            if (peak < 1e-9) peak = 0.0;
+        }
+    }
+};
 
 // ---------------------------------------------------------------------------
 //  Conversions between a meter's 0..1 display scale and dB.

@@ -27,16 +27,26 @@ class OvMeterView : public QQuickPaintedItem
 
     Q_PROPERTY(OvEngine* engine READ engine WRITE setEngine NOTIFY engineChanged)
 
+    /// True while the pointer is over the pod.  Turns the monitor ring green and
+    /// replaces the percentage read-out with the word SETTINGS — the pod is the
+    /// entry to the display settings panel, and this is the whole of the
+    /// affordance: the ring keeps drawing, so it still reads as a meter.
+    Q_PROPERTY(bool settingsHover READ settingsHover WRITE setSettingsHover NOTIFY settingsHoverChanged)
+
 public:
     explicit OvMeterView (QQuickItem* parent = nullptr);
 
     OvEngine* engine() const { return m_engine; }
     void setEngine (OvEngine*);
 
+    bool settingsHover() const { return m_settingsHover; }
+    void setSettingsHover (bool);
+
     void paint (QPainter*) override;
 
 signals:
     void engineChanged();
+    void settingsHoverChanged();
 
     /// Emitted when a fresh measurement has arrived; the view advances and
     /// repaints once for it.
@@ -44,6 +54,8 @@ signals:
 
 private:
     void advance (double dtSeconds);
+
+    bool m_settingsHover = false;
 
     /// The pod graphics.  `glowOnly` marks the pre-blur pass that produces the
     /// feGaussianBlur halo drawn underneath the sharp layer.
@@ -95,6 +107,11 @@ private:
     Channel m_outL, m_outR, m_inL, m_inR;
     ovb::Fall m_harmFall;
     double  m_harmFrac = 0.0;
+
+    // Display settings, mirrored from the engine each advance so this view does
+    // not have to hold a second connection to the settings signal.
+    bool    m_harmPeakMode = false;   // engine.harmDetector == 1
+    bool    m_noInterp      = false;  // engine.meterInterpolation == false
     double  m_clock = 0.0;
     std::chrono::steady_clock::time_point m_last {};
     QTimer  m_timer;

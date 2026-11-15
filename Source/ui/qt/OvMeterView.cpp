@@ -200,6 +200,14 @@ OvMeterView::OvMeterView (QQuickItem* parent) : QQuickPaintedItem (parent)
     m_timer.start();
 }
 
+void OvMeterView::setSettingsHover (bool on)
+{
+    if (on == m_settingsHover) return;
+    m_settingsHover = on;
+    emit settingsHoverChanged();
+    update();          // one repaint for the hover, not a running timer
+}
+
 void OvMeterView::setEngine (OvEngine* e)
 {
     if (e == m_engine) return;
@@ -308,9 +316,28 @@ void OvMeterView::advance (double dt)
     // the bars beside it.  It is a dB quantity to begin with; it now goes
     // through the same ovb::Fall, in dB, at 48 dB in 0.45 s.
     {
-        const double harmDb = std::clamp (double (m.harm), kHarmFloorDb, 0.0);
+        // Which ratio the ring shows, and how it is smoothed, are display
+        // settings from the Settings panel; read them here so this view needs
+        // no extra signal connection.  Peak mode takes the DSP's UNSMOOTHED
+        // ratio (harmPeak) — showing the smoothed value under a peak's name
+        // would be a mean with a better label.
+        m_harmPeakMode = (m_engine != nullptr && m_engine->harmDetector() == 1);
+        m_noInterp     = (m_engine != nullptr && ! m_engine->meterInterpolation());
+        m_harmFall.noInterp = m_noInterp;
+
+        const double raw = m_harmPeakMode ? double (m.harmPeak) : double (m.harm);
+        const double harmDb = std::clamp (raw, kHarmFloorDb, 0.0);
         m_harmFall.advance (harmDb, dt, kHarmDbPerSec, 0.045);
         m_harmFrac = ovb::dbToNorm (m_harmFall.shown, -kHarmFloorDb, kHarmFloorDb);
+
+        // Raw mode has to reach the level bars too: they own separate Fall
+        // objects, and a panel that says "no interpolation" while three of the
+        // four meters still ramp would be lying about what it set.
+        for (Channel* ch : { &m_outL, &m_outR, &m_inL, &m_inR })
+        {
+            ch->levelFall.noInterp = m_noInterp;
+            ch->peakFall.noInterp  = m_noInterp;
+        }
     }
     double f = m_harmFrac;
     // test hook: OVERTEON_HARM=0..1 pins the harmonic fraction so the ring's
@@ -329,7 +356,11 @@ void OvMeterView::advance (double dt)
 void OvMeterView::drawPod (QPainter* g, PodPass pass)
 {
     const double frac = m_harmFrac;
-    const QColor hc = harmColor (frac);
+    // Hover turns the ring green regardless of level: the colour IS the
+    // affordance, and a ring that stayed red at high harmonic content while
+    // advertising "settings" would read as an alarm rather than an invitation.
+    const QColor hc = m_settingsHover ? QColor (QStringLiteral ("#33d17a"))
+                                      : harmColor (frac);
     const QRectF ring (240 - 28, 32 - 28, 56, 56);
 
     // ---- the ring:  <circle id="hArc" stroke-width="4" filter="url(#harmGlow)"/>
@@ -415,7 +446,21 @@ void OvMeterView::drawPod (QPainter* g, PodPass pass)
     g->setFont (f);
 
     const bool schranz = m_engine != nullptr && m_engine->driveMode() == 2;
-    if (schranz)
+    if (m_settingsHover)
+    {
+        // Hover: the read-out becomes the entry's label.  Smaller than the
+        // percentage because it is a word, not a measurement — at 15 px bold it
+        // would not fit the 80 px slot the number lives in.
+        QFont sf = f;
+        sf.setPixelSize (9);
+        sf.setBold (true);
+        sf.setLetterSpacing (QFont::AbsoluteSpacing, 1.2);
+        g->setFont (sf);
+        g->setPen (QColor (QStringLiteral ("#33d17a")));
+        g->drawText (QRectF (196, 20, 88, 20), Qt::AlignCenter, QStringLiteral ("SETTINGS"));
+        g->setFont (f);
+    }
+    else if (schranz)
     {
         g->setPen (QColor ("#ff2a44"));
         g->drawText (QRectF (200, 20, 80, 20), Qt::AlignCenter, QStringLiteral ("N/A"));

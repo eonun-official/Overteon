@@ -43,3 +43,6 @@ Thumbs.db
 *~
 __pycache__/
 *.pyc
+
+# accidental archive of the tree
+*.tar

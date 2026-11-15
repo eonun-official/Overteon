@@ -31,6 +31,9 @@ class OvEngine : public QObject
     Q_PROPERTY(double outL READ outL NOTIFY metersChanged)
     Q_PROPERTY(double outR READ outR NOTIFY metersChanged)
     Q_PROPERTY(double harm READ harm NOTIFY metersChanged)
+    /// The harmonic ratio before the DSP's smoothing.  Only the ring's Peak
+    /// display reads it; everything else wants `harm`.
+    Q_PROPERTY(double harmPeak READ harmPeak NOTIFY metersChanged)
 
     /// SMOOTHED level, 0..1, for anything that lights up rather than measures:
     /// the accent glow in the control pits and the meter pod's accent.
@@ -51,6 +54,30 @@ class OvEngine : public QObject
     Q_PROPERTY(int driveMode   READ driveMode   NOTIFY driveModeChanged)
     Q_PROPERTY(int limiterMode READ limiterMode NOTIFY driveModeChanged)
 
+    /// ---- display settings (the Settings panel) -------------------------
+    //
+    // Detection and interpolation are DISPLAY choices, not DSP ones: nothing
+    // here changes a sample.  They are persisted so the panel does not reset
+    // every time it is opened, but they are deliberately not parameters — a
+    // parameter would claim they are part of the sound.
+    //
+    // detector: 0 = RMS (power mean), 1 = Peak (loudest bin, max-hold).
+    // One per meter: the harmonic ring and the two spectrum sections measure
+    // different things, and there is no reason to force them to agree.
+    Q_PROPERTY(int harmDetector  READ harmDetector  WRITE setHarmDetector  NOTIFY settingsChanged)
+    Q_PROPERTY(int upperDetector READ upperDetector WRITE setUpperDetector NOTIFY settingsChanged)
+    Q_PROPERTY(int lowerDetector READ lowerDetector WRITE setLowerDetector NOTIFY settingsChanged)
+
+    /// Interpolation: how the displayed value is produced.
+    //
+    //   true   the ballistics interpolate between measurements (the default):
+    //          instant attack, eased fall, as described in OvBallistics.h.
+    //   false  the display shows the last measurement verbatim, no ramp at all.
+    //          For judging the DSP rather than the meter — a ramp between two
+    //          measurements asserts a value that nothing measured.
+    Q_PROPERTY(bool meterInterpolation READ meterInterpolation
+               WRITE setMeterInterpolation NOTIFY settingsChanged)
+
 public:
     explicit OvEngine (std::unique_ptr<OvSource> source, QObject* parent = nullptr);
     ~OvEngine() override;
@@ -62,6 +89,7 @@ public:
     double outL() const { return m_meters.outL; }
     double outR() const { return m_meters.outR; }
     double harm() const { return m_meters.harm; }
+    double harmPeak() const { return m_meters.harmPeak; }
 
     /// 0..1, already ballistic-filtered.  Same mapping the design uses:
     /// (dB + 60) / 60 clamped, with a rate-derived release.
@@ -83,6 +111,16 @@ public:
     QString presetName() const { return m_presetName; }
     int driveMode() const { return m_driveMode; }
     int limiterMode() const { return m_limiterMode; }
+
+    int  harmDetector()  const { return m_harmDetector; }
+    int  upperDetector() const { return m_upperDetector; }
+    int  lowerDetector() const { return m_lowerDetector; }
+    bool meterInterpolation() const { return m_meterInterpolation; }
+
+    void setHarmDetector (int);
+    void setUpperDetector (int);
+    void setLowerDetector (int);
+    void setMeterInterpolation (bool);
 
     // QML can only marshal pointer types it knows; OvParam* is not registered,
     // so the invokable accessor hands back a plain QObject* (the properties
@@ -110,6 +148,7 @@ signals:
     void presetsChanged();
     void presetNameChanged();
     void driveModeChanged();
+    void settingsChanged();
 
 private slots:
     void tick();
@@ -128,6 +167,13 @@ private:
     QVariantMap  m_presets;
     QString      m_presetName = QStringLiteral ("default");
     int          m_driveMode = 1, m_limiterMode = 2;
+
+    // Display settings.  Saved under the display-settings key, not as
+    // parameters — see the Q_PROPERTY block at the top of the class.
+    int  m_harmDetector  = 0;      // 0 RMS, 1 Peak
+    int  m_upperDetector = 0;
+    int  m_lowerDetector = 0;
+    bool m_meterInterpolation = true;
     int          m_tickCount = 0;
     QTimer       m_timer;
 

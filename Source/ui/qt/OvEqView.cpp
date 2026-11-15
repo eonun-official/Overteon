@@ -377,6 +377,26 @@ void OvEqView::setHeaderTop (bool t)
     m_dirty = true;
 }
 
+void OvEqView::setSpecPeak (bool on)
+{
+    const auto want = on ? ovspec::SpectrumBallistics::Mode::Peak
+                         : ovspec::SpectrumBallistics::Mode::Rms;
+    if (want == m_specBall.mode) return;
+
+    m_specBall.mode = want;
+
+    // The detector change does not invalidate the level state, but it does make
+    // the next frames read differently: Rms holds a mean of energy while Peak
+    // holds the loudest bin, so the peak trace starts ABOVE the current state
+    // and settles down, and switching back leaves it falling from a level the
+    // mean never reached.  Resetting is the honest choice — the alternative is a
+    // trace that shows the previous mode's history for a full release time.
+    m_specBall.reset();
+
+    emit specPeakChanged();
+    m_dirty = true;
+}
+
 // ---------------------------------------------------------------- params
 double OvEqView::valueOf (const QString& id, double fallback) const
 {

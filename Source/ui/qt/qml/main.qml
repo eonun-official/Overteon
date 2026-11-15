@@ -239,6 +239,10 @@ Item {
                     accent: OvTheme.sc
                     headerTop: true
                     glow: root.outLight * root.outLight   // --light = level^2
+                    // Detector for this half's analyser, from the Settings
+                    // panel.  Per view on purpose: the two halves measure the
+                    // input and the output and are independent metres.
+                    specPeak: root.engine ? root.engine.upperDetector === 1 : false
                     // The CPU seam glass reads this half's pixels back; the
                     // GPU one samples the texture and needs no readback.
                     wantImage: root.cpuFrost
@@ -255,6 +259,7 @@ Item {
                     accent: OvTheme.pq
                     headerTop: false
                     glow: root.inLight * root.inLight
+                    specPeak: root.engine ? root.engine.lowerDetector === 1 : false
                     wantImage: root.cpuFrost
                 }
 
@@ -388,6 +393,7 @@ Item {
                 sourceItem: plotLayer
                 schranz: root.driveMode === 2
                 onAboutRequested: about.open()
+                onSettingsRequested: settings.open()
             }
         }
 
@@ -425,6 +431,7 @@ Item {
     }
 
     OvAbout { id: about; engine: root.engine }
+    OvSettings { id: settings; engine: root.engine }
 
     readonly property int driveMode: {
         if (! engine) return 1

@@ -96,7 +96,7 @@ Item {
                 font.family: OvTheme.uiFont
                 font.pixelSize: 10
                 textFormat: Text.StyledText
-                text: "Produced by <b>Eur9ka</b> &amp; <b>Eonun</b> · Designed by <b>Eonun</b>"
+                text: "Produced by <b>Eur9ka</b>, <b>Eonun</b> &amp; <b>Xyas</b> · Designed by <b>Eonun</b>"
             }
 
             Text {

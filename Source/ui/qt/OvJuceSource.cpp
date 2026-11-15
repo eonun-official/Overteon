@@ -155,6 +155,7 @@ OvMeters OvJuceSource::meters() const
     m.outL = juce::Decibels::gainToDecibels (proc.meterOutL.load(), -90.0f);
     m.outR = juce::Decibels::gainToDecibels (proc.meterOutR.load(), -90.0f);
     m.harm = proc.meterHarm.load();
+    m.harmPeak = proc.meterHarmPk.load();
     return m;
 }
 

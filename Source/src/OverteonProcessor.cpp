@@ -561,6 +561,10 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
                 meterOutR.store ((float) rmsOutR.amplitude());
                 harmRatioS *= meterDecay (n, sr, kHarmTau);
                 meterHarm.store ((float) juce::Decibels::gainToDecibels (harmRatioS, -100.0));
+                // No dry/harm energies are measured in this branch, so there is
+                // nothing unsmoothed to report; the display's peak mode then
+                // simply holds the same value.
+                meterHarmPk.store (meterHarm.load());
                 return;
             }
         }
@@ -771,6 +775,8 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         harmRatioS += ovb::onePoleCoef (double (n) / std::max (1.0, sr), kHarmTau)
                     * (ratio - harmRatioS);
         meterHarm.store ((float) juce::Decibels::gainToDecibels (harmRatioS, -100.0));
+        // Unsmoothed, for the ring's Peak display: this block's own ratio.
+        meterHarmPk.store ((float) juce::Decibels::gainToDecibels (ratio, -100.0));
     }
 
     // ---- post EQ: 5 bands, minimum phase, shelf bands switchable to cuts ----

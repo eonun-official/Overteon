@@ -13,6 +13,7 @@ Item {
     property bool schranz: false
 
     signal aboutRequested()
+    signal settingsRequested()
 
     height: OvTheme.headerH
     width: parent ? parent.width : 0
@@ -57,8 +58,15 @@ Item {
     }
 
     // ---- meter pod -----------------------------------------------------
+    //
+    // The pod doubles as the Settings entry.  Hovering it turns the monitor
+    // ring green and swaps the percentage read-out for the word SETTINGS;
+    // leaving restores both.  The ring keeps drawing behind the label, so it
+    // still reads as a meter while it advertises the panel — an entry that
+    // blanked the meter would be a button wearing the meter's clothes.
     OvMeterView {
         id: pod
+        settingsHover: podMa.containsMouse
         width: Math.min (550, root.width * 0.55)
         // The art is 64/480 of the width, but its halo is a real Gaussian
         // (stdDeviation 2.5 in viewBox units) that spills past the art — the
@@ -69,6 +77,14 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.verticalCenter: parent.verticalCenter
         engine: root.engine
+
+        MouseArea {
+            id: podMa
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.settingsRequested()
+        }
     }
 
     // ---- INIT ----------------------------------------------------------

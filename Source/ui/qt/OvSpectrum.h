@@ -75,6 +75,21 @@ inline double dbOfPower (double p)  { return 10.0 * std::log10 (std::max (p, 1e-
 
 struct SpectrumBallistics
 {
+    /// How the band levels are detected.
+    ///
+    /// Rms is the power-domain one-pole below: a mean of energy, which is what
+    /// an analyser normally shows and what made the outline stable (the mean of
+    /// dB is not the dB of the mean — see the notes at the top of the file).
+    ///
+    /// Peak takes the MAX bin in the band instead of the mean, and holds it in
+    /// time: a new maximum lands instantly, only the fall follows the release
+    /// constant.  Both halves matter — the mean across a half-octave averages
+    /// away a narrow tone, and the time mean averages away a transient, so a
+    /// "peak" that kept either would not be showing a peak.  It uses the same
+    /// release as Rms, so the two traces decay together instead of drifting.
+    enum class Mode { Rms, Peak };
+    Mode mode = Mode::Rms;
+
     // ---- tunables, all in real units --------------------------------------
     /// Power-domain one-pole constants.  The fall is 4.343/tau dB/s, so
     /// 0.12 s is 36 dB/s and a full 85 dB sweep takes 2.4 s — the value that
@@ -108,25 +123,53 @@ struct SpectrumBallistics
         double sm[kBins];
         for (int i = 0; i < kBins; ++i)
         {
-            double acc = 0.0, wsum = 0.0;
-            for (int k = -kFreqHalf; k <= kFreqHalf; ++k)
+            if (mode == Mode::Peak)
             {
-                const int j = std::clamp (i + k, 0, kBins - 1);
-                const double w = m_kernel[k + kFreqHalf];
-                acc  += p[j] * w;
-                wsum += w;
+                // Loudest bin in the band, not the band's mean: a narrow tone
+                // averaged over half an octave reads far below its own level,
+                // which is the opposite of what a peak display is for.
+                double mx = 0.0;
+                for (int k = -kFreqHalf; k <= kFreqHalf; ++k)
+                    mx = std::max (mx, p[std::clamp (i + k, 0, kBins - 1)]);
+                sm[i] = mx;
             }
-            sm[i] = (wsum > 0.0) ? acc / wsum : 0.0;
+            else
+            {
+                double acc = 0.0, wsum = 0.0;
+                for (int k = -kFreqHalf; k <= kFreqHalf; ++k)
+                {
+                    const int j = std::clamp (i + k, 0, kBins - 1);
+                    const double w = m_kernel[k + kFreqHalf];
+                    acc  += p[j] * w;
+                    wsum += w;
+                }
+                sm[i] = (wsum > 0.0) ? acc / wsum : 0.0;
+            }
         }
 
-        // ---- 3. the power-domain one-pole --------------------------------
+        // ---- 3. detect in time -------------------------------------------
         const double aUp = 1.0 - std::exp (-dt / std::max (1e-5, attackTau));
         const double aDn = 1.0 - std::exp (-dt / std::max (1e-5, releaseTau));
         for (int i = 0; i < kBins; ++i)
         {
             const double target = sm[i];
-            const double a = (target >= m_pow[i]) ? aUp : aDn;
-            m_pow[i] += (target - m_pow[i]) * a;
+
+            if (mode == Mode::Rms)
+            {
+                const double a = (target >= m_pow[i]) ? aUp : aDn;
+                m_pow[i] += (target - m_pow[i]) * a;
+            }
+            else
+            {
+                // Max-hold.  No attack smoothing at all: the whole point of a
+                // peak reading is that the first frame containing the transient
+                // already shows it.  Only the fall is ballisted, with the same
+                // release constant the RMS mode uses, so the two traces decay
+                // together instead of drifting apart.
+                if (target >= m_pow[i]) m_pow[i] = target;
+                else                    m_pow[i] += (target - m_pow[i]) * aDn;
+            }
+
             if (! std::isfinite (m_pow[i])) m_pow[i] = 0.0;
             m_out[i] = float (dbToNorm (dbOfPower (m_pow[i])));
             out01[i] = m_out[i];

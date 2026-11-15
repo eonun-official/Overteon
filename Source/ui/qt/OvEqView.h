@@ -58,11 +58,20 @@ class OvEqView : public QQuickItem
     Q_PROPERTY(bool headerTop READ headerTop WRITE setHeaderTop NOTIFY headerTopChanged)
     Q_PROPERTY(double glow READ glow WRITE setGlow NOTIFY glowChanged)
 
+    /// Analyser detection mode: false = RMS (power-domain mean, the default),
+    /// true = peak (max-hold with the same release).  Per view, so the upper and
+    /// lower spectrum sections are independent metres rather than two halves of
+    /// one — which is what the settings panel exposes them as.
+    Q_PROPERTY(bool specPeak READ specPeak WRITE setSpecPeak NOTIFY specPeakChanged)
+
 public:
     explicit OvEqView (QQuickItem* parent = nullptr);
 
     OvEngine* engine() const { return m_engine; }
     void setEngine (OvEngine*);
+
+    bool specPeak() const { return m_specBall.mode == ovspec::SpectrumBallistics::Mode::Peak; }
+    void setSpecPeak (bool on);
 
     QString prefix() const { return m_prefix; }
 
@@ -300,6 +309,7 @@ signals:
     void accentChanged();
     void headerTopChanged();
     void glowChanged();
+    void specPeakChanged();
     void menuRequested (int band, QPointF pos, QString currentType);
     void hoverInfo (QString text, QPointF pos);
     void hoverEnded();

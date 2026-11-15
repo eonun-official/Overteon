@@ -74,7 +74,15 @@ public:
     std::atomic<bool>  fftInReady { false };
     std::atomic<float> meterInL  { 0.0f }, meterInR  { 0.0f };
     std::atomic<float> meterOutL { 0.0f }, meterOutR { 0.0f };
-    std::atomic<float> meterHarm { -100.0f };   // harmonic/dry ratio, dB
+    std::atomic<float> meterHarm { -100.0f };   // harmonic/dry ratio, dB (smoothed)
+    /// The same ratio WITHOUT the 131 ms smoothing: this block's measurement.
+    ///
+    /// The ring's Peak display needs a value that has not been averaged over
+    /// time, or "peak" would be a mean wearing a peak's name.  There is no
+    /// oversampling here and there should not be — the ratio is two energies
+    /// measured over a block, not a waveform — so "peak" for this meter is the
+    /// block's own maximum, held by the display with the usual release.
+    std::atomic<float> meterHarmPk { -100.0f };
     double harmRatioS = 0.0;
 
     /// The RMS detectors behind the four level atomics.  Audio thread only; the

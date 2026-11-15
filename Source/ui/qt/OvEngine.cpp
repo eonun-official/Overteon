@@ -339,6 +339,36 @@ void OvEngine::setPresetName (const QString& name)
     if (name != m_presetName) { m_presetName = name; emit presetNameChanged(); }
 }
 
+// ---- display settings -------------------------------------------------------
+//
+// Plain setters with a change guard.  None of this reaches the DSP: the analyser
+// smoothing and the meter ballistics both live in the UI (OvSpectrum.h,
+// OvBallistics.h) and read the tables the engine produces.  One shared signal is
+// deliberate — the panel binds to it, and the ring and the two views each read
+// the property they care about.
+void OvEngine::setHarmDetector (int v)
+{
+    v = (v == 1) ? 1 : 0;
+    if (v != m_harmDetector) { m_harmDetector = v; emit settingsChanged(); }
+}
+
+void OvEngine::setUpperDetector (int v)
+{
+    v = (v == 1) ? 1 : 0;
+    if (v != m_upperDetector) { m_upperDetector = v; emit settingsChanged(); }
+}
+
+void OvEngine::setLowerDetector (int v)
+{
+    v = (v == 1) ? 1 : 0;
+    if (v != m_lowerDetector) { m_lowerDetector = v; emit settingsChanged(); }
+}
+
+void OvEngine::setMeterInterpolation (bool on)
+{
+    if (on != m_meterInterpolation) { m_meterInterpolation = on; emit settingsChanged(); }
+}
+
 QString OvEngine::spectrumAt (int i) const
 {
     if (i < 0 || i >= m_spectrum.size()) return QStringLiteral ("0");

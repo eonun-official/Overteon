@@ -31,7 +31,10 @@ struct OvMeters
     float inR  = -90.0f;
     float outL = -90.0f;
     float outR = -90.0f;
-    float harm = -100.0f;                 // harmonic/dry ratio, dB
+    float harm = -100.0f;                 // harmonic/dry ratio, dB (smoothed)
+    /// Same ratio before the DSP's 131 ms smoothing.  The ring's Peak display
+    /// holds this instead of the mean — see OverteonProcessor.h.
+    float harmPeak = -100.0f;
 };
 
 class OvSource
