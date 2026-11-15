@@ -215,20 +215,50 @@ $o -join "`n"
 PS1
 
 # ---- 7. JACK, verified -----------------------------------------------------
+# Two traps here, both about process lifetime and identity:
+#
+#   * A jackd started from an SSH session dies when that session closes — the
+#     session's job object takes the child with it.  So it is started and
+#     verified inside ONE ssh call, which is exactly how an audio app uses it.
+#   * jackd must run as the SAME USER as its clients.  JACK's named pipe and
+#     events carry a per-user DACL: a jackd started as SYSTEM (scheduled task)
+#     refuses Administrator's clients with "err = 5" even though both are in
+#     session 0.  Run it as the user.
+#
+# For desktop use a logon task is registered instead, so jackd comes up in the
+# interactive session alongside Ardour.  It does nothing until someone logs on.
 say "jack"
 rsh <<'PS1'
 $ErrorActionPreference = 'Continue'
 $J = 'C:\Program Files\JACK2'
 $env:Path = "$J;$J\tools;$J\lib;$env:Path"
+
+# Logon task for interactive use (harmless when nobody is logged on).
+Get-Process jackd -ErrorAction SilentlyContinue | Stop-Process -Force
+$launcher = @'
+$J = "C:\Program Files\JACK2"
+$env:Path = "$J;$J\tools;$J\lib;$env:Path"
 Get-Process jackd -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
+& "$J\jackd.exe" -R -d portaudio -r 48000 -p 512 *> C:\jackd.log
+'@
+Set-Content -Path 'C:\jackd_start.ps1' -Value $launcher -Encoding ASCII
+$act = New-ScheduledTaskAction -Execute 'powershell.exe' `
+        -Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\jackd_start.ps1'
+$trg = New-ScheduledTaskTrigger -AtLogOn -User 'Administrator'
+$prn = New-ScheduledTaskPrincipal -UserId 'Administrator' -LogonType Interactive -RunLevel Highest
+Register-ScheduledTask -TaskName 'JackServer' -Action $act -Trigger $trg `
+    -Principal $prn -Force | Out-Null
 
-Start-Process -FilePath "$J\jackd.exe" -ArgumentList '-R','-d','portaudio','-r','48000','-p','512' -RedirectStandardOutput C:\jackd_out.txt -RedirectStandardError C:\jackd_err.txt -WindowStyle Hidden
-Start-Sleep -Seconds 10
+# Now start it in this session and prove a client can talk to it.
+Start-Sleep -Seconds 2
+Start-Process -FilePath "$J\jackd.exe" `
+    -ArgumentList '-R','-d','portaudio','-r','48000','-p','512' -WindowStyle Hidden
+Start-Sleep -Seconds 14
 
 $o = @()
 $o += "  jackd: " + ((Get-Process jackd -ErrorAction SilentlyContinue |
-        ForEach-Object { "pid=$($_.Id)" }) -join ',')
+        ForEach-Object { "pid=$($_.Id) session=$($_.SessionId)" }) -join ',')
 $o += "  ports:"
 $o += (& "$J\tools\jack_lsp.exe" 2>&1 | ForEach-Object { "    $_" })
 $o += "  bufsize=" + ((& "$J\tools\jack_bufsize.exe"    2>&1) -join '')
