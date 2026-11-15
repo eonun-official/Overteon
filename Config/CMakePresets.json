@@ -1,0 +1,69 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "host",
+      "displayName": "Linux host / Release (vendored JUCE, offline)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../Build/host",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "host-debug",
+      "displayName": "Linux host / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../Build/host-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "win",
+      "displayName": "Windows x64 cross (clang-cl + xwin + MSVC Qt)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../Build/win",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "description": "Pass -DCMAKE_TOOLCHAIN_FILE=<abs>/Config/cmake/toolchain-clangcl-xwin.cmake. CMake resolves toolchain files relative to the build dir, so it cannot be expressed portably in a preset."
+    },
+    {
+      "name": "win-preview",
+      "displayName": "Windows x64 cross / Qt preview only (no JUCE)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../Build/win-preview",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "OVERTEON_PREVIEW_ONLY": "ON"
+      },
+      "description": "Pass -DCMAKE_TOOLCHAIN_FILE=<abs>/Config/cmake/toolchain-clangcl-xwin.cmake. CMake resolves toolchain files relative to the build dir, so it cannot be expressed portably in a preset."
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "host",
+      "configurePreset": "host"
+    },
+    {
+      "name": "host-debug",
+      "configurePreset": "host-debug"
+    },
+    {
+      "name": "win",
+      "configurePreset": "win"
+    },
+    {
+      "name": "win-preview",
+      "configurePreset": "win-preview"
+    }
+  ]
+}

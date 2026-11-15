@@ -4,9 +4,35 @@ The **Qt6/QML** editor for Overteon.  Same DSP, same parameter set, same
 presets, same plug-in identity as the original — the editor is rewritten in
 Qt Quick instead of the HTML/JS WebView.
 
-The original WebView version lives in the sibling directory **`../OVERTEON`**
-and stays the visual reference: every screen in `ui/qt/qml/` is a 1:1 port of a
-construct in `../OVERTEON/web_fx/index.html`.
+The original WebView version is kept as the visual reference in
+`Assets/reference/original/web_fx/`: every screen in `Source/ui/qt/qml/` is a
+1:1 port of a construct in that page.
+
+## Layout
+
+```
+Config/     build system — CMakeLists.txt, presets, toolchain files
+Source/     everything that is compiled
+  src/        the JUCE plug-in (processor, parameters, DSP)
+  ui/qt/      the Qt editor: C++ items, QML, shaders, resources
+  web_fx/     the WebView editor's assets (legacy -DOVERTEON_QT_UI=OFF path)
+  third_party/ vendored JUCE, VST2 SDK, WebView2 (not tracked)
+Tools/      developer tools that are not built into the product
+  units/      headless checks for the meters and the analyser
+  blurdemo/   the CPU-vs-GPU blur comparison
+  preview-server/  the debug server the WebView editor talks to
+Scripts/    task scripts — demo, packaging, Windows and VM deployment
+Assets/     data that ships or documents the product
+  presets/    factory and user .hinj
+  reference/  the original web UI, kept for comparison
+  ov_shaders/ generated shader bundle manifest
+  docs/       changelogs and build notes
+Build/      all build output (git-ignored, except dist-win/)
+```
+
+Nothing outside `Config/`, `Source/`, `Tools/`, `Scripts/` and `Assets/` is
+tracked, and every path inside the build system is relative — the tree is
+meant to be cloned anywhere.
 
 ## Product identity
 
@@ -31,22 +57,34 @@ build cannot be installed side by side — install one or the other.
 
 ## Build
 
+The source tree is `Config/`; the build tree goes under `Build/`.
+
 ```sh
-cmake -S . -B build -G Ninja              # vendored ./JUCE, no network
-ninja -C build -j"$(nproc)"               # LV2 + VST3 + Standalone
-ninja -C build overteon-qml-preview       # host-free UI viewer
+# Linux host — vendored JUCE, no network needed
+cmake -S Config -B Build/host -G Ninja -DCMAKE_BUILD_TYPE=Release
+ninja -C Build/host
+
+# Windows x64 cross-compile (clang-cl + xwin + an MSVC Qt)
+cmake -S Config -B Build/win -G Ninja \
+      -DCMAKE_TOOLCHAIN_FILE=$PWD/Config/cmake/toolchain-clangcl-xwin.cmake \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_PREFIX_PATH=$HOME/Qt-msvc/6.9.3/msvc2022_64
+WINEPATH=$HOME/Qt-msvc/6.9.3/msvc2022_64/bin ninja -C Build/win
 ```
 
-Artefacts: `build/HarmonicInjector_artefacts/Release/{LV2/OVERTEON.lv2,VST3,Standalone}/`
+`CMAKE_TOOLCHAIN_FILE` must be absolute: CMake resolves it against the *build*
+directory, not the source directory. The presets in `Config/CMakePresets.json`
+have the same problem and are therefore only useful for the host builds.
+
+Artefacts land in `Build/host/HarmonicInjector_artefacts/Release/` and
+`Build/win/HarmonicInjector_artefacts/Release/`.
 
 `-DOVERTEON_QT_UI=OFF` builds the WebView editor instead (useful for
-side-by-side comparison with OVERTEON).
+side-by-side comparison with the original).
 
 ## Try the UI without a host
 
 ```sh
-./build/overteon-qml-preview --size 1040x772                     # interactive
-./build/overteon-qml-preview --size 1040x772 --freeze --shot x.png
+./Build/host/overteon-qml-preview --size 1040x772                     # interactive
+./Build/host/overteon-qml-preview --size 1040x772 --freeze --shot x.png
 ```
-
-See `ui/qt/README.md` for the architecture and the CSS → QML mapping table.

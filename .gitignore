@@ -1,38 +1,45 @@
 # ---- build output -------------------------------------------------------
-build/
-build-*/
+# Everything cmake generates lives under Build/, except Build/dist-win which is
+# the shipped Windows Qt runtime and IS tracked.
+Build/*
+!Build/dist-win/
+!Build/dist-win/**
+
+# stray in-source CMake output (never should happen; belt and braces)
+CMakeCache.txt
 CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+*.ninja
+.ninja_deps
+.ninja_log
+.qt/
 _deps/
+HarmonicInjector_artefacts/
 dist/
 *.o
 *.a
 *.so
-compile_commands.json
-CMakeCache.txt
-.hninja_deps
-.ninja_log
-.ninja_deps
+*.obj
+*.lib
+*.pdb
 
-# ---- third-party / vendor blobs (too large for git; see README) ---------
-JUCE/
-juce.zip
-webview2/
-webview2.nupkg
-build.zip
+# ---- third-party blobs ---------------------------------------------------
+# Vendored, not source: JUCE is fetched by Config/CMakeLists.txt (pinned to
+# 8.0.13) and the WebView2 NuGet package is only needed when building the
+# legacy WebView editor with -DOVERTEON_QT_UI=OFF.
+Source/third_party/JUCE/
+Source/third_party/juce.zip
+Source/third_party/webview2/
+Source/third_party/webview2.nupkg
 
-# ---- local backups / scratch -------------------------------------------
-_backup_v1.9.0/
-.screenshots/
-*.bak
-*.orig
-*.rej
-*.log
-
-# preview server build output
-tools/preview-server/overteon-preview-server
-tools/preview-server/.dub/
-tools/preview-server/dub.selections.json
-__pycache__/
-
-# ---- secrets --------------------------------------------------------
+# ---- secrets -------------------------------------------------------------
 CI_PASSWD.txt
+
+# ---- editor / OS noise ---------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*~
+__pycache__/
+*.pyc
