@@ -5,7 +5,7 @@
 //  The QML front end never talks to JUCE directly: it sees an OvEngine,
 //  which is fed by an OvSource.  Two implementations exist:
 //
-//    OvJuceSource  — wraps the live InjectorProcessor (both hosts + plugin)
+//    OvJuceSource  — wraps the live OverteonProcessor (both hosts + plugin)
 //    OvJackSource  — real audio from a JACK client (preview app)
 //
 //  This header deliberately uses only the C++ standard library so the

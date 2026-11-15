@@ -3,7 +3,7 @@
 #  package.sh — build and install the LV2 bundle.
 #
 #  JUCE writes a fresh bundle to
-#      build/HarmonicInjector_artefacts/Release/LV2/Overteon.lv2
+#      build/Overteon_artefacts/Release/LV2/Overteon.lv2
 #  on every build.  This copies it to ~/.lv2 (or $LV2_DEST) so hosts can load
 #  it, and verifies the copy afterwards — a stale bundle is easy to miss and
 #  then every "the plug-in still has the old bug" report is really about the
@@ -20,7 +20,7 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
-BUILT="$ROOT/Build/host/HarmonicInjector_artefacts/Release/LV2/Overteon.lv2"
+BUILT="$ROOT/Build/host/Overteon_artefacts/Release/LV2/Overteon.lv2"
 DEST_ROOT=${LV2_DEST:-$HOME/.lv2}
 DEST="$DEST_ROOT/Overteon.lv2"
 URI="https://eonun.com/plugins/Overteon"
@@ -40,9 +40,9 @@ done
 # ---- 1. build -------------------------------------------------------------
 if [ "$build" = 1 ] && [ "$check_only" = 0 ]; then
     echo "building the LV2 bundle"
-    if ! ninja -C "$ROOT/build" HarmonicInjector_LV2 2>&1 | tail -3; then
+    if ! ninja -C "$ROOT/Build/host" Overteon_LV2 2>&1 | tail -3; then
         # some trees name the target differently; fall back to a plain build
-        ninja -C "$ROOT/build" >/dev/null 2>&1 || {
+        ninja -C "$ROOT/Build/host" >/dev/null 2>&1 || {
             echo "build failed" >&2; exit 1; }
     fi
 fi

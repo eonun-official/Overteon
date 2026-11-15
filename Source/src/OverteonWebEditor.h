@@ -3,13 +3,13 @@
 //  Harmonic Injector — WebView editor (same battle-tested
 //  DPI / jiggle / sentinel machinery as Supersaw Omega Web).
 // ============================================================
-#include "FxProcessor.h"
+#include "OverteonProcessor.h"
 #include "FxData.h"
 
 class InjectorWebEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
-    explicit InjectorWebEditor (InjectorProcessor& p)
+    explicit InjectorWebEditor (OverteonProcessor& p)
         : juce::AudioProcessorEditor (p), proc (p)
     {
         const auto ids = allParamIDs();
@@ -248,10 +248,10 @@ private:
         if (! proc.fftReady.load()) return;
         std::fill (fftBuf.begin(), fftBuf.end(), 0.0f);
         std::copy (proc.fftData.begin(),
-                   proc.fftData.begin() + InjectorProcessor::fftSize, fftBuf.begin());
+                   proc.fftData.begin() + OverteonProcessor::fftSize, fftBuf.begin());
         proc.fftReady = false;
 
-        window.multiplyWithWindowingTable (fftBuf.data(), InjectorProcessor::fftSize);
+        window.multiplyWithWindowingTable (fftBuf.data(), OverteonProcessor::fftSize);
         fft.performFrequencyOnlyForwardTransform (fftBuf.data());
         const float fsr = juce::jmax (1.0f, (float) proc.getSampleRate());
         juce::Array<juce::var> out;
@@ -259,9 +259,9 @@ private:
         {
             const float frac = (float) i / 127.0f;
             const float fr   = 20.0f * std::pow (1000.0f, frac);
-            const int bin    = juce::jlimit (0, InjectorProcessor::fftSize / 2,
-                                  (int) (fr / fsr * (float) InjectorProcessor::fftSize));
-            const float mag  = fftBuf[(size_t) bin] / (float) InjectorProcessor::fftSize * 8.0f;
+            const int bin    = juce::jlimit (0, OverteonProcessor::fftSize / 2,
+                                  (int) (fr / fsr * (float) OverteonProcessor::fftSize));
+            const float mag  = fftBuf[(size_t) bin] / (float) OverteonProcessor::fftSize * 8.0f;
             const float db   = juce::Decibels::gainToDecibels (mag, -90.0f);
             out.add (juce::jlimit (0.0f, 1.0f,
                          juce::jmap (db, -85.0f, 0.0f, 0.0f, 1.0f)));
@@ -397,7 +397,7 @@ private:
             });
     }
 
-    InjectorProcessor& proc;
+    OverteonProcessor& proc;
     float hostScale = 1.0f;
     juce::Rectangle<int> lastGeometry;
     juce::Point<int> pendingPosition;
@@ -410,10 +410,10 @@ private:
     std::vector<std::unique_ptr<juce::WebSliderParameterAttachment>> attachments;
     std::unique_ptr<juce::FileChooser> chooser;
 
-    juce::dsp::FFT fft { InjectorProcessor::fftOrder };
+    juce::dsp::FFT fft { OverteonProcessor::fftOrder };
     juce::dsp::WindowingFunction<float> window
-        { InjectorProcessor::fftSize, juce::dsp::WindowingFunction<float>::hann };
-    std::array<float, InjectorProcessor::fftSize * 2> fftBuf {};
+        { OverteonProcessor::fftSize, juce::dsp::WindowingFunction<float>::hann };
+    std::array<float, OverteonProcessor::fftSize * 2> fftBuf {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InjectorWebEditor)
 };

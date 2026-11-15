@@ -76,8 +76,8 @@ WINEPATH=$HOME/Qt-msvc/6.9.3/msvc2022_64/bin ninja -C Build/win
 directory, not the source directory. The presets in `Config/CMakePresets.json`
 have the same problem and are therefore only useful for the host builds.
 
-Artefacts land in `Build/host/HarmonicInjector_artefacts/Release/` and
-`Build/win/HarmonicInjector_artefacts/Release/`.
+Artefacts land in `Build/host/Overteon_artefacts/Release/` and
+`Build/win/Overteon_artefacts/Release/`.
 
 `-DOVERTEON_QT_UI=OFF` builds the WebView editor instead (useful for
 side-by-side comparison with the original).

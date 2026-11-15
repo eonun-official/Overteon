@@ -11,11 +11,11 @@
 #include "Limiter.h"
 #include "OvBallistics.h"   // ovb::Rms — the level meters' detector
 
-class InjectorProcessor : public juce::AudioProcessor
+class OverteonProcessor : public juce::AudioProcessor
 {
 public:
-    InjectorProcessor();
-    ~InjectorProcessor() override = default;
+    OverteonProcessor();
+    ~OverteonProcessor() override = default;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -152,5 +152,5 @@ private:
     int fftInIdx = 0;
     double sr = 48000.0;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InjectorProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OverteonProcessor)
 };

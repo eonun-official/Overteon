@@ -12,12 +12,12 @@
 
 #include "OvSource.h"
 
-class InjectorProcessor;
+class OverteonProcessor;
 
 class OvJuceSource : public OvSource
 {
 public:
-    explicit OvJuceSource (InjectorProcessor& processor);
+    explicit OvJuceSource (OverteonProcessor& processor);
     ~OvJuceSource() override;
 
     int         count() const override { return (int) ids.size(); }
@@ -57,7 +57,7 @@ private:
     void applyPresetFile (const juce::File&);
     void ensureDefaultPreset (const juce::File& root) const;
 
-    InjectorProcessor& proc;
+    OverteonProcessor& proc;
     juce::StringArray  ids;
     std::vector<juce::AudioProcessorParameter*> params;
 

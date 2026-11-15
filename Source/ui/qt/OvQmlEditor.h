@@ -16,7 +16,7 @@
 
 #include <memory>
 
-class InjectorProcessor;
+class OverteonProcessor;
 class QQuickView;
 
 namespace ovqt { class Component; }
@@ -25,7 +25,7 @@ class OvQmlEditor : public juce::AudioProcessorEditor,
                     private juce::Timer
 {
 public:
-    explicit OvQmlEditor (InjectorProcessor&);
+    explicit OvQmlEditor (OverteonProcessor&);
     ~OvQmlEditor() override;
 
     void paint (juce::Graphics&) override;
@@ -42,7 +42,7 @@ private:
     /// The QML scene, running the data poll and the light timer that feed it.
     class Impl;
     std::unique_ptr<Impl> impl;
-    InjectorProcessor& proc;
+    OverteonProcessor& proc;
 
     /// Hosts the QQuickView.  All open/close/geometry handling lives inside it
     /// (ComponentMovementWatcher), which is what makes this work in every host

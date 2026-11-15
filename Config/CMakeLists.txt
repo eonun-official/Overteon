@@ -143,7 +143,7 @@ endif()
 # ============================================================
 # Overteon — harmonic-injection EQ (active distortion + EQ)
 # ============================================================
-juce_add_binary_data(FxWebAssets
+juce_add_binary_data(OverteonWebAssets
     HEADER_NAME FxData.h
     NAMESPACE FxData
     SOURCES
@@ -152,7 +152,7 @@ juce_add_binary_data(FxWebAssets
         ../Source/web_fx/edix.otf)
 
 # Declared before first use: both the web-browser feature flags below and the
-# FxWebEditor exclusion depend on it, and CMake reads variables in order.
+# OverteonWebEditor exclusion depend on it, and CMake reads variables in order.
 option(OVERTEON_QT_UI "Build the Qt6/QML editor instead of the WebView one" ON)
 
 # The WebView editor needs the platform web engine; the Qt editor does not, and
@@ -165,7 +165,7 @@ else()
     set(OVERTEON_NEEDS_WEBVIEW2 TRUE)
 endif()
 
-juce_add_plugin(HarmonicInjector
+juce_add_plugin(Overteon
     COMPANY_NAME "Eonun"
     COMPANY_WEBSITE "https://eonun.com"
     # Stable LV2 URIs/ids must never change after release, or hosts lose settings.
@@ -184,15 +184,15 @@ juce_add_plugin(HarmonicInjector
     COPY_PLUGIN_AFTER_BUILD FALSE
     PRODUCT_NAME "Overteon")
 
-target_sources(HarmonicInjector PRIVATE
-    ../Source/src/FxProcessor.cpp)
+target_sources(Overteon PRIVATE
+    ../Source/src/OverteonProcessor.cpp)
 
-# FxWebEditor implements the JUCE WebBrowserComponent editor.  With the Qt
+# OverteonWebEditor implements the JUCE WebBrowserComponent editor.  With the Qt
 # editor enabled JUCE_WEB_BROWSER is 0, so juce::WebBrowserComponent does not
 # exist and this file cannot compile.  Keep it in the source list (so IDE and
 # WebView builds still see it) but tell CMake not to compile it.
 if(OVERTEON_QT_UI)
-    set_source_files_properties(../Source/src/FxWebEditor.cpp PROPERTIES
+    set_source_files_properties(../Source/src/OverteonWebEditor.cpp PROPERTIES
         HEADER_FILE_ONLY TRUE)
 endif()
 
@@ -205,11 +205,11 @@ endif()
 if(OVERTEON_QT_UI)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets ShaderTools)
 
-    # HarmonicInjector was created by juce_add_plugin before this point, so
+    # Overteon was created by juce_add_plugin before this point, so
     # AUTOMOC has to be enabled on the target itself (not via CMAKE_AUTOMOC).
-    set_target_properties(HarmonicInjector PROPERTIES AUTOMOC ON AUTORCC ON)
+    set_target_properties(Overteon PROPERTIES AUTOMOC ON AUTORCC ON)
 
-    target_sources(HarmonicInjector PRIVATE
+    target_sources(Overteon PRIVATE
         ../Source/ui/qt/OvEngine.cpp
         ../Source/ui/qt/OvParam.cpp
         ../Source/ui/qt/OvJuceSource.cpp
@@ -253,39 +253,39 @@ if(OVERTEON_QT_UI)
 
     # (The link-side half of this -- forcing OvGlibShim.o out of the shared
     # archive -- is per-format and lives in the PLUGIN_FORMATS loop below,
-    # because options set on HarmonicInjector do not reach the .so.)
+    # because options set on Overteon do not reach the .so.)
 
-    target_include_directories(HarmonicInjector PRIVATE ../Source/ui/qt ../Source/src)
+    target_include_directories(Overteon PRIVATE ../Source/ui/qt ../Source/src)
 
-    target_compile_definitions(HarmonicInjector PUBLIC OVERTEON_QT_UI=1)
+    target_compile_definitions(Overteon PUBLIC OVERTEON_QT_UI=1)
 
     # One source of truth for the version string: the About panel shows it, so
     # it comes from project(VERSION) rather than being typed into the QML.
-    target_compile_definitions(HarmonicInjector PUBLIC
+    target_compile_definitions(Overteon PUBLIC
         OVERTEON_VERSION="${PROJECT_VERSION}")
 
     # Editor resizability is compiled in or out, so a fixed build cannot be
     # widened at run time.  PUBLIC: every format target (LV2/VST3/VST/
     # Standalone) compiles OvQmlEditor.cpp and has to agree.
-    target_compile_definitions(HarmonicInjector PUBLIC
+    target_compile_definitions(Overteon PUBLIC
         OVERTEON_RESIZABLE_WINDOW=$<BOOL:${OVERTEON_RESIZABLE_WINDOW}>)
 
     # QQuickRenderControl renders the scene into a texture we own instead of
     # onto a window of Qt's own.  That is what lets the editor live inside a
     # JUCE Component on every platform: no reparenting, so no window the host
     # can unmap behind our back.
-    target_link_libraries(HarmonicInjector PRIVATE
+    target_link_libraries(Overteon PRIVATE
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::OpenGL)
 
     # OvQmlEditor walks and maps the host's X window chain itself
     if(UNIX AND NOT APPLE)
         find_package(X11 REQUIRED)
-        target_link_libraries(HarmonicInjector PRIVATE X11::X11)
+        target_link_libraries(Overteon PRIVATE X11::X11)
         # XShapeCombineRectangles (input shape, used by the optional
         # OVERTEON_CLEAR_INPUT path) lives in libXext
         foreach(_x11_ext X11::Xext Xext)
             if(TARGET ${_x11_ext})
-                target_link_libraries(HarmonicInjector PRIVATE ${_x11_ext})
+                target_link_libraries(Overteon PRIVATE ${_x11_ext})
                 break()
             endif()
         endforeach()
@@ -368,11 +368,11 @@ if(OVERTEON_QT_UI)
     # So the bundle goes into every plug-in binary, exactly like the QML one,
     # and the shaders are built first because AUTORCC must find the .qsb files.
     foreach(_fmt ${PLUGIN_FORMATS})
-        if(TARGET HarmonicInjector_${_fmt})
-            target_sources(HarmonicInjector_${_fmt} PRIVATE
+        if(TARGET Overteon_${_fmt})
+            target_sources(Overteon_${_fmt} PRIVATE
                 ../Source/ui/qt/ov_ui.qrc ${OVERTEON_SHADER_QRC})
-            set_target_properties(HarmonicInjector_${_fmt} PROPERTIES AUTORCC ON)
-            add_dependencies(HarmonicInjector_${_fmt} overteon_shaders)
+            set_target_properties(Overteon_${_fmt} PROPERTIES AUTORCC ON)
+            add_dependencies(Overteon_${_fmt} overteon_shaders)
 
             # -z,nodelete: the host must not unmap this module while it runs.
             #
@@ -395,12 +395,12 @@ if(OVERTEON_QT_UI)
             # ELF only.  Windows has no equivalent, and lld-link reads "-z"
             # as a file name ("could not open 'nodelete'").
             if(UNIX AND NOT APPLE)
-                target_link_options(HarmonicInjector_${_fmt} PRIVATE "LINKER:-z,nodelete")
+                target_link_options(Overteon_${_fmt} PRIVATE "LINKER:-z,nodelete")
             endif()
 
             # Pull OvGlibShim.o out of the shared archive.
             #
-            # Everything under the HarmonicInjector target lands in
+            # Everything under the Overteon target lands in
             # libOverteon_SharedCode.a, and a static library only hands over a
             # member for a symbol somebody references.  Nothing in our own code
             # calls these -- the reference lives in libpxbackend, in the host's
@@ -410,7 +410,7 @@ if(OVERTEON_QT_UI)
             # before this, 14 after.
             #
             # It has to be attached to the per-format target, not to
-            # HarmonicInjector: that one is the shared-code archive, and options
+            # Overteon: that one is the shared-code archive, and options
             # set there do not reach the .so that actually gets dlopen()ed.
             # Linux only: the glib shim exists for a host that ships an old
             # glib (Ardour's bundled build), and neither the problem nor the
@@ -423,7 +423,7 @@ if(OVERTEON_QT_UI)
                         g_strv_builder_unref
                         g_uri_parse g_uri_to_string g_uri_ref g_uri_unref
                         g_uri_get_scheme g_uri_get_host g_uri_get_port)
-                    target_link_options(HarmonicInjector_${_fmt} PRIVATE
+                    target_link_options(Overteon_${_fmt} PRIVATE
                         "LINKER:-u,${_shim_sym}")
                 endforeach()
             endif()
@@ -461,13 +461,13 @@ if(OVERTEON_QT_UI)
     # show what the DSP actually does either (oversampling, saturation
     # harmonics, dry/wet, the limiter).
     #
-    # The preview therefore hosts the plug-in's own InjectorProcessor: the JACK
+    # The preview therefore hosts the plug-in's own OverteonProcessor: the JACK
     # thread copies incoming frames into a JUCE buffer and calls processBlock(),
     # exactly as a host would, and both spectrum taps are read from inside the
     # DSP.  Parameters, presets and meters come from the same APVTS the plug-in
     # uses, so ovctl and .hinj files drive the real thing.
     target_sources(overteon-qml-preview PRIVATE
-        ../Source/src/FxProcessor.cpp
+        ../Source/src/OverteonProcessor.cpp
         ../Source/ui/qt/OvJuceSource.cpp
         # createEditor() is part of the processor; the preview never opens the
         # editor, but the symbol has to link.
@@ -575,7 +575,7 @@ else()
     set(OVERTEON_WEB_BROWSER 1)
 endif()
 
-target_compile_definitions(HarmonicInjector PUBLIC
+target_compile_definitions(Overteon PUBLIC
     JUCE_WEB_BROWSER=${OVERTEON_WEB_BROWSER}
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
@@ -584,9 +584,9 @@ target_compile_definitions(HarmonicInjector PUBLIC
     $<$<AND:$<PLATFORM_ID:Windows>,$<NOT:$<BOOL:${OVERTEON_QT_UI}>>>:JUCE_USE_WIN_WEBVIEW2=1>
     $<$<AND:$<PLATFORM_ID:Windows>,$<NOT:$<BOOL:${OVERTEON_QT_UI}>>>:JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1>)
 
-target_link_libraries(HarmonicInjector
+target_link_libraries(Overteon
     PRIVATE
-        FxWebAssets
+        OverteonWebAssets
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC

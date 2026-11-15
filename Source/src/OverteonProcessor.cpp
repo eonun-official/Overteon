@@ -1,4 +1,4 @@
-#include "FxProcessor.h"
+#include "OverteonProcessor.h"
 #include "OvBallistics.h"   // ovb::Rms / ovb::onePoleCoef — the meters' detector
 
 namespace
@@ -39,7 +39,7 @@ namespace
 #if OVERTEON_QT_UI
  #include "OvQmlEditor.h"
 #else
- #include "FxWebEditor.h"
+ #include "OverteonWebEditor.h"
 #endif
 
 using FP = juce::AudioParameterFloat;
@@ -95,7 +95,7 @@ static bool configBand (int type, float fs, float f0, float q0, float gq,
     return s2;
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout InjectorProcessor::createLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout OverteonProcessor::createLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> ps;
 
@@ -178,7 +178,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout InjectorProcessor::createLay
     return { ps.begin(), ps.end() };
 }
 
-InjectorProcessor::InjectorProcessor()
+OverteonProcessor::OverteonProcessor()
     : juce::AudioProcessor (BusesProperties()
           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
@@ -193,14 +193,27 @@ InjectorProcessor::InjectorProcessor()
         apvts.getParameterAsValue ("osFactor") = stored;
 }
 
-juce::File InjectorProcessor::getGlobalSettingsFile()
+juce::File OverteonProcessor::getGlobalSettingsFile()
 {
-    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-        .getChildFile ("Eonun")
-        .getChildFile ("HarmonicInjector.settings");
+    // The product has been called Overteon throughout its life; the file name
+    // still said HarmonicInjector, the working title.  Read the new name and
+    // fall back to the old one once, so an existing pre-rename install keeps
+    // its oversampling choice instead of silently resetting to the default.
+    const auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                         .getChildFile ("Eonun");
+
+    const auto current = dir.getChildFile ("Overteon.settings");
+    if (current.existsAsFile())
+        return current;
+
+    const auto legacy = dir.getChildFile ("HarmonicInjector.settings");
+    if (legacy.existsAsFile())
+        return legacy;
+
+    return current;
 }
 
-int InjectorProcessor::loadGlobalOsFactor() const
+int OverteonProcessor::loadGlobalOsFactor() const
 {
     const auto f = getGlobalSettingsFile();
     if (! f.existsAsFile()) return -1;
@@ -213,7 +226,7 @@ int InjectorProcessor::loadGlobalOsFactor() const
     return -1;
 }
 
-void InjectorProcessor::saveGlobalOsFactor (int idx) const
+void OverteonProcessor::saveGlobalOsFactor (int idx) const
 {
     // Rare user gesture (oversampling switch): a tiny XML write is fine here.
     juce::XmlElement x ("HINJGLOBAL");
@@ -223,7 +236,7 @@ void InjectorProcessor::saveGlobalOsFactor (int idx) const
     x.writeTo (f);
 }
 
-void InjectorProcessor::cacheParams()
+void OverteonProcessor::cacheParams()
 {
     par.drive    = apvts.getRawParameterValue ("drive");
     par.mix      = apvts.getRawParameterValue ("mix");
@@ -258,7 +271,7 @@ void InjectorProcessor::cacheParams()
     }
 }
 
-void InjectorProcessor::applyInit()
+void OverteonProcessor::applyInit()
 {
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
@@ -269,7 +282,7 @@ void InjectorProcessor::applyInit()
         }
 }
 
-void InjectorProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void OverteonProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
     for (int s2 = 0; s2 < 5; ++s2)
@@ -347,14 +360,14 @@ void InjectorProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     fftReady = false;
 }
 
-void InjectorProcessor::updateReportedLatency()
+void OverteonProcessor::updateReportedLatency()
 {
     const bool schranz = (int) par.mode->load() == 2;
     setLatencySamples ((schranz ? 0 : driveLat + firGuardLat)
                        + limiter.getLatencySamples());
 }
 
-void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
@@ -860,7 +873,7 @@ void InjectorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     }
 }
 
-juce::AudioProcessorEditor* InjectorProcessor::createEditor()
+juce::AudioProcessorEditor* OverteonProcessor::createEditor()
 {
    #if OVERTEON_QT_UI
     return new OvQmlEditor (*this);
@@ -871,5 +884,5 @@ juce::AudioProcessorEditor* InjectorProcessor::createEditor()
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new InjectorProcessor();
+    return new OverteonProcessor();
 }

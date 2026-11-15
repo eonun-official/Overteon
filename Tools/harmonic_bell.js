@@ -1,5 +1,5 @@
 // Harmonic-mode probe: why a deep SC-EQ cut turns into a bell at that band.
-// Chain under test (same as FxProcessor, Harmonic):
+// Chain under test (same as OverteonProcessor, Harmonic):
 //   y = E(x)                  forward sidechain EQ (deep cut at f0)
 //   r = tanh(k*y) - k*y       harmonic residue (only the nonlinear part)
 //   out = Einv(r)             de-emphasis = inverse EQ  (BOOST at f0)

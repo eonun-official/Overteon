@@ -13,7 +13,7 @@
 //      could not show anything the DSP actually does — oversampling, the
 //      saturator's harmonics, the dry/wet mix, the limiter's action.
 //
-//  So the preview now contains the plug-in's own InjectorProcessor and feeds
+//  So the preview now contains the plug-in's own OverteonProcessor and feeds
 //  it from its JACK inputs, exactly as a host would: JACK thread -> copy into a
 //  JUCE buffer -> processBlock().  Both spectrum taps then come from inside the
 //  DSP and are FFTs of samples that really exist: the input tap of what entered,
@@ -26,7 +26,7 @@
 // ============================================================
 #include "OvEnv.h"
 #include "OvJuceSource.h"
-#include "FxProcessor.h"   // InjectorProcessor, the real DSP
+#include "OverteonProcessor.h"   // OverteonProcessor, the real DSP
 
 #include <jack/jack.h>
 
@@ -38,7 +38,7 @@
 class OvJackJuce : public OvJuceSource
 {
 public:
-    OvJackJuce (InjectorProcessor& processor, const std::string& clientName = "overpreview")
+    OvJackJuce (OverteonProcessor& processor, const std::string& clientName = "overpreview")
         : OvJuceSource (processor), proc (processor)
     {
         jack_status_t st {};
@@ -82,7 +82,7 @@ public:
         }
 
         m_ok = true;
-        std::fprintf (stderr, "[preview] real DSP: InjectorProcessor, %.0f Hz, "
+        std::fprintf (stderr, "[preview] real DSP: OverteonProcessor, %.0f Hz, "
                               "%d frames, JACK client '%s'\n",
                       m_rate, m_block, clientName.c_str());
     }
@@ -155,7 +155,7 @@ private:
         return 0;
     }
 
-    InjectorProcessor& proc;
+    OverteonProcessor& proc;
     jack_client_t*     m_client = nullptr;
     jack_port_t*       m_in[2] {};
     double             m_rate  = 48000.0;

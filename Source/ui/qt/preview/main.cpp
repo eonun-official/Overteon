@@ -18,7 +18,7 @@
 #include "OvEngine.h"
 #if OVERTEON_PREVIEW_HAS_DSP
  #include "OvJackJuce.h"
- #include "FxProcessor.h"
+ #include "OverteonProcessor.h"
 #else
  #include "OvJackSource.h"
 #endif
@@ -568,12 +568,12 @@ int main (int argc, char** argv)
     // made against it was a comparison against a signal that did not exist.
     // `bench.py -Gs` connects mpv to these ports.
 #if OVERTEON_PREVIEW_HAS_DSP
-    // THE REAL DSP.  The preview now hosts the plug-in's own InjectorProcessor
+    // THE REAL DSP.  The preview now hosts the plug-in's own OverteonProcessor
     // and plays the part a host plays: the JACK thread copies the incoming
     // frames into a JUCE buffer and calls processBlock().  The two spectrum taps
     // therefore come out of the DSP itself — the input tap is what entered it,
     // the output tap is what actually left.  Nothing is modelled.
-    auto proc = std::make_unique<InjectorProcessor>();
+    auto proc = std::make_unique<OverteonProcessor>();
     auto jackSrc = std::make_unique<OvJackJuce> (*proc, jackName.toStdString());
 #else
     auto jackSrc = std::make_unique<OvJackSource> (jackName.toStdString());

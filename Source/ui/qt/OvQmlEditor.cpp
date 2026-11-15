@@ -3,7 +3,7 @@
 #include "OvCryptoShim.h"
 #include "OvEnv.h"
 
-#include "FxProcessor.h"
+#include "OverteonProcessor.h"
 #include "OvEngine.h"
 #include "OvJuceSource.h"
 #include "OvQmlTypes.h"
@@ -107,7 +107,7 @@ struct OvQmlEditor::Impl
     bool          failed = false;
 };
 
-OvQmlEditor::OvQmlEditor (InjectorProcessor& p)
+OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
     : juce::AudioProcessorEditor (p),
       proc (p)
 {

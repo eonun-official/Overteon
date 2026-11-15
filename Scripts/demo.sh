@@ -22,7 +22,7 @@ ROOT=$(cd "$HERE/.." && pwd)
 RUN_DIR=${RUN_DIR:-/tmp/overteon-demo}
 mkdir -p "$RUN_DIR"
 
-LV2_DEFAULT="$ROOT/Build/host/HarmonicInjector_artefacts/Release/LV2"
+LV2_DEFAULT="$ROOT/Build/host/Overteon_artefacts/Release/LV2"
 URI_Overteon="https://eonun.com/plugins/Overteon"
 
 # ---- helpers --------------------------------------------------------------

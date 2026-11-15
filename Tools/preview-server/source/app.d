@@ -5,7 +5,7 @@
 //  engine (Gecko/Firefox, Blink/Chromium, WebKit) instead of a plug-in host.
 //
 //    /                landing page with links
-//    /original        the ORIGINAL HTML+CSS, extracted from ~/SupersawOmega.rar
+//    /original        the ORIGINAL HTML+CSS, from the original Overteon source tree
 //                     (the pristine design, no modifications)
 //    /current         the current UI (OVER|TEON; same HTML, only the wordmark
 //                     differs — the glass is plain CSS backdrop-filter, as in
@@ -20,7 +20,7 @@
 //  WebView backend (window.__JUCE__).  So `mock-backend.js` is injected in
 //  front of the document.  It implements the same protocol (slider/toggle
 //  events, native function invocation) with the SAME parameter table as
-//  src/FxProcessor.cpp — ids, ranges, skew, defaults — and animates meters and
+//  src/OverteonProcessor.cpp — ids, ranges, skew, defaults — and animates meters and
 //  spectrum, so curves, knobs and readouts match the plug-in exactly.
 //
 //  Bound to 0.0.0.0:8888 so it is reachable from the LAN.
@@ -73,7 +73,7 @@ string mockBackendScript ()
    editor UI runs in a plain browser.  Speaks the same protocol:
      JS  -> __JUCE__.postMessage({eventId, payload})
      host-> __JUCE__.backend.emitByBackend(eventId, jsonString)
-   Parameter table mirrors src/FxProcessor.cpp exactly (same ids, ranges,
+   Parameter table mirrors src/OverteonProcessor.cpp exactly (same ids, ranges,
    skew and defaults), so curves, knobs and readouts match the plug-in.
    ========================================================================= */
 (function () {
@@ -730,7 +730,7 @@ string landingPage ()
 <h1>OVERTEON <span style="color:#ff5c8a">PREVIEW</span></h1>
 <ul>
   <li><a href="/original">/original</a> — the original HTML+CSS
-      <code>web_fx/index.html</code> from SupersawOmega.rar</li>
+      <code>web_fx/index.html</code> from the original Overteon source tree</li>
   <li><a href="/current">/current</a> — the same page with the OVER|TEON
       wordmark <code>(identical rendering)</code></li>
   <li><a href="/compare">/compare</a> — both side by side</li>

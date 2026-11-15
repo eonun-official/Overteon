@@ -36,7 +36,7 @@
 //
 //  All arithmetic is double and all time is SECONDS.  A coefficient per frame
 //  would make the same build fall twice as fast at 60 Hz as at 30 — that bug is
-//  documented in FxProcessor.cpp and must not come back here.
+//  documented in OverteonProcessor.cpp and must not come back here.
 // ============================================================
 
 #include <algorithm>

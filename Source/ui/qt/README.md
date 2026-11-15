@@ -2,7 +2,7 @@
 
 The plug-in keeps JUCE for DSP, parameters and host integration; only the
 editor is Qt.  `-DOVERTEON_QT_UI=OFF` builds the original WebView editor
-instead (`src/FxWebEditor.h`).
+instead (`src/OverteonWebEditor.h`).
 
 ```
 ui/qt/
@@ -72,8 +72,8 @@ cmake --preset ninja && cmake --build build --target overteon-qml-preview
 ## In a host
 
 ```sh
-ninja -C build HarmonicInjector_LV2
-LV2_PATH=$PWD/build/HarmonicInjector_artefacts/Release/LV2 jalv.gtk3 -s \
+ninja -C build Overteon_LV2
+LV2_PATH=$PWD/build/Overteon_artefacts/Release/LV2 jalv.gtk3 -s \
     https://eonun.com/plugins/Overteon
 ```
 

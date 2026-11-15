@@ -16,7 +16,7 @@
 //  Input and output spectra: the inputs are the signal, and the "output" is
 //  that signal with the EQ response modelled on top, because THIS build links
 //  no DSP.  It is only used by the PREVIEW_ONLY configuration; the normal
-//  preview hosts the plug-in's InjectorProcessor and measures the processed
+//  preview hosts the plug-in's OverteonProcessor and measures the processed
 //  audio for real (OvJackJuce.h).  Even here the model is applied in dB before
 //  the display floor, so silence stays silent instead of drawing the curve.
 // ============================================================
@@ -187,7 +187,7 @@ public:
         //
         // This source exists for the PREVIEW_ONLY configuration (a Qt-only
         // cross-build where JUCE cannot be compiled) and has no
-        // InjectorProcessor to measure.  The normal preview hosts the real DSP
+        // OverteonProcessor to measure.  The normal preview hosts the real DSP
         // and never reaches this code — see OvJackJuce.h.
         //
         // The EQ response is therefore a MODEL here, and a model is only honest

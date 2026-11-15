@@ -1,6 +1,6 @@
 #include "OvJuceSource.h"
 
-#include "FxProcessor.h"
+#include "OverteonProcessor.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,7 +11,7 @@ namespace
     std::string  st (const juce::String& s) { return s.toStdString(); }
 }
 
-OvJuceSource::OvJuceSource (InjectorProcessor& processor)
+OvJuceSource::OvJuceSource (OverteonProcessor& processor)
     : proc (processor)
 {
     // JUCE's APVTS does not expose its ID list; the state tree carries one
@@ -179,14 +179,14 @@ bool OvJuceSource::analyse (float* dest, int count, bool inTap)
     auto&  f   = inTap ? fftIn : fft;
 
     std::fill (buf.begin(), buf.end(), 0.0f);
-    std::copy (tap.begin(), tap.begin() + InjectorProcessor::fftSize, buf.begin());
+    std::copy (tap.begin(), tap.begin() + OverteonProcessor::fftSize, buf.begin());
     ready = false;
 
-    window.multiplyWithWindowingTable (buf.data(), InjectorProcessor::fftSize);
+    window.multiplyWithWindowingTable (buf.data(), OverteonProcessor::fftSize);
     f.performFrequencyOnlyForwardTransform (buf.data());
 
     const float fsr = juce::jmax (1.0f, (float) proc.getSampleRate());
-    const int   maxBin = InjectorProcessor::fftSize / 2 - 1;
+    const int   maxBin = OverteonProcessor::fftSize / 2 - 1;
 
     for (int i = 0; i < count; ++i)
     {
@@ -212,7 +212,7 @@ bool OvJuceSource::analyse (float* dest, int count, bool inTap)
         // Hann window, holds the window sum, which twitches as the waveform
         // slides through the buffer.  Hold the lowest real bin instead of
         // interpolating towards DC, or the fill drops at the left edge.
-        const float raw  = fr / fsr * (float) InjectorProcessor::fftSize;
+        const float raw  = fr / fsr * (float) OverteonProcessor::fftSize;
         const float pos  = juce::jlimit (1.0f, (float) maxBin, raw);
         const int   b0   = (int) pos;
         const int   b1   = juce::jmin (maxBin, b0 + 1);
@@ -220,7 +220,7 @@ bool OvJuceSource::analyse (float* dest, int count, bool inTap)
         const float mag0 = buf[(size_t) b0];
         const float mag1 = buf[(size_t) b1];
         const float mag  = (mag0 + (mag1 - mag0) * t)
-                         / (float) InjectorProcessor::fftSize * 8.0f;
+                         / (float) OverteonProcessor::fftSize * 8.0f;
         const float db   = juce::Decibels::gainToDecibels (mag, -90.0f);
         dest[i] = juce::jlimit (0.0f, 1.0f, juce::jmap (db, -85.0f, 0.0f, 0.0f, 1.0f));
     }

@@ -94,7 +94,7 @@ namespace
     constexpr double kPeakDbPerSec = 0.18 * 60.0 * 1.25; // 10.8 dB/s (the page's) x 1.25
 
     // The ring follows a harmonic RATIO that the DSP smooths with a 131 ms
-    // one-pole (kHarmTau in FxProcessor.cpp), so 4.343/0.131 = 33 dB/s is that
+    // one-pole (kHarmTau in OverteonProcessor.cpp), so 4.343/0.131 = 33 dB/s is that
     // measurement's own decay — the display adds no shape of its own.
     constexpr double kHarmFloorDb = -48.0;
     constexpr double kHarmDbPerSec = 4.343 / 0.105;      // 131 ms tau x 1.25

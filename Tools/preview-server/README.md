@@ -18,7 +18,7 @@ dub build --compiler=ldc2 --build=release     # first build fetches vibe.d
 | route | what |
 |---|---|
 | `/` | landing page |
-| `/original` | the **original** HTML+CSS — `web_fx/index.html` extracted from `~/SupersawOmega.rar` into `reference/original/web_fx` |
+| `/original` | the **original** HTML+CSS — `web_fx/index.html` from the original Overteon source tree, in `Assets/Assets/reference/original/web_fx` |
 | `/current` | the current UI (FrostEngine dual-Kawase blur, OVER\|TEON) |
 | `/compare` | both side by side in iframes |
 | `/raw/original`, `/raw/current` | the untouched `index.html` files |
@@ -37,7 +37,7 @@ same protocol
 * `__JUCE__.postMessage({eventId, payload})` — JS → host
 * `__JUCE__.backend.emitByBackend(eventId, json)` — host → JS
 
-with the **same parameter table as `src/FxProcessor.cpp`** (identical ids,
+with the **same parameter table as `src/OverteonProcessor.cpp`** (identical ids,
 ranges, skew and defaults) and JUCE's own skew convention
 (`norm = lin^skew`, `value = start + span·norm^(1/skew)`), so curves, node
 positions, knob arcs and readouts match the plug-in exactly.  Meters and the
