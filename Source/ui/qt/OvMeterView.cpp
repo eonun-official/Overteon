@@ -322,7 +322,7 @@ void OvMeterView::advance (double dt)
         // ratio (harmPeak) — showing the smoothed value under a peak's name
         // would be a mean with a better label.
         m_harmPeakMode = (m_engine != nullptr && m_engine->harmDetector() == 1);
-        m_noInterp     = (m_engine != nullptr && ! m_engine->meterInterpolation());
+        m_noInterp     = (m_engine != nullptr && m_engine->harmInterp() == 1);
         m_harmFall.noInterp = m_noInterp;
 
         const double raw = m_harmPeakMode ? double (m.harmPeak) : double (m.harm);

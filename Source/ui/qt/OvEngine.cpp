@@ -4,6 +4,9 @@
 #include "OvQmlTypes.h"
 #include "OvTick.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -364,9 +367,86 @@ void OvEngine::setLowerDetector (int v)
     if (v != m_lowerDetector) { m_lowerDetector = v; emit settingsChanged(); }
 }
 
-void OvEngine::setMeterInterpolation (bool on)
+void OvEngine::setHarmInterp (int v)
 {
-    if (on != m_meterInterpolation) { m_meterInterpolation = on; emit settingsChanged(); }
+    v = (v == 1) ? 1 : 0;
+    if (v != m_harmInterp) { m_harmInterp = v; emit settingsChanged(); }
+}
+
+void OvEngine::setUpperInterp (int v)
+{
+    v = (v == 1) ? 1 : 0;
+    if (v != m_upperInterp) { m_upperInterp = v; emit settingsChanged(); }
+}
+
+void OvEngine::setLowerInterp (int v)
+{
+    v = (v == 1) ? 1 : 0;
+    if (v != m_lowerInterp) { m_lowerInterp = v; emit settingsChanged(); }
+}
+
+// ---- global controls --------------------------------------------------------
+void OvEngine::setBypassed (bool on)
+{
+    if (on == m_bypassed) return;
+    m_bypassed = on;
+
+    // Through the parameter, not a private flag: the DSP reads the parameter and
+    // the host is told.  A bool parameter's value IS its normalised value, so 0/1
+    // is exact — no scaling to go wrong.
+    if (auto* p = typedParam (QStringLiteral ("bypass")))
+        p->setNorm (on ? 1.0 : 0.0);
+
+    emit bypassChanged();
+}
+
+void OvEngine::setAbSlot (int slot)
+{
+    slot = (slot == 1) ? 1 : 0;
+    if (slot == m_abSlot) return;
+
+    // Leaving the current slot: record it, so the switch is a real comparison
+    // and not a one-way trip.
+    m_ab[m_abSlot] = m_source->snapshotParams();
+
+    // Entering the other one: if it has never been written, seed it from the
+    // live state rather than recalling the default over the user's work.
+    if (! m_ab[slot].valid)
+        m_ab[slot] = m_source->snapshotParams();
+    else
+        m_source->restoreParams (m_ab[slot]);
+
+    m_abSlot = slot;
+    emit abChanged();
+
+    // The restored values reach QML the same way a preset load does: poll every
+    // param first, then bump the revision so both EQ halves repaint.
+    for (auto* pp : m_paramList) pp->poll();
+    ++m_paramRevision;
+    emit paramRevisionChanged (true, true);
+}
+
+void OvEngine::abCopyFrom (int from)
+{
+    from = (from == 1) ? 1 : 0;
+    const int other = 1 - from;
+
+    if (from == m_abSlot)
+    {
+        // Recording the live slot first, so the copy carries what is on screen
+        // and not what was there when the slot was entered.
+        m_ab[from] = m_source->snapshotParams();
+    }
+    else if (! m_ab[from].valid)
+    {
+        // Copying from a slot that has never been written: seed it from the
+        // live state.  Otherwise the operation would blank the other slot with
+        // an empty snapshot, which reads as "my parameters disappeared".
+        m_ab[from] = m_source->snapshotParams();
+    }
+
+    m_ab[other] = m_ab[from];
+    emit abChanged();
 }
 
 QString OvEngine::spectrumAt (int i) const

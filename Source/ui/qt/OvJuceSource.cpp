@@ -147,6 +147,41 @@ void OvJuceSource::applyInit()
     proc.applyInit();
 }
 
+// ---- A/B snapshots ----------------------------------------------------------
+//
+// Read and written through the HOST's parameter interface, not the APVTS map, so
+// a gesture is reported for each value: a snapshot recall that skipped
+// begin/endChangeGesture would leave the host's automation view showing values
+// that no longer match the sound.
+OvSource::Snapshot OvJuceSource::snapshotParams()
+{
+    Snapshot s;
+    const int n = count();
+    s.norm.resize ((size_t) n);
+    for (int i = 0; i < n; ++i) s.norm[(size_t) i] = getNorm (i);
+    s.valid = true;
+    return s;
+}
+
+void OvJuceSource::restoreParams (const Snapshot& s)
+{
+    // A stale snapshot (different parameter count) must not half-apply: a
+    // partially restored set is a state the user never asked for and cannot
+    // reproduce.
+    if (! s.valid || (int) s.norm.size() != count()) return;
+
+    const int n = count();
+    for (int i = 0; i < n; ++i)
+    {
+        if (auto* p = param (i))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost ((float) juce::jlimit (0.0, 1.0, s.norm[(size_t) i]));
+            p->endChangeGesture();
+        }
+    }
+}
+
 OvMeters OvJuceSource::meters() const
 {
     OvMeters m;

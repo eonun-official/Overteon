@@ -35,6 +35,9 @@ public:
 
     void applyInit() override;
 
+    Snapshot snapshotParams() override;
+    void restoreParams (const Snapshot&) override;
+
     std::string presetListJson() override;
     bool loadPresetNamed (const std::string& folder, const std::string& name) override;
     void openLoadDialog() override;

@@ -167,44 +167,54 @@ Item {
 
             // ---- interpolation ------------------------------------------
             //
-            // One setting for every meter.  "No interpolation" is the raw
-            // measurement: no eased fall, no ramp between frames.  It exists so
-            // the DSP can be judged without a display curve in the way.
-            Seg {
-                label: "METER INTERPOLATION"
-                options: ["INTERPOLATED", "RAW (NO INTERP)"]
-                current: root.engine && ! root.engine.meterInterpolation ? 1 : 0
-                onPicked: function (i) {
-                    if (root.engine) root.engine.meterInterpolation = (i === 0)
-                }
-            }
-
-            Rectangle { width: parent.width; height: 1; color: OvTheme.line }
-
-            // ---- detectors, one per meter -------------------------------
+            // ---- one block per meter ------------------------------------
             //
-            // Independent on purpose: the ring measures the harmonic-to-dry
-            // ratio, the two sections measure the input and the output.  There
-            // is no reason a peak reading of one should force the others.
-            Seg {
-                label: "HARMONIC MONITOR"
-                options: ["RMS", "TRUE PEAK"]
-                current: root.engine ? root.engine.harmDetector : 0
-                onPicked: function (i) { if (root.engine) root.engine.harmDetector = i }
-            }
+            // Detector and interpolation belong to the METER, not to the panel.
+            // "Raw" is not a mode of the whole UI: it is a choice about how one
+            // meter's value is produced, in the same category as RMS vs peak —
+            // so each meter carries both, and picking raw on the ring leaves the
+            // two analysers easing as before.
+            Repeater {
+                model: [
+                    { title: "HARMONIC MONITOR", det: "harmDetector",
+                      itp: "harmInterp" },
+                    { title: "UPPER SPECTRUM",   det: "upperDetector",
+                      itp: "upperInterp" },
+                    { title: "LOWER SPECTRUM",   det: "lowerDetector",
+                      itp: "lowerInterp" }
+                ]
 
-            Seg {
-                label: "UPPER SPECTRUM"
-                options: ["RMS", "TRUE PEAK"]
-                current: root.engine ? root.engine.upperDetector : 0
-                onPicked: function (i) { if (root.engine) root.engine.upperDetector = i }
-            }
+                Column {
+                    required property var modelData
+                    width: parent.width
+                    spacing: 6
 
-            Seg {
-                label: "LOWER SPECTRUM"
-                options: ["RMS", "TRUE PEAK"]
-                current: root.engine ? root.engine.lowerDetector : 0
-                onPicked: function (i) { if (root.engine) root.engine.lowerDetector = i }
+                    Text {
+                        text: modelData.title
+                        color: OvTheme.dim
+                        font.family: OvTheme.uiFont
+                        font.pixelSize: 10
+                        font.letterSpacing: 1.4
+                    }
+
+                    Seg {
+                        label: "DETECTOR"
+                        options: ["RMS", "TRUE PEAK"]
+                        current: root.engine ? root.engine[modelData.det] : 0
+                        onPicked: function (i) {
+                            if (root.engine) root.engine[modelData.det] = i
+                        }
+                    }
+
+                    Seg {
+                        label: "INTERPOLATION"
+                        options: ["SMOOTH", "NONE"]
+                        current: root.engine ? root.engine[modelData.itp] : 0
+                        onPicked: function (i) {
+                            if (root.engine) root.engine[modelData.itp] = i
+                        }
+                    }
+                }
             }
 
             Rectangle { width: parent.width; height: 1; color: OvTheme.line }

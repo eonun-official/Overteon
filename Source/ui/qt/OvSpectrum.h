@@ -90,6 +90,11 @@ struct SpectrumBallistics
     enum class Mode { Rms, Peak };
     Mode mode = Mode::Rms;
 
+    /// Interpolate towards each measurement (true) or take it verbatim (false).
+    /// Verbatim is for judging the analyser rather than watching it: a ramp
+    /// between two measurements asserts values nothing measured.
+    bool interp = true;
+
     // ---- tunables, all in real units --------------------------------------
     /// Power-domain one-pole constants.  The fall is 4.343/tau dB/s, so
     /// 0.12 s is 36 dB/s and a full 85 dB sweep takes 2.4 s — the value that
@@ -171,7 +176,10 @@ struct SpectrumBallistics
             }
 
             if (! std::isfinite (m_pow[i])) m_pow[i] = 0.0;
-            m_out[i] = float (dbToNorm (dbOfPower (m_pow[i])));
+            // Raw bypasses m_pow entirely for the DISPLAYED value: the filter
+            // state still follows, so switching back resumes from the right
+            // place rather than from wherever the display was pinned.
+            m_out[i] = float (dbToNorm (dbOfPower (interp ? m_pow[i] : target)));
             out01[i] = m_out[i];
         }
     }

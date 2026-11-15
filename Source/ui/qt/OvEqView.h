@@ -64,6 +64,11 @@ class OvEqView : public QQuickItem
     /// one — which is what the settings panel exposes them as.
     Q_PROPERTY(bool specPeak READ specPeak WRITE setSpecPeak NOTIFY specPeakChanged)
 
+    /// Interpolation for this half's analyser: false = the outline eases towards
+    /// each measurement, true = it IS the measurement.  Per view, like specPeak:
+    /// the two halves are independent metres, not one meter split in two.
+    Q_PROPERTY(bool specNoInterp READ specNoInterp WRITE setSpecNoInterp NOTIFY specNoInterpChanged)
+
 public:
     explicit OvEqView (QQuickItem* parent = nullptr);
 
@@ -72,6 +77,8 @@ public:
 
     bool specPeak() const { return m_specBall.mode == ovspec::SpectrumBallistics::Mode::Peak; }
     void setSpecPeak (bool on);
+    bool specNoInterp() const { return ! m_specBall.interp; }
+    void setSpecNoInterp (bool on);
 
     QString prefix() const { return m_prefix; }
 
@@ -310,8 +317,14 @@ signals:
     void headerTopChanged();
     void glowChanged();
     void specPeakChanged();
+    void specNoInterpChanged();
     void menuRequested (int band, QPointF pos, QString currentType);
     void hoverInfo (QString text, QPointF pos);
+
+    /// The band under the pointer, or -1.  The hover tip is gone — the design
+    /// shows the editable field directly on the node instead of a summary box —
+    /// so QML needs the band id, not a formatted string.
+    void hoverBandChanged (int band);
     void hoverEnded();
 
     /// A node was double-clicked: show the numeric editor for `band` (0..4).
@@ -332,7 +345,12 @@ public:
         double freq = 1000.0, gain = 0.0, q = 0.707;
         int    type = 0;
         double x = 0.0, y = 0.0;
+        /// Lit: gain-type bands go quiet at 0 dB, cuts are always lit — this is
+        /// the design's own definition and drives the node's radius and alpha.
         bool   active = false;
+        /// Switched in.  Separate from `active`: a band can be flat AND on, and
+        /// a muted band must read as muted even while its gain is not zero.
+        bool   on = true;
     };
 private:
 

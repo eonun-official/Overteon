@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 #   * own LV2 URI / bundle id / plug-in code
 #   * own bundle + product name (Overteon.lv2, Overteon.vst3)
 #   * identical parameter IDs, so .hinj presets stay interchangeable.
-project(Overteon VERSION 2.0.0)
+project(Overteon VERSION 0.9.20)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -63,6 +63,26 @@ public:
 
     virtual void applyInit() = 0;
 
+    // ---- A/B -----------------------------------------------------------
+    //
+    // Two full snapshots of every parameter's NORMALISED value.  Switching
+    // recalls one over the other; the copy button moves the current slot onto
+    // the other one.  Snapshots live here rather than in the engine because
+    // "every parameter" is exactly what this interface already enumerates.
+    //
+    // Normalised, not scaled: a snapshot is a recording of the controls, and
+    // the control positions are what the user is comparing.  It also keeps the
+    // snapshots valid across a range change on one band.
+    struct Snapshot { std::vector<double> norm; bool valid = false; };
+
+    /// Read every parameter into a snapshot.
+    virtual Snapshot snapshotParams() = 0;
+
+    /// Write a snapshot back.  Does nothing when it is not valid or its size
+    /// does not match the current parameter count — a stale snapshot must not
+    /// half-apply.
+    virtual void restoreParams (const Snapshot&) = 0;
+
     // ---- presets -------------------------------------------------------
     virtual std::string presetListJson() = 0;                       // {"Factory":[...],"User":[...]}
     virtual bool loadPresetNamed (const std::string& folder,

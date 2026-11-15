@@ -66,10 +66,22 @@ static juce::NormalisableRange<float> timeRange (float lo, float hi, float centr
 //        4 LowCut12 5 LowCut24 6 HighCut12 7 HighCut24
 static bool configBand (int type, float fs, float f0, float q0, float gq,
                         omega::Biquad& p, omega::Biquad& p2,
-                        bool* invertible, omega::Biquad* pInv, float invAmt)
+                        bool* invertible, omega::Biquad* pInv, float invAmt,
+                        bool on = true)
 {
     bool s2 = false;
     bool inv = false;
+
+    if (! on)
+    {
+        // Muted: exact pass-through in the first section, no second section and
+        // nothing to invert.  The biquad STAYS in the chain — see
+        // Biquad::setIdentity for why removing it is the wrong idea.
+        p.setIdentity();
+        if (invertible) *invertible = false;
+        return false;
+    }
+
     switch (type)
     {
         case 0:  p.setPeak      (fs, f0, q0, gq); inv = true; break;
@@ -98,6 +110,12 @@ static bool configBand (int type, float fs, float f0, float q0, float gq,
 juce::AudioProcessorValueTreeState::ParameterLayout OverteonProcessor::createLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> ps;
+
+    // Whole plug-in bypass as a real parameter, so a host sees it and can
+    // automate it.  JUCE also consults getBypassParameter(), which is wired to
+    // this below — that is what lets the host's own bypass button work.
+    ps.push_back (std::make_unique<juce::AudioParameterBool> (
+                      juce::ParameterID { "bypass", 1 }, "Bypass", false));
 
     ps.push_back (std::make_unique<FP> (juce::ParameterID { "drive", 1 }, "Drive",
                       timeRange (0.0f, 10.0f, 2.0f), 0.0f));
@@ -175,6 +193,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout OverteonProcessor::createLay
     ps.push_back (std::make_unique<CP> (juce::ParameterID { "limiterOs", 1 }, "Limiter Oversampling",
                       juce::StringArray { "2x", "4x", "8x", "16x" }, 1));
 
+    // Per-band on/off, appended AFTER everything that already existed -- the
+    // same rule the range selectors follow.  Parameter indices are part of the
+    // plug-in's interface: putting these beside each band's Type would have
+    // shifted scRange, pqRange, protectMode and limiterOs, silently
+    // re-pointing any index-based host automation.
+    //
+    // A separate switch, not a "mute" filter type: a muted band keeps its
+    // frequency, gain, Q and type, so bringing it back is one click instead of
+    // a rebuild.
+    for (auto* pre : { "sc", "pq" })
+        for (int b = 0; b < 5; ++b)
+        {
+            const auto id   = juce::String (pre) + juce::String (b + 1);
+            const auto name = (juce::String (pre) == "sc" ? "SC EQ " : "Post EQ ")
+                            + juce::String (b + 1) + " ";
+            ps.push_back (std::make_unique<juce::AudioParameterBool> (
+                              juce::ParameterID { id + "On", 1 },
+                              name + "On", true));
+        }
+
     return { ps.begin(), ps.end() };
 }
 
@@ -238,6 +276,7 @@ void OverteonProcessor::saveGlobalOsFactor (int idx) const
 
 void OverteonProcessor::cacheParams()
 {
+    par.bypass   = apvts.getRawParameterValue ("bypass");
     par.drive    = apvts.getRawParameterValue ("drive");
     par.mix      = apvts.getRawParameterValue ("mix");
     par.type     = apvts.getRawParameterValue ("driveType");
@@ -268,6 +307,8 @@ void OverteonProcessor::cacheParams()
         par.pqQ[b] = apvts.getRawParameterValue (pq + "Q");
         par.scType[b] = apvts.getRawParameterValue (sc + "Type");
         par.pqType[b] = apvts.getRawParameterValue (pq + "Type");
+        par.scOn[b]   = apvts.getRawParameterValue (sc + "On");
+        par.pqOn[b]   = apvts.getRawParameterValue (pq + "On");
     }
 }
 
@@ -372,6 +413,34 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     if (n == 0) return;
+
+    // ---- bypass ---------------------------------------------------------
+    //
+    // Done here, at the top, rather than by the host: JUCE reports this
+    // parameter through getBypassParameter(), so a host that supports it takes
+    // its own shortcut and never calls us; a host that does not still gets a
+    // silent pass-through.  Either way the meters keep reading, and they read
+    // the INPUT — during bypass in and out are the same signal, and a meter
+    // that showed the last processed level would be showing something that is
+    // no longer being sent.
+    if (par.bypass != nullptr && par.bypass->load() > 0.5f)
+    {
+        const int ch = juce::jmin (2, buffer.getNumChannels());
+        for (int c = 0; c < ch; ++c)
+        {
+            const auto* s = buffer.getReadPointer (c);
+            float sum = 0.0f;
+            for (int i = 0; i < n; ++i) sum += s[i] * s[i];
+            const float ms = n > 0 ? sum / float (n) : 0.0f;
+            (c == 0 ? meterInL : meterInR).store (std::sqrt (ms));
+            (c == 0 ? meterOutL : meterOutR).store (std::sqrt (ms));
+        }
+        // The harmonic ratio is undefined while nothing is being generated;
+        // report the floor instead of freezing at the level it had.
+        meterHarm.store (-100.0f);
+        meterHarmPk.store (-100.0f);
+        return;
+    }
     const int nCh = juce::jmin (2, buffer.getNumChannels());
     if (dbuf.getNumSamples()    < n) dbuf.setSize    (2, n, false, false, true);
     if (dryBufD.getNumSamples() < n) dryBufD.setSize (2, n, false, false, true);
@@ -485,7 +554,8 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
                 const int   ty = (int) par.scType[b]->load();
                 bool invertible = false;
                 s2on[b] = configBand (ty, fsr, f0, q0, gq, p, p2,
-                                      &invertible, &pInv, par.invAmt->load());
+                                      &invertible, &pInv, par.invAmt->load(),
+                                      par.scOn[b]->load() > 0.5f);
                 scEq[b][0].copyCoefsFrom (p);
                 scEq[b][1].copyCoefsFrom (p);
                 if (s2on[b]) { scEq2[b][0].copyCoefsFrom (p2); scEq2[b][1].copyCoefsFrom (p2); }
@@ -792,7 +862,8 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             const float gq = par.pqG[b]->load() * (float) pqMultS;   // effective gain incl. range
             const int   ty = (int) par.pqType[b]->load();
             // post EQ has no inverse leg; just configure the forward filter
-            s2on[b] = configBand (ty, fsr, f0, q0, gq, p, p2, nullptr, nullptr, 0.0f);
+            s2on[b] = configBand (ty, fsr, f0, q0, gq, p, p2, nullptr, nullptr, 0.0f,
+                                  par.pqOn[b]->load() > 0.5f);
             postEq[b][0].copyCoefsFrom (p);
             postEq[b][1].copyCoefsFrom (p);
             if (s2on[b]) { postEq2[b][0].copyCoefsFrom (p2); postEq2[b][1].copyCoefsFrom (p2); }

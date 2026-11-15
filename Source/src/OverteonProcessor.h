@@ -28,7 +28,16 @@ public:
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override                         { return true; }
-    const juce::String getName() const override             { return "Harmonic Injector"; }
+    const juce::String getName() const override             { return "Overteon"; }
+
+    /// Hand the bypass parameter to the host so its own bypass control drives
+    /// ours.  Without this, a host's bypass button either does nothing or
+    /// suspends the plug-in entirely (which also stops the meters); with it,
+    /// bypass is the one the UI shows and both stay in step.
+    juce::AudioProcessorParameter* getBypassParameter() const override
+    {
+        return apvts.getParameter ("bypass");
+    }
     bool acceptsMidi() const override                       { return false; }
     bool producesMidi() const override                      { return false; }
     bool isMidiEffect() const override                      { return false; }
@@ -103,6 +112,7 @@ private:
 
     struct Params
     {
+        std::atomic<float>* bypass    {};  // whole plug-in: pass the input through
         std::atomic<float>* drive     {};
         std::atomic<float>* mix       {};
         std::atomic<float>* type      {};
@@ -125,6 +135,8 @@ private:
         std::atomic<float>* pqQ[5] {};
         std::atomic<float>* scType[5] {};   // unified 8-way type, every band
         std::atomic<float>* pqType[5] {};   // unified 8-way type, every band
+        std::atomic<float>* scOn[5]   {};   // band switched in (identity biquad when off)
+        std::atomic<float>* pqOn[5]   {};
         std::atomic<float>* scRange  {};    // SC EQ display-range selector (0..3)
         std::atomic<float>* pqRange  {};    // Post EQ display-range selector (0..3)
         std::atomic<float>* protectMode {}; // 0 Off, 1 Clip, 2 Modern, 3 True Peak

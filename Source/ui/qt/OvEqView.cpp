@@ -377,6 +377,17 @@ void OvEqView::setHeaderTop (bool t)
     m_dirty = true;
 }
 
+void OvEqView::setSpecNoInterp (bool on)
+{
+    // No state reset here, unlike setSpecPeak: switching to raw simply stops
+    // moving the displayed value, and switching back eases from wherever the
+    // last measurement left it — which is the truthful thing to ease FROM.
+    if (on == ! m_specBall.interp) return;
+    m_specBall.interp = ! on;
+    emit specNoInterpChanged();
+    m_dirty = true;
+}
+
 void OvEqView::setSpecPeak (bool on)
 {
     const auto want = on ? ovspec::SpectrumBallistics::Mode::Peak
@@ -448,6 +459,7 @@ void OvEqView::gatherBands()
         b.q    = valueOf (base + "Q", 0.707);
         b.type = (int) std::lround (valueOf (base + "Type", 0.0));
         b.active = isGainType (b.type) ? std::abs (b.gain) > 0.01 : true;
+        b.on     = normOf (base + "On") > 0.5;
     }
 }
 
@@ -1176,7 +1188,9 @@ const std::vector<double>& OvEqView::totalCurveY (double w, double h,
         k.p[i][0] = m_bands[i].freq;
         k.p[i][1] = m_bands[i].gain;
         k.p[i][2] = m_bands[i].q;
-        k.p[i][3] = double (m_bands[i].type) + (m_bands[i].active ? 0.5 : 0.0);
+        k.p[i][3] = double (m_bands[i].type)
+                  + (m_bands[i].active ? 0.5 : 0.0)
+                  + (m_bands[i].on ? 0.0 : 0.25);
     }
     k.range = m_rangeDb; k.w = w; k.h = h; k.top = top; k.bottom = bottom;
     k.step = step;
@@ -1935,12 +1949,25 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
     for (int i = 0; i < 5; ++i)
     {
         const auto& b = m_bands[i];
+        // Three states, three looks.  A muted band is drawn HOLLOW: the fill is
+        // the same accent, so removing it is the one change that reads as "this
+        // is not doing anything" without inventing a grey the palette has no
+        // place for.  Its number stays legible on the ring.
         const double r = b.active ? 6.5 : 5.0;
         g->setPen (Qt::NoPen);
         QColor fill = accent;
-        fill.setAlphaF (b.active ? 1.0f : 0.5f);
+        fill.setAlphaF (b.on ? (b.active ? 1.0f : 0.5f) : 0.0f);
         g->setBrush (fill);
         g->drawEllipse (QPointF (b.x, b.y), r, r);
+
+        if (! b.on)
+        {
+            QColor ring = accent;
+            ring.setAlphaF (0.75f);
+            g->setPen (QPen (ring, 1.2));
+            g->setBrush (Qt::NoBrush);
+            g->drawEllipse (QPointF (b.x, b.y), r, r);
+        }
 
         g->setPen (kBg);
         g->drawText (QRectF (b.x - 6, b.y - 6, 12, 12), Qt::AlignCenter,
@@ -2934,7 +2961,6 @@ void OvEqView::hoverMoveEvent (QHoverEvent* e)
     }
 
     const int hit = nodeAt (e->position());
-    m_hoverBand = hit;
     setCursor (QCursor (hit >= 0 ? Qt::OpenHandCursor : Qt::CrossCursor));
 
     if (hit >= 0)
@@ -2962,6 +2988,6 @@ void OvEqView::mouseUngrabEvent()
 
 void OvEqView::hoverLeaveEvent (QHoverEvent*)
 {
-    m_hoverBand = -1;
+    if (m_hoverBand != -1) { m_hoverBand = -1; emit hoverBandChanged (-1); }
     emit hoverEnded();
 }

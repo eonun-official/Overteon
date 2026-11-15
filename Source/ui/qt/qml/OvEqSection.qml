@@ -29,6 +29,23 @@ Item {
 
     readonly property bool inactive: prefix === "sc" ? driveMode === 0 : driveMode === 2
 
+    /// The band's on/off parameter, "<prefix><n>On".  A separate parameter from
+    /// the type so a muted band keeps its frequency, gain, Q and type.
+    function bandOnParam (band) {
+        return engine ? engine.param (prefix + (band + 1) + "On") : null
+    }
+
+    function bandOn (band) {
+        const p = bandOnParam (band)
+        return p ? p.norm > 0.5 : true
+    }
+
+    function toggleBand (band) {
+        if (band < 0 || band > 4) return
+        const p = bandOnParam (band)
+        if (p) p.setNorm (p.norm > 0.5 ? 0.0 : 1.0)
+    }
+
     // limiter mode: 0 Off, 1 Clip, 2 Modern, 3 True Peak
     readonly property int limiterIndex: {
         const p = engine ? engine.param ("protectMode") : null
@@ -70,13 +87,24 @@ Item {
             OvMenu.show (bandMenu, x, y)
         }
 
-        function onHoverInfo (text, pos) {
-            tipText.text = text              // the label, not the frame
-            const p = root.view.mapToItem (root, pos)
-            tip.x = Math.max (4, Math.min (root.width - tip.width - 6, p.x + 12))
-            tip.y = Math.max (4, p.y - 30)
-            tip.visible = true
-            tipTimer.restart()          // 1400 ms, as showTip() does
+        // ---- hover shows the editable field, not a summary --------------
+        //
+        // The old behaviour was a one-line tip ("#2 Bell · 1.2k Hz · +3.0 dB").
+        // That told the user what the band IS and then made them double-click to
+        // change it.  The field can be shown directly: hovering a node opens the
+        // same editor a double-click used to, and leaving closes it.
+        //
+        // Which frees the double-click for something it could never do before —
+        // switching the band off.  See onNodeEditRequested below.
+        function onHoverBandChanged (band) {
+            if (band >= 0) {
+                // Re-place on every band so moving from node to node keeps the
+                // box on the node the pointer is actually over.
+                if (! nodeEdit.visible || nodeEdit.band !== band) nodeEdit.open (band)
+                else nodeEdit.place ()
+            } else if (nodeEdit.visible && nodeEdit.autoOpened) {
+                nodeEdit.close ()
+            }
         }
 
         function onHoverEnded () { tip.visible = false; tipTimer.stop() }
@@ -87,7 +115,11 @@ Item {
         // contract the page has with its own canvas: a double-click on a node
         // opens it, a double-click on empty canvas that needs a new node says
         // so when the pool is full, and a plot gesture can take it away.
-        function onNodeEditRequested (band) { nodeEdit.open (band) }
+        // Double-click toggles the band off and on.  It used to open the editor,
+        // but hovering does that now — and the editor is already open when a
+        // double-click lands on a node, so re-opening it would be a no-op and
+        // the gesture would be wasted.
+        function onNodeEditRequested (band) { root.toggleBand (band) }
         function onNodeEditClosed () { nodeEdit.close () }
 
         function onPoolExhausted () {
@@ -490,6 +522,11 @@ Item {
         /// pointer that is nowhere near it does not.
         property bool wasHovered: false
 
+        /// True when the box was opened by hovering rather than by a gesture,
+        /// so that only a hover-opened box closes on hover-out.  A box the user
+        /// clicked into must survive the pointer wandering to a field.
+        property bool autoOpened: false
+
         /// True while a field is being scrubbed.  Scrubbing freq or gain moves
         /// the node, the box follows it, and the pointer stays where the hand
         /// is — so without this the 30 px rule (and the pointer-leave rule)
@@ -530,6 +567,8 @@ Item {
 
         function open (b) {
             if (b < 0 || b > 4) return
+            // Called from a hover when the box is not already up on this band.
+            autoOpened = ! visible
             band = b
             wasHovered = false
             visible = true
@@ -541,6 +580,7 @@ Item {
         function close () {
             if (! visible) return
             visible = false
+            autoOpened = false
             band = -1
             if (root.view) root.view.setEditingBand (-1)
         }

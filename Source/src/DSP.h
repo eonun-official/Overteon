@@ -199,6 +199,18 @@ struct Biquad
     void copyCoefsFrom (const Biquad& o)
     { b0 = o.b0; b1 = o.b1; b2 = o.b2; a1 = o.a1; a2 = o.a2; }
 
+    /// Pass-through coefficients: y[n] = x[n].
+    ///
+    /// Used for a band that is switched off.  Deliberately NOT the same as
+    /// skipping the filter: the state would then go stale and the band would
+    /// ring when it came back on, so a muted band stays in the chain and is
+    /// merely made transparent.  b0 = 1 with everything else zero is exact unit
+    /// gain at every frequency — no approximation and no rounding to argue with.
+    void setIdentity()
+    {
+        b0 = 1.0; b1 = 0.0; b2 = 0.0; a1 = 0.0; a2 = 0.0;
+    }
+
     void setLowpass (float fsIn, float fIn, float qIn)
     {
         const double fs = fsIn;

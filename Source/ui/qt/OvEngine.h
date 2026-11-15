@@ -68,15 +68,35 @@ class OvEngine : public QObject
     Q_PROPERTY(int upperDetector READ upperDetector WRITE setUpperDetector NOTIFY settingsChanged)
     Q_PROPERTY(int lowerDetector READ lowerDetector WRITE setLowerDetector NOTIFY settingsChanged)
 
-    /// Interpolation: how the displayed value is produced.
+    /// Interpolation, per meter: 0 = interpolated (instant attack, eased fall),
+    /// 1 = raw (the last measurement verbatim, no ramp).
     //
-    //   true   the ballistics interpolate between measurements (the default):
-    //          instant attack, eased fall, as described in OvBallistics.h.
-    //   false  the display shows the last measurement verbatim, no ramp at all.
-    //          For judging the DSP rather than the meter — a ramp between two
-    //          measurements asserts a value that nothing measured.
-    Q_PROPERTY(bool meterInterpolation READ meterInterpolation
-               WRITE setMeterInterpolation NOTIFY settingsChanged)
+    // Per meter and not global, because "raw" is a choice about a METER, in the
+    // same category as its detector — a user comparing the DSP wants one meter
+    // unvarnished while the others stay readable.  One switch for all four was
+    // the wrong shape: it forced the same answer on meters measuring different
+    // things.
+    Q_PROPERTY(int harmInterp  READ harmInterp  WRITE setHarmInterp  NOTIFY settingsChanged)
+    Q_PROPERTY(int upperInterp READ upperInterp WRITE setUpperInterp NOTIFY settingsChanged)
+    Q_PROPERTY(int lowerInterp READ lowerInterp WRITE setLowerInterp NOTIFY settingsChanged)
+
+    // ---- global controls (the deck) ------------------------------------
+    //
+    // Bypass is a real parameter and is forwarded to the host through
+    // getBypassParameter(), so the host's own bypass button and ours are the
+    // same switch and the meters keep running either way.  Kept as a property
+    // here so QML can bind a toggle without knowing about the parameter map.
+    Q_PROPERTY(bool bypassed READ bypassed WRITE setBypassed NOTIFY bypassChanged)
+
+    /// Which snapshot is live: 0 = A, 1 = B.
+    Q_PROPERTY(int abSlot READ abSlot WRITE setAbSlot NOTIFY abChanged)
+
+    /// True when the OTHER slot holds something worth recalling.  A/B starts
+    /// with only A recorded, and a switch to an empty slot would silently
+    /// replace the sound with the default — so the switch is disabled until the
+    /// other slot has been written.
+    Q_PROPERTY(bool abOtherReady READ abOtherReady NOTIFY abChanged)
+
 
 public:
     explicit OvEngine (std::unique_ptr<OvSource> source, QObject* parent = nullptr);
@@ -115,12 +135,31 @@ public:
     int  harmDetector()  const { return m_harmDetector; }
     int  upperDetector() const { return m_upperDetector; }
     int  lowerDetector() const { return m_lowerDetector; }
-    bool meterInterpolation() const { return m_meterInterpolation; }
+    int  harmInterp()  const { return m_harmInterp; }
+    int  upperInterp() const { return m_upperInterp; }
+    int  lowerInterp() const { return m_lowerInterp; }
 
     void setHarmDetector (int);
     void setUpperDetector (int);
     void setLowerDetector (int);
-    void setMeterInterpolation (bool);
+    void setHarmInterp (int);
+    void setUpperInterp (int);
+    void setLowerInterp (int);
+
+    bool bypassed() const { return m_bypassed; }
+    void setBypassed (bool);
+
+    int  abSlot() const { return m_abSlot; }
+    void setAbSlot (int);
+    bool abOtherReady() const { return m_ab[m_abSlot == 0 ? 1 : 0].valid; }
+    /// Copy FROM `from` onto the other slot.  The source is named rather than
+    /// implied: the A and B buttons are both on screen and either can be
+    /// right-clicked, so "copy the live one" would be wrong half the time.
+    ///
+    /// Copies what is on screen when `from` is the live slot; otherwise copies
+    /// the recording.  That distinction matters — a stale recording must not be
+    /// what gets written when the user right-clicks the slot they are looking at.
+    Q_INVOKABLE void abCopyFrom (int from);
 
     // QML can only marshal pointer types it knows; OvParam* is not registered,
     // so the invokable accessor hands back a plain QObject* (the properties
@@ -149,6 +188,8 @@ signals:
     void presetNameChanged();
     void driveModeChanged();
     void settingsChanged();
+    void bypassChanged();
+    void abChanged();
 
 private slots:
     void tick();
@@ -173,7 +214,16 @@ private:
     int  m_harmDetector  = 0;      // 0 RMS, 1 Peak
     int  m_upperDetector = 0;
     int  m_lowerDetector = 0;
-    bool m_meterInterpolation = true;
+    int  m_harmInterp  = 0;        // 0 interpolated, 1 raw
+    int  m_upperInterp = 0;
+    int  m_lowerInterp = 0;
+
+    // Global controls.  The two snapshots live beside the live parameter state:
+    // "A" is not the currently-live slot's copy, it is a recording, so the user
+    // can switch back and forth without the slot they left decaying underneath.
+    bool     m_bypassed = false;
+    int      m_abSlot = 0;
+    OvSource::Snapshot m_ab[2];
     int          m_tickCount = 0;
     QTimer       m_timer;
 
