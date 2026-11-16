@@ -76,8 +76,29 @@ WINEPATH=$HOME/Qt-msvc/6.9.3/msvc2022_64/bin ninja -C Build/win
 directory, not the source directory. The presets in `Config/CMakePresets.json`
 have the same problem and are therefore only useful for the host builds.
 
-Artefacts land in `Build/host/Overteon_artefacts/Release/` and
-`Build/win/Overteon_artefacts/Release/`.
+Products land in one directory per build, named for what it is, where and
+when it was made:
+
+```
+Build/Overteon_20261116-191811_unknown_linux_x86_64/
+    VST3/Overteon.vst3
+    LV2/Overteon.lv2
+    VST/libOverteon.so
+    Standalone/Overteon
+    overteon-qml-preview
+    ovctl
+Build/Overteon_20261116-192422_unknown_windows_x86_64/
+    VST3/Overteon.vst3   VST/Overteon.dll   LV2/Overteon.lv2   Standalone/Overteon.exe
+```
+
+`Build/host` and `Build/win` are the ninja build trees — scratch, not products.
+The product directory name is `<BuildName>_<Time>_<Host>_<OS>_<Platform>`, where
+the time is the time of *configuration* and is cached so that re-running cmake
+keeps writing into the same directory; `-DOVERTEON_BUILD_STAMP=...` chooses a
+different one. A non-Release build type is part of `<BuildName>`
+(`Overteon-Debug_...`) because single-config generators have no per-configuration
+subdirectory. Scripts never hard-code this path: they source
+`Scripts/product.sh` and call `product_dir linux|windows`.
 
 `-DOVERTEON_QT_UI=OFF` builds the WebView editor instead (useful for
 side-by-side comparison with the original).
@@ -85,6 +106,9 @@ side-by-side comparison with the original).
 ## Try the UI without a host
 
 ```sh
-./Build/host/overteon-qml-preview --size 1040x772                     # interactive
-./Build/host/overteon-qml-preview --size 1040x772 --freeze --shot x.png
+. Scripts/product.sh
+P=$(product_dir linux)
+"$P/overteon-qml-preview" --size 1040x772                # interactive
+"$P/overteon-qml-preview" --size 1040x772 --freeze --shot x.png
 ```
+

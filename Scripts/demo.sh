@@ -22,7 +22,12 @@ ROOT=$(cd "$HERE/.." && pwd)
 RUN_DIR=${RUN_DIR:-/tmp/overteon-demo}
 mkdir -p "$RUN_DIR"
 
-LV2_DEFAULT="$ROOT/Build/host/Overteon_artefacts/Release/LV2"
+# Products live in Build/<BuildName>_<Time>_<Host>_<OS>_<Platform>/; ask
+# product.sh rather than guessing the name.
+. "$HERE/product.sh"
+PRODUCT=$(product_dir linux) || PRODUCT=
+LV2_DEFAULT=
+[ -n "$PRODUCT" ] && LV2_DEFAULT="$PRODUCT/LV2"
 URI_Overteon="https://eonun.com/plugins/Overteon"
 
 # ---- helpers --------------------------------------------------------------
@@ -99,7 +104,8 @@ do_jalv() {
 
 do_preview() {
     case "$1" in
-        start)  start_bg preview env DISPLAY=:3 "$ROOT/Build/host/overteon-qml-preview" --size 1040x772 ;;
+        start)  [ -n "$PRODUCT" ] || { echo "nothing built - configure and run ninja" >&2; return 1; }
+                  start_bg preview env DISPLAY=:3 "$PRODUCT/overteon-qml-preview" --size 1040x772 ;;
         stop)   stop_name preview ;;
         status) status_name preview ;;
     esac

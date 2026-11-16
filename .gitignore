@@ -15,7 +15,9 @@ compile_commands.json
 .ninja_log
 .qt/
 _deps/
-HarmonicInjector_artefacts/
+# JUCE's generated-source folder for the plug-in target (build scratch, the
+# products themselves go to Build/<BuildName>_<Time>_<Host>_<OS>_<Platform>/)
+*_artefacts/
 dist/
 *.o
 *.a

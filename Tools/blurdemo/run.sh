@@ -19,7 +19,9 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
-PREVIEW="$ROOT/Build/host/overteon-qml-preview"
+. "$ROOT/Scripts/product.sh"
+PRODUCT=$(product_dir linux) || PRODUCT=
+PREVIEW="${PRODUCT:+$PRODUCT/overteon-qml-preview}"
 
 SIGMA=6
 SHOW=1
@@ -41,7 +43,7 @@ OUT=${OUT:-/tmp/blurdemo}
 W=1280
 H=960
 
-[ -x "$PREVIEW" ] || { echo "build first: ninja -C $ROOT/Build/host" >&2; exit 1; }
+[ -n "$PREVIEW" ] && [ -x "$PREVIEW" ] || { echo "build first: ninja -C $ROOT/Build/host" >&2; exit 1; }
 [ -n "$PHOTO" ]   || { echo "set PHOTO=/path/to/photo.jpg (a photo to blur)" >&2; exit 1; }
 [ -f "$PHOTO" ]   || { echo "PHOTO=$PHOTO: no such file" >&2; exit 1; }
 

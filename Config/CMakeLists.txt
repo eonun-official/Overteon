@@ -140,6 +140,95 @@ if(APPLE)
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+#  Where products land
+#
+#      Build/<BuildName>_<Time>_<Host>_<OS>_<Platform>/
+#
+#  One directory per build, named for what it is, where and when it was made:
+#
+#      Build/Overteon_20261116-1930_x-linux_linux_x86_64/
+#          VST3/Overteon.vst3
+#          LV2/Overteon.lv2
+#          VST/Overteon.so
+#          Standalone/Overteon
+#          overteon-qml-preview
+#
+#  Before this, JUCE put everything under
+#  Build/host/Overteon_artefacts/Release/..., which says "artefacts" twice, adds
+#  a Release level that only exists to hold one configuration, and hides the
+#  date, the host and the target platform -- the three things you actually need
+#  to know when you find a stray binary on disk a month later.
+#
+#  Two properties of the name matter:
+#
+#   * Time is the time of *configuration*, not of linking.  Re-running cmake --
+#     and ninja does re-run it after every CMakeLists edit -- would otherwise
+#     strand a new directory on each run, so the stamp is cached.  A fresh build
+#     tree (a new clone, a new branch) gets a fresh stamp.
+#   * The format subdirectories (VST3/, LV2/, ...) stay.  They come from JUCE
+#     and are the names hosts expect to scan; flattening them would only turn
+#     Overteon.vst3 and Overteon.lv2 into a same-named pair.
+#
+#  Override with -DOVERTEON_BUILD_STAMP=..., or delete that cache entry to start
+#  a new directory.  Nothing here is an absolute path: it is all derived from
+#  the build tree's own location, so the checkout still moves.
+# ---------------------------------------------------------------------------
+set(OVERTEON_BUILD_NAME "${PROJECT_NAME}")
+if(CMAKE_BUILD_TYPE AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    # A Debug build must not link into a Release directory.  Single-config
+    # generators have no per-config subdirectory of their own, so the name
+    # carries the distinction instead.
+    string(APPEND OVERTEON_BUILD_NAME "-${CMAKE_BUILD_TYPE}")
+endif()
+
+if(NOT OVERTEON_BUILD_STAMP)
+    # Local time, of the host named in the same directory name.
+    string(TIMESTAMP OVERTEON_BUILD_STAMP "%Y%m%d-%H%M%S")
+    set(OVERTEON_BUILD_STAMP "${OVERTEON_BUILD_STAMP}" CACHE STRING
+        "Timestamp in the product directory name (configure time)")
+endif()
+
+# A host that reports itself as UNKNOWN (this one does -- it has no /etc/hostname)
+# still has to produce a name that is legal on every filesystem, so every field
+# is folded down to [A-Za-z0-9._-] and lowercased.
+cmake_host_system_information(RESULT _ov_host QUERY HOSTNAME)
+string(TOLOWER "${_ov_host}" _ov_host)
+string(REGEX REPLACE "[^a-z0-9._-]" "-" _ov_host "${_ov_host}")
+if(NOT _ov_host)
+    set(_ov_host "unknown-host")
+endif()
+
+string(TOLOWER "${CMAKE_SYSTEM_NAME}" _ov_os)
+if(NOT _ov_os)
+    set(_ov_os "unknown-os")
+endif()
+
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _ov_platform)
+if(_ov_platform MATCHES "^(amd64|x64|x86_64)$")
+    set(_ov_platform "x86_64")
+elseif(_ov_platform MATCHES "^(aarch64|arm64)$")
+    set(_ov_platform "aarch64")
+elseif(NOT _ov_platform)
+    set(_ov_platform "unknown-arch")
+endif()
+
+set(OVERTEON_PRODUCT_DIR
+    "${CMAKE_BINARY_DIR}/../${OVERTEON_BUILD_NAME}_${OVERTEON_BUILD_STAMP}_${_ov_host}_${_ov_os}_${_ov_platform}")
+# A relative output property would be read against the build tree, so resolve it
+# once here and give the targets one absolute value.  Derived, not hard-coded:
+# the tree keeps moving with the checkout.
+get_filename_component(OVERTEON_PRODUCT_DIR "${OVERTEON_PRODUCT_DIR}" ABSOLUTE)
+file(MAKE_DIRECTORY "${OVERTEON_PRODUCT_DIR}")
+
+message(STATUS "Overteon products: ${OVERTEON_PRODUCT_DIR}")
+
+# Executables the project adds (the preview, ovctl, the headless tests) go to
+# that directory too, applied at the end of this file rather than through
+# CMAKE_RUNTIME_OUTPUT_DIRECTORY: the variable would also reach JUCE's own
+# helper sub-projects (juce_lv2_helper, vst3_helper), which are build tools and
+# would litter a directory that is meant to hold products only.
+
 # ============================================================
 # Overteon — harmonic-injection EQ (active distortion + EQ)
 # ============================================================
@@ -186,6 +275,32 @@ juce_add_plugin(Overteon
 
 target_sources(Overteon PRIVATE
     ../Source/src/OverteonProcessor.cpp)
+
+# ---------------------------------------------------------------------------
+#  Take the products out of *_artefacts/$<CONFIG>
+#
+#  juce_add_plugin() has just set all three output directories to
+#  <build>/Overteon_artefacts/Release (JUCEUtils.cmake:2126).  They are
+#  overwritten here rather than by editing the vendored JUCE, so updating the
+#  submodule stays clean.
+#
+#  The per-format targets (Overteon_VST3, Overteon_LV2, ...) do not need
+#  touching: JUCE derives their directories from these properties with a
+#  generator expression (JUCEUtils.cmake:1240), so they follow, and keep
+#  appending their own VST3/ LV2/ VST/ Standalone/ subdirectory.
+#
+#  JUCE_GENERATED_SOURCES_DIRECTORY is deliberately NOT redirected.  Its
+#  generated headers are scratch that never ships, and JUCE writes one of them
+#  (JuceLV2Defines.h, JUCEUtils.cmake:1413) to a hard-coded *_artefacts path
+#  while taking the include path from this property -- move the property and the
+#  LV2 wrapper stops compiling.  So the build tree keeps that one small scratch
+#  folder and nothing else: the product directory holds only things you can
+#  ship.
+# ---------------------------------------------------------------------------
+set_target_properties(Overteon PROPERTIES
+    ARCHIVE_OUTPUT_DIRECTORY "${OVERTEON_PRODUCT_DIR}"
+    LIBRARY_OUTPUT_DIRECTORY "${OVERTEON_PRODUCT_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY "${OVERTEON_PRODUCT_DIR}")
 
 # OverteonWebEditor implements the JUCE WebBrowserComponent editor.  With the Qt
 # editor enabled JUCE_WEB_BROWSER is 0, so juce::WebBrowserComponent does not
@@ -592,3 +707,24 @@ target_link_libraries(Overteon
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags)
+
+# ---------------------------------------------------------------------------
+#  Put this project's executables in the product directory
+#
+#  Written as a list with an existence check rather than as one call per target,
+#  because which of these exist depends on the options: the preview is skipped
+#  for a plug-in-only build, ovctl and the headless tests are POSIX-only, and the
+#  preview has a second definition for the Win32 branch.
+# ---------------------------------------------------------------------------
+foreach(_ov_exe
+        overteon-qml-preview
+        ovctl
+        over-blur-test
+        over-ballistics-test
+        over-spectrum-test)
+    if(TARGET ${_ov_exe})
+        set_target_properties(${_ov_exe} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${OVERTEON_PRODUCT_DIR}")
+    endif()
+endforeach()
+

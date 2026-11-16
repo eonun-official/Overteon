@@ -37,7 +37,23 @@ NOISE_D = 6
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXE = os.path.join(ROOT, "build", "overteon-qml-preview")
+
+def _product_dir():
+    """Newest Build/<BuildName>_<Time>_<Host>_<OS>_<Platform> directory.
+
+    CMake names the product directory after the build, so the path cannot be
+    written down here; OVERTEON_PRODUCT overrides it.
+    """
+    override = os.environ.get("OVERTEON_PRODUCT")
+    if override:
+        return override
+    names = sorted(n for n in os.listdir(os.path.join(ROOT, "Build"))
+                   if "_linux_" in n and os.path.isdir(os.path.join(ROOT, "Build", n)))
+    if not names:
+        raise SystemExit("nothing built: configure and run ninja -C Build/host")
+    return os.path.join(ROOT, "Build", names[-1])
+
+EXE = os.path.join(_product_dir(), "overteon-qml-preview")
 RUN = os.path.join(tempfile.gettempdir(), "over-bench")
 
 

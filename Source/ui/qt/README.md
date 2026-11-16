@@ -63,18 +63,23 @@ transparent click-catcher underneath (`main.qml`).
 
 ## Trying it without a host
 
+Products are written to `Build/<BuildName>_<Time>_<Host>_<OS>_<Platform>/`, so
+the copy to run is the one in the newest of those directories:
+
 ```sh
-cmake --preset ninja && cmake --build build --target overteon-qml-preview
-./build/overteon-qml-preview --size 1040x772          # interactive
-./build/overteon-qml-preview --size 1040x772 --freeze --shot out.png
+cmake --preset ninja && ninja -C Build/host overteon-qml-preview
+. Scripts/product.sh
+P=$(product_dir linux)
+"$P/overteon-qml-preview" --size 1040x772            # interactive
+"$P/overteon-qml-preview" --size 1040x772 --freeze --shot out.png
 ```
 
 ## In a host
 
 ```sh
-ninja -C build Overteon_LV2
-LV2_PATH=$PWD/build/Overteon_artefacts/Release/LV2 jalv.gtk3 -s \
-    https://eonun.com/plugins/Overteon
+ninja -C Build/host Overteon_LV2
+. Scripts/product.sh
+LV2_PATH="$(product_dir linux)/LV2" jalv.gtk3 -s https://eonun.com/plugins/Overteon
 ```
 
 The editor creates one `QGuiApplication` per process, reparents its

@@ -7,15 +7,17 @@
 #  but it is a Windows binary; this script copies the same set explicitly, so
 #  it also works on Linux.
 #
-#    ./deploy-win.sh [build-dir] [out-dir]
+#    ./deploy-win.sh [product-dir] [out-dir]
 #
-#  Defaults: build-win  dist-win
+#  Defaults: the newest Build/<BuildName>_..._windows_<arch>/ product directory,
+#  and Build/dist-win for the assembled folder.
 # ===========================================================================
 set -e
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
-BUILD=${1:-$ROOT/Build/win}
+. "$HERE/product.sh"
+BUILD=${1:-$(product_dir windows)}
 OUT=${2:-$ROOT/Build/dist-win}
 QT=${QT_MSVC:-$HOME/Qt-msvc/6.9.3/msvc2022_64}
 EXE=overteon-qml-preview.exe

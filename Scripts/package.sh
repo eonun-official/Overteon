@@ -2,9 +2,10 @@
 # ===========================================================================
 #  package.sh — build and install the LV2 bundle.
 #
-#  JUCE writes a fresh bundle to
-#      build/Overteon_artefacts/Release/LV2/Overteon.lv2
-#  on every build.  This copies it to ~/.lv2 (or $LV2_DEST) so hosts can load
+#  Every build writes a fresh bundle to
+#      Build/<BuildName>_<Time>_<Host>_<OS>_<Platform>/LV2/Overteon.lv2
+#  (resolved below through Scripts/product.sh, since the Time and platform
+#  fields make the directory name change from build to build).  This copies it to ~/.lv2 (or $LV2_DEST) so hosts can load
 #  it, and verifies the copy afterwards — a stale bundle is easy to miss and
 #  then every "the plug-in still has the old bug" report is really about the
 #  copy in ~/.lv2, not about the build.
@@ -20,7 +21,10 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
-BUILT="$ROOT/Build/host/Overteon_artefacts/Release/LV2/Overteon.lv2"
+. "$HERE/product.sh"
+PRODUCT=$(product_dir linux) || true
+[ -n "$PRODUCT" ] || { echo "nothing built yet - run: ninja -C $ROOT/Build/host" >&2; exit 1; }
+BUILT="$PRODUCT/LV2/Overteon.lv2"
 DEST_ROOT=${LV2_DEST:-$HOME/.lv2}
 DEST="$DEST_ROOT/Overteon.lv2"
 URI="https://eonun.com/plugins/Overteon"
