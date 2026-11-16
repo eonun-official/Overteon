@@ -150,8 +150,14 @@ endif()
 # ---------------------------------------------------------------------------
 #  Where products land
 #
-#      Build/<BuildName>_<Time>_<Host>_<OS>_<Platform>/
+#  <repository>/Build/<BuildName>_<Time>_<Host>_<OS>_<Platform>/
 #
+#  Anchored to the repository, not to the build tree, so that the products are
+#  in Build/ no matter where the build tree is: Build/host, Build/win, or a
+#  throw-away `build/` next to the CMakeLists.  This file lives in Config/, so
+#  its parent is the repository root either way -- whether the tree was
+#  configured as `cmake -S Config -B Build/host` or as `cd build && cmake ..`
+#  through the forwarding CMakeLists at the top.
 #  One directory per build, named for what it is, where and when it was made:
 #
 #      Build/Overteon_20261116-1930_x-linux_linux_x86_64/
@@ -179,8 +185,11 @@ endif()
 #
 #  Override with -DOVERTEON_BUILD_STAMP=..., or delete that cache entry to start
 #  a new directory.  Nothing here is an absolute path: it is all derived from
-#  the build tree's own location, so the checkout still moves.
+#  the checkout's own location, so the tree still clones anywhere.
 # ---------------------------------------------------------------------------
+#  Config/ -> repository root
+get_filename_component(OVERTEON_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+
 set(OVERTEON_BUILD_NAME "${PROJECT_NAME}")
 if(CMAKE_BUILD_TYPE AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     # A Debug build must not link into a Release directory.  Single-config
@@ -221,7 +230,7 @@ elseif(NOT _ov_platform)
 endif()
 
 set(OVERTEON_PRODUCT_DIR
-    "${CMAKE_BINARY_DIR}/../${OVERTEON_BUILD_NAME}_${OVERTEON_BUILD_STAMP}_${_ov_host}_${_ov_os}_${_ov_platform}")
+    "${OVERTEON_REPO_ROOT}/Build/${OVERTEON_BUILD_NAME}_${OVERTEON_BUILD_STAMP}_${_ov_host}_${_ov_os}_${_ov_platform}")
 # A relative output property would be read against the build tree, so resolve it
 # once here and give the targets one absolute value.  Derived, not hard-coded:
 # the tree keeps moving with the checkout.
@@ -425,6 +434,33 @@ if(OVERTEON_QT_UI)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_ov_blurfunc})
     file(READ ${_ov_blurfunc} _ov_blurfunc_src)
 
+    # qsb is a *host* tool: it bakes .qsb files, which are platform
+    # independent, so a Linux qsb bakes the shaders for the Windows build too.
+    # Three ways to find it, in order of preference:
+    #
+    #   1. Qt6::qsb -- imported by Qt's own ShaderTools package.  Used when the
+    #      Qt in use ships it (a native Linux or MSVC build with the tools).
+    #   2. PATH.
+    #   3. The usual places a distribution installs Qt's executables.  These
+    #      are search hints for a third-party tool, not project paths: nothing
+    #      here is required for the tree to build elsewhere, and
+    #      -DOVERTEON_QSB=/path/to/qsb overrides the lot.
+    if(TARGET Qt6::qsb)
+        set(OVERTEON_QSB "$<TARGET_FILE:Qt6::qsb>")
+    else()
+        find_program(OVERTEON_QSB NAMES qsb
+            PATHS /usr/lib/qt6/bin /usr/lib64/qt6/bin /usr/local/lib/qt6/bin
+            DOC "Qt shader baker (qsb)")
+        if(NOT OVERTEON_QSB)
+            message(FATAL_ERROR
+                "qsb (Qt's shader baker) was not found.  It is needed to bake "
+                "the GLSL in Source/ui/qt/shaders, and it has to be a host tool "
+                "-- for a cross-build, the one from the build machine's Qt.  "
+                "Install Qt's shader tools, put qsb on PATH, or pass "
+                "-DOVERTEON_QSB=/path/to/qsb")
+        endif()
+    endif()
+
     set(OVERTEON_SHADER_QSBS "")
     foreach(_sh
         ../Source/ui/qt/shaders/blur.vert  ../Source/ui/qt/shaders/blur.frag
@@ -445,7 +481,7 @@ if(OVERTEON_QT_UI)
         endif()
 
         add_custom_command(OUTPUT ${_qsb}
-            COMMAND /usr/lib/qt6/bin/qsb --glsl 100,120,150,300es,310es,320,330,410,440
+            COMMAND "${OVERTEON_QSB}" --glsl 100,120,150,300es,310es,320,330,410,440
                     -o ${_qsb} ${_src}
             DEPENDS ${_src} ${_ov_blurfunc}
             COMMENT "qsb ${_shname}")
@@ -734,6 +770,49 @@ foreach(_ov_exe
             RUNTIME_OUTPUT_DIRECTORY "${OVERTEON_PRODUCT_DIR}")
     endif()
 endforeach()
+
+# ---------------------------------------------------------------------------
+#  Short target names
+#
+#  JUCE names the per-format targets Overteon_VST3, Overteon_LV2, Overteon_VST,
+#  Overteon_Standalone.  Typed at a prompt the prefix is just noise, and the
+#  VST2 one is named neither what Steinberg calls it nor what anyone types:
+#
+#      ninja vst3      ninja vst2      ninja lv2
+#      ninja standalone      ninja preview      ninja tools
+#
+#  Each is a grouping target that depends on the real one, so it builds the
+#  shared code plus that format and nothing else.  A format left out of
+#  OVERTEON_FORMATS simply has no alias: asking for it then fails with ninja's
+#  own "unknown target", which is the honest answer rather than a target that
+#  silently builds nothing.
+# ---------------------------------------------------------------------------
+foreach(_ov_entry "vst3:Overteon_VST3" "vst2:Overteon_VST"
+                   "lv2:Overteon_LV2" "standalone:Overteon_Standalone"
+                   "au:Overteon_AU")
+    string(REPLACE ":" ";" _ov_split "${_ov_entry}")
+    list(GET _ov_split 0 _ov_alias)
+    list(GET _ov_split 1 _ov_target)
+    if(TARGET ${_ov_target})
+        add_custom_target(${_ov_alias} DEPENDS ${_ov_target})
+    endif()
+endforeach()
+
+if(TARGET overteon-qml-preview)
+    add_custom_target(preview DEPENDS overteon-qml-preview)
+endif()
+
+# ovctl and the headless checks: POSIX-only, and nothing a release build needs,
+# so they get one target of their own rather than being in every format build.
+set(_ov_tools)
+foreach(_ov_t ovctl over-blur-test over-ballistics-test over-spectrum-test)
+    if(TARGET ${_ov_t})
+        list(APPEND _ov_tools ${_ov_t})
+    endif()
+endforeach()
+if(_ov_tools)
+    add_custom_target(tools DEPENDS ${_ov_tools})
+endif()
 
 # ---------------------------------------------------------------------------
 #  ninja package — build a release archive

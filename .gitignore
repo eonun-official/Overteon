@@ -10,11 +10,17 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 compile_commands.json
+Makefile
 *.ninja
 .ninja_deps
 .ninja_log
 .qt/
 _deps/
+# A build tree made the conventional way sits at the top of the repository
+# (mkdir build && cd build && cmake ..), which Build/* does not reach -- its
+# pattern is case-sensitive.
+build/
+build-*/
 # JUCE's generated-source folder for the plug-in target (build scratch, the
 # products themselves go to Build/<BuildName>_<Time>_<Host>_<OS>_<Platform>/)
 *_artefacts/

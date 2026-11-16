@@ -11,6 +11,7 @@ The original WebView version is kept as the visual reference in
 ## Layout
 
 ```
+CMakeLists.txt  forwards into Config/, so `cmake ..` works from a build dir
 Config/     build system — CMakeLists.txt, presets, toolchain files
 Source/     everything that is compiled
   src/        the JUCE plug-in (processor, parameters, DSP)
@@ -27,12 +28,15 @@ Assets/     data that ships or documents the product
   reference/  the original web UI, kept for comparison
   ov_shaders/ generated shader bundle manifest
   docs/       changelogs and build notes
-Build/      all build output (git-ignored, except dist-win/)
+Build/      all build output (git-ignored, except dist-win/): the product
+            directories, the ninja trees, and the release archives
 ```
 
 Nothing outside `Config/`, `Source/`, `Tools/`, `Scripts/` and `Assets/` is
-tracked, and every path inside the build system is relative — the tree is
-meant to be cloned anywhere.
+tracked, apart from the top-level `CMakeLists.txt`, the README and the
+`.gitignore`. Every path inside the build system is relative — the tree is
+meant to be cloned anywhere, and the products still land in `<repo>/Build/`
+whichever directory the build tree is in.
 
 ## Product identity
 
@@ -57,19 +61,53 @@ build cannot be installed side by side — install one or the other.
 
 ## Build
 
-The source tree is `Config/`; the build tree goes under `Build/`.
+The build system is `Config/CMakeLists.txt`, and the CMakeLists at the top of
+the repository just forwards into it, so either entry point works:
 
 ```sh
-# Linux host — vendored JUCE, no network needed
-cmake -S Config -B Build/host -G Ninja -DCMAKE_BUILD_TYPE=Release
-ninja -C Build/host
+# conventional
+mkdir -p build && cd build && cmake .. -G Ninja && ninja vst3
 
-# Windows x64 cross-compile (clang-cl + xwin + an MSVC Qt)
-cmake -S Config -B Build/win -G Ninja \
+# explicit, from the repository root
+cmake -S . -B Build/host -G Ninja -DCMAKE_BUILD_TYPE=Release
+ninja -C Build/host vst3
+```
+
+`-G Ninja` is worth typing: the default generator here is Unix Makefiles, and
+`cmake ..` alone gives you `make vst3` instead.
+
+A build tree remembers which entry point configured it — CMake refuses to
+reuse `Build/host` once it was configured through the other one. Pick one per
+tree, or start a fresh directory: `cmake -S . -B Build/host` after
+`cmake -S Config -B Build/host` fails with "does not match the source used to
+generate cache" until you delete the cache.
+
+### Targets
+
+```sh
+ninja vst3   ninja vst2   ninja lv2   ninja standalone
+ninja preview      # overteon-qml-preview, the UI without a host
+ninja tools        # ovctl and the headless meter/analyser checks
+ninja package      # Build/packages/<build name>.zip
+ninja              # everything
+```
+
+Each format target builds the shared code plus that one format. JUCE's own
+targets (`Overteon_VST3`, `Overteon_LV2`, `Overteon_VST`, `Overteon_Standalone`)
+still exist; the short names are the ones to type. A format left out of
+`OVERTEON_FORMATS` has no short name, so asking for it fails with ninja's own
+"unknown target" rather than silently building nothing.
+
+`vst2` means VST2 — that is the format, not a typo for a second VST3.
+
+### Windows x64 cross-compile
+
+```sh
+cmake -S . -B Build/win -G Ninja \
       -DCMAKE_TOOLCHAIN_FILE=$PWD/Config/cmake/toolchain-clangcl-xwin.cmake \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_PREFIX_PATH=$HOME/Qt-msvc/6.9.3/msvc2022_64
-WINEPATH=$HOME/Qt-msvc/6.9.3/msvc2022_64/bin ninja -C Build/win
+WINEPATH=$HOME/Qt-msvc/6.9.3/msvc2022_64/bin ninja -C Build/win vst3
 ```
 
 `CMAKE_TOOLCHAIN_FILE` must be absolute: CMake resolves it against the *build*
