@@ -103,6 +103,41 @@ subdirectory. Scripts never hard-code this path: they source
 `-DOVERTEON_QT_UI=OFF` builds the WebView editor instead (useful for
 side-by-side comparison with the original).
 
+## Package
+
+```sh
+ninja -C Build/host package        # -> Build/packages/Overteon_<stamp>.zip
+ninja -C Build/win  package        # the Windows archive, cross-built on Linux
+```
+
+`Scripts/make-package.sh` stages the plug-in formats, the factory presets, the
+changelogs and a generated `README.txt` into one folder named for the version
+and the platform, and zips it. The archive keeps the product directory's name,
+so it always says which build it came from, and a `.sha256` sits beside it. The
+archive is verified after writing (`unzip -t` plus a check that the bundles are
+present), because a truncated archive is the classic packaging bug.
+
+Developer tools (`overteon-qml-preview`, `ovctl`, the headless tests,
+`libOverteon_SharedCode.a`) and Windows import libraries are not included —
+they are not something a user installs.
+
+```sh
+./Scripts/make-package.sh --os windows --with-qt   # carry the Qt6 runtime too
+./Scripts/make-package.sh --product DIR --out DIR --force
+```
+
+A Windows archive is not runnable on its own, because the editor resolves
+`Qt6Core.dll` and friends at load time; `--with-qt` copies the Qt runtime into
+`qt/` inside the archive and says so in its README. It is off by default so the
+download stays 12 MB instead of 78 MB.
+
+`-DOVERTEON_AUTO_PACKAGE=ON` adds packaging to `ALL`, so a plain `ninja` also
+produces the archive. It costs a `find` when nothing changed, since the script
+exits immediately if the archive is newer than every product.
+
+`Scripts/package.sh` is a different job: it installs the LV2 bundle into
+`~/.lv2` on this machine and verifies the copy.
+
 ## Try the UI without a host
 
 ```sh

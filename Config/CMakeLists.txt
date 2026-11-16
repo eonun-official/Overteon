@@ -40,6 +40,13 @@ option(OVERTEON_PREVIEW_ONLY "Build only overteon-qml-preview (no JUCE plugin)" 
 # widened by anything, which is the point of it being a build flag.
 option(OVERTEON_RESIZABLE_WINDOW "Let the host resize the plug-in editor" OFF)
 
+# Run Scripts/make-package.sh as part of a plain `ninja`, so a build always
+# leaves a shippable archive in Build/packages/ next to the products.  OFF by
+# default: packaging is a release step, and doing it on every edit slows a
+# tight build loop for an artefact nobody asked for.  The `package` target
+# exists either way, so `ninja package` always works.
+option(OVERTEON_AUTO_PACKAGE "Build a release archive on every build" OFF)
+
 if(OVERTEON_PREVIEW_ONLY)
     set(CMAKE_AUTOMOC ON)
     set(CMAKE_AUTORCC ON)
@@ -727,4 +734,55 @@ foreach(_ov_exe
             RUNTIME_OUTPUT_DIRECTORY "${OVERTEON_PRODUCT_DIR}")
     endif()
 endforeach()
+
+# ---------------------------------------------------------------------------
+#  ninja package — build a release archive
+#
+#  Runs Scripts/make-package.sh on this build's product directory and leaves
+#      Build/packages/<product directory name>.zip
+#      Build/packages/<product directory name>.zip.sha256
+#  next to the products.  The name is the product directory's own, so an
+#  archive always says which build it came from.
+#
+#  -DOVERTEON_AUTO_PACKAGE=ON adds this to ALL, so a plain `ninja` finishes by
+#  packaging.  The script exits immediately when the archive is newer than every
+#  product, so that costs a `find` rather than a re-zip.
+#
+#  The script needs a POSIX shell.  A native Windows build has none, so there
+#  the target exists but explains itself instead of failing obscurely.
+# ---------------------------------------------------------------------------
+set(OVERTEON_PACKAGE_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/../Scripts/make-package.sh")
+
+# Everything that has to exist before there is something to pack.
+set(_ov_pack_deps)
+foreach(_fmt ${PLUGIN_FORMATS})
+    if(TARGET Overteon_${_fmt})
+        list(APPEND _ov_pack_deps Overteon_${_fmt})
+    endif()
+endforeach()
+
+if(OVERTEON_AUTO_PACKAGE)
+    set(_ov_pack_all ALL)
+else()
+    set(_ov_pack_all)
+endif()
+
+find_program(OVERTEON_SH NAMES sh bash)
+if(OVERTEON_SH)
+    add_custom_target(package ${_ov_pack_all}
+        COMMAND "${OVERTEON_SH}" "${OVERTEON_PACKAGE_SCRIPT}"
+                --product "${OVERTEON_PRODUCT_DIR}"
+                --os "${_ov_os}"
+        DEPENDS ${_ov_pack_deps}
+        COMMENT "Packaging ${OVERTEON_PRODUCT_DIR}"
+        VERBATIM)
+else()
+    add_custom_target(package
+        COMMAND "${CMAKE_COMMAND}" -E echo
+                "make-package.sh needs a POSIX shell, and none was found."
+                "Run Scripts/make-package.sh by hand from a shell that has one."
+        COMMENT "Packaging is not available without sh"
+        VERBATIM)
+endif()
+
 
