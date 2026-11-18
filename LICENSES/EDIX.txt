@@ -1,0 +1,22 @@
+EDIX font
+==========
+
+Author: Dumpatom
+Source: https://www.zcool.com.cn/work/ZNDc0MjMzOTI=.html
+
+The author's published statement on the source page is that EDIX is a free
+commercial-use English display font: personal and commercial use are permitted,
+and the font file itself may not be sold.
+
+The same page also carries ZCOOL's default article-reproduction notice
+("禁止转载 / 禁止商业用途 / 禁止个人用途"). That notice concerns reproduction
+of the presentation article; it is not the author's font-usage statement. The
+page title and the author's reply in the comments explicitly state free
+commercial use.
+
+No formal SPDX licence identifier is published for EDIX. This file records the
+author's published terms and attribution. If the author later publishes a
+formal licence, that licence supersedes this note.
+
+The font is used in Overteon as a UI display face; the font file is not sold
+separately.

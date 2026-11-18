@@ -47,6 +47,12 @@ what those licences allow.
    scripts and the exact Qt version used — is published in this repository, the
    source and relinking requirements of the GPLv3/LGPLv3 are satisfied.
    Licence texts: LICENSES/GPL-3.0.txt, LICENSES/LGPL-3.0.txt
+   Qt's bundled third-party notices (FreeType, HarfBuzz, libjpeg-turbo,
+   libpng, PCRE2, zlib, glslang, SPIRV-Cross, double-conversion, md4c,
+   tinycbor and the other Qt 3rdparty components) are in LICENSES/Qt-6.9.3/.
+   The Qt GPL exception text is
+   LICENSES/Qt-6.9.3/Qt-GPL-exception-1.0.txt.
+   Exact Qt source and the written source offer: SOURCE_OFFER.md
    Qt source: https://code.qt.io/cgit/qt/ , https://download.qt.io/
 
 3. Inter font — Inter-Regular.ttf, Inter-Medium.ttf, Inter-SemiBold.ttf,
@@ -54,9 +60,13 @@ what those licences allow.
    Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter).
    SIL Open Font License, Version 1.1.  Text: LICENSES/OFL-1.1-Inter.txt
 
-4. Edix font — Source/ui/qt/res/edix.otf
-   Open-source font, redistributed in accordance with its original open-source
-   licence.
+4. EDIX font — Source/ui/qt/res/edix.otf and Source/web_fx/edix.otf
+   Author: Dumpatom
+   Source: https://www.zcool.com.cn/work/ZNDc0MjMzOTI=.html
+   The author states on the source page that EDIX is free for personal and
+   commercial use, and that the font file itself may not be sold.  The page's
+   default article-reproduction notice is not the author's font-usage
+   statement.  Full attribution and terms: LICENSES/EDIX.txt.
 
 5. Steinberg VST3 SDK (bundled with JUCE)
    MIT licence; see LICENSES/JUCE-8-LICENSE.md and
@@ -68,6 +78,42 @@ what those licences allow.
 7. Assets/reference/original/web_fx/ contains the original WebView editor that
    this Qt editor is a port of.  It is part of this project and licensed under
    AGPL-3.0.
+
+8. JUCE 8.0.13 bundled dependencies
+   The compiled JUCE modules include FLAC (BSD), Ogg Vorbis (BSD), libjpeg
+   (IJG), CHOC (ISC), QuickJS (MIT), VST3 SDK (MIT), pnglib (zlib), zlib
+   (zlib), HarfBuzz (Old MIT), SheenBidi (Apache-2.0), LV2 headers (ISC) and
+   the OpenGL/Mesa/Khronos notices.  Verbatim licence texts:
+   LICENSES/JUCE-8.0.13/.  The JUCE licence itself is
+   LICENSES/JUCE-8-LICENSE.md.
+
+9. Steinberg VST3 SDK — MIT
+   Verbatim licence: LICENSES/JUCE-8.0.13/VST3-SDK-LICENSE.txt
+
+10. VST2 clean-room SDK (Xaymar) — BSD-3-Clause
+    Source headers: Source/third_party/vst2sdk-xaymar
+    Licence: LICENSES/VST2-SDK-BSD-3-Clause.txt
+    This component is present in the source tree for build compatibility.
+    No VST2 binary is distributed.
+
+
+================================================================================
+DISTRIBUTION SCOPE
+================================================================================
+
+Only VST3 binaries are distributed (Windows; AU is optional on macOS).  No VST2
+or LV2 binaries are shipped.  The VST2 clean-room headers are source-only and
+are covered by LICENSES/VST2-SDK-BSD-3-Clause.txt.
+
+================================================================================
+SOURCE OFFER
+================================================================================
+
+The complete corresponding source for the released binary is this repository
+at the release tag (v0.9.20 for this release).  The exact Qt 6.9.3 and JUCE
+8.0.13 source locations, the build configuration, and the written offer to
+provide the Qt source on request are in SOURCE_OFFER.md.
+
 
 
 ================================================================================
