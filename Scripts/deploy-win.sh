@@ -2,10 +2,12 @@
 # ===========================================================================
 #  deploy-win.sh — assemble a self-contained Windows folder for wine/Windows.
 #
-#  Qt needs more than the .exe: the platform plugin (qwindows.dll), the QML
-#  import tree, and every Qt6*.dll they reference.  windeployqt.exe can do it
-#  but it is a Windows binary; this script copies the same set explicitly, so
-#  it also works on Linux.
+#  Qt needs more than the .exe: the platform plug-in (qwindows.dll), the QML
+#  import tree, and the Qt modules the binary actually imports.  windeployqt.exe
+#  can do this but it is a Windows binary; Scripts/qt-closure.py does it here by
+#  reading the PE import tables, and copies only what is reachable from the
+#  binary rather than every Qt6*.dll the install happens to contain (110 of them,
+#  274 MB, against 9 and 35 MB).
 #
 #    ./deploy-win.sh [product-dir] [out-dir]
 #
@@ -29,20 +31,13 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 cp "$BUILD/$EXE" "$OUT/"
 
-echo "copying Qt runtime..."
-for f in "$QT"/bin/Qt6*.dll; do
-    cp "$f" "$OUT/"
-done
-
-echo "copying Qt plugins..."
-for d in platforms imageformats styles iconengines generic networkinformation; do
-    [ -d "$QT/plugins/$d" ] || continue
-    mkdir -p "$OUT/$d"
-    cp "$QT/plugins/$d"/*.dll "$OUT/$d/" 2>/dev/null || true
-done
+echo "copying the reachable Qt runtime..."
+python3 "$ROOT/Scripts/qt-closure.py" "$OUT/$EXE" --qt "$QT" --copy-to "$OUT" \
+        --extra plugins/platforms/qwindows.dll --report
 
 echo "copying QML imports..."
 cp -r "$QT/qml" "$OUT/qml"
+
 
 # Qt looks for qt.conf next to the .exe; without it the plugin path is the
 # compiled-in one and nothing loads.

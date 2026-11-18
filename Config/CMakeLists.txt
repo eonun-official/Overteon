@@ -47,105 +47,48 @@ option(OVERTEON_RESIZABLE_WINDOW "Let the host resize the plug-in editor" OFF)
 # exists either way, so `ninja package` always works.
 option(OVERTEON_AUTO_PACKAGE "Build a release archive on every build" OFF)
 
-if(OVERTEON_PREVIEW_ONLY)
-    set(CMAKE_AUTOMOC ON)
-    set(CMAKE_AUTORCC ON)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets ShaderTools)
-    set(CMAKE_CXX_STANDARD 17)
-    set(CMAKE_CXX_STANDARD_REQUIRED ON)
-    add_executable(overteon-qml-preview
-        ../Source/ui/qt/preview/main.cpp
-        ../Source/ui/qt/OvEngine.cpp
-        ../Source/ui/qt/OvParam.cpp
-        ../Source/ui/qt/OvEqView.cpp
-        ../Source/ui/qt/OvFogSource.cpp ../Source/ui/qt/OvFrameProbe.cpp
-        ../Source/ui/qt/OvMeterView.cpp
-        ../Source/ui/qt/OvSeamFrost.cpp ../Source/ui/qt/OvBlurTest.cpp
-        ../Source/ui/qt/OvFrost.cpp
-        ../Source/ui/qt/ov_ui.qrc)
-    target_include_directories(overteon-qml-preview PRIVATE ../Source/ui/qt)
-    target_link_libraries(overteon-qml-preview PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets
-        # OvEqView is a QQuickFramebufferObject and paints with a
-        # QOpenGLPaintDevice: GL tessellates the paths instead of the CPU
-        # rasterising them into an image.
-        Qt6::OpenGL)
+# Strip the symbol table and non-exported symbols out of release binaries.
+#
+# A shared object keeps two symbol tables: .symtab (every name, for a debugger)
+# and .dynsym (the ones the dynamic loader needs).  Only .dynsym has to survive
+# in a shipped plug-in, and .symtab plus its string table are dead weight in it:
+# measured at 1.2 MB of 8.5 MB on the Linux VST3 build.
+#
+# ON for Release only.  A Debug or RelWithDebInfo build exists to be debugged,
+# and it is those builds you attach a debugger to.  The export table
+# (.___EXPORTS, or .dynsym here) is never touched, so the plug-in still loads.
+option(OVERTEON_STRIP_SYMBOLS "Strip symbol tables from Release binaries" ON)
 
-    # the preview checks for a compositing manager before Qt starts
-    if(UNIX AND NOT APPLE)
-        find_package(X11 REQUIRED)
-        target_link_libraries(overteon-qml-preview PRIVATE X11::X11)
-        # --jack: the preview as a real JACK client, so the metering can be
-        # driven by actual audio without a plug-in host in the way.
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(JACK REQUIRED jack)
-        target_include_directories(overteon-qml-preview PRIVATE ${JACK_INCLUDE_DIRS})
-        target_link_libraries(overteon-qml-preview PRIVATE ${JACK_LIBRARIES})
-        target_link_directories(overteon-qml-preview PRIVATE ${JACK_LIBRARY_DIRS})
-        foreach(_ext X11::Xext Xext)
-            if(TARGET ${_ext})
-                target_link_libraries(overteon-qml-preview PRIVATE ${_ext})
-                break()
-            endif()
-        endforeach()
+# Applied to a linked artefact (a per-format module or an executable), never to
+# the Overteon static library: an archive's symbol table is how the linker
+# resolves references between its members, so stripping it breaks the link
+# rather than the binary.
+#
+# Defined here, above the preview-only branch, because that branch returns early
+# and would otherwise never reach it.
+#
+# ld has no --strip-unneeded (that is the strip *program*'s option); its
+# equivalent is -s, which drops .symtab and its string table and leaves .dynsym
+# alone -- checked on the built module: the export table still holds its 680
+# entries and GetPluginFactory is still there to be found.
+function(ov_maybe_strip _tgt)
+    if(NOT OVERTEON_STRIP_SYMBOLS)
+        return()
     endif()
-    set_target_properties(overteon-qml-preview PROPERTIES AUTOMOC ON AUTORCC ON)
-    if(CMAKE_CROSSCOMPILING AND DEFINED ENV{OVERTEON_HOST_RCC})
-        set_target_properties(overteon-qml-preview PROPERTIES
-            AUTORCC_EXECUTABLE "$ENV{OVERTEON_HOST_RCC}")
+    if(APPLE)
+        # -x: strip local symbols, keep the exported ones.  Mach-O has no
+        # GNU-style split between "needed" and "unneeded".
+        target_link_options(${_tgt} PRIVATE
+            "$<$<CONFIG:Release>:-Wl,-x>" "$<$<CONFIG:MinSizeRel>:-Wl,-x>")
+    elseif(UNIX)
+        target_link_options(${_tgt} PRIVATE
+            "$<$<CONFIG:Release>:LINKER:-s>"
+            "$<$<CONFIG:MinSizeRel>:LINKER:-s>")
     endif()
-    if(WIN32)
-        # a GUI subsystem binary so wine does not open a console window
-        set_target_properties(overteon-qml-preview PROPERTIES WIN32_EXECUTABLE TRUE)
-    endif()
-    return()
-endif()
+    # Windows: a PE file has no symbol table to strip -- clang-cl/MSVC put the
+    # symbols in a separate .pdb, which the packaging step already leaves out.
+endfunction()
 
-include(FetchContent)
-
-# Use the JUCE tree that is already downloaded into Source/third_party/JUCE
-# (JUCE 8.0.13, i.e. exactly the tag pinned below). FetchContent then does no
-# network I/O at all, so configure/build works offline. Pass
-# -DOVERTEON_VENDORED_JUCE=OFF to make FetchContent clone from GitHub instead
-# (needs proxychains on this machine).
-option(OVERTEON_VENDORED_JUCE
-       "Use the vendored JUCE tree instead of cloning from GitHub" ON)
-
-if(OVERTEON_VENDORED_JUCE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../Source/third_party/JUCE/CMakeLists.txt")
-    set(FETCHCONTENT_SOURCE_DIR_JUCE "${CMAKE_CURRENT_SOURCE_DIR}/../Source/third_party/JUCE"
-        CACHE PATH "Vendored JUCE checkout (skips the GitHub download)" FORCE)
-endif()
-
-FetchContent_Declare(JUCE
-    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG 8.0.13
-    GIT_SHALLOW TRUE
-    GIT_PROGRESS TRUE)
-FetchContent_MakeAvailable(JUCE)
-
-# VST2 needs an SDK on the include path.  Steinberg stopped shipping one in 2018,
-# so ../Source/third_party/vst2sdk/ carries the two headers JUCE's wrapper includes, written
-# against the clean-room reimplementation vendored beside them (see the notes at
-# the top of aeffect.h).  Set up before the plug-in targets are created — JUCE
-# refuses to add a VST target otherwise.
-juce_set_vst2_sdk_path("${CMAKE_CURRENT_SOURCE_DIR}/../Source/third_party/vst2sdk")
-
-# LV2 is a first-class JUCE format on all three platforms (no extra SDK needed).
-# Leave it out explicitly with -DOVERTEON_FORMATS="VST3;Standalone".
-set(PLUGIN_FORMATS LV2 VST3 VST Standalone)
-set(OVERTEON_FORMATS "${PLUGIN_FORMATS}" CACHE STRING "JUCE plug-in formats to build")
-set(PLUGIN_FORMATS ${OVERTEON_FORMATS})
-if(APPLE)
-    list(APPEND PLUGIN_FORMATS AU)
-    # Universal binary (Apple Silicon + Intel) unless caller overrides.
-    if(NOT CMAKE_OSX_ARCHITECTURES)
-        set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
-    endif()
-    # Reasonable deployment floor for current DAWs.
-    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
-    endif()
-endif()
 
 # ---------------------------------------------------------------------------
 #  Where products land
@@ -244,6 +187,114 @@ message(STATUS "Overteon products: ${OVERTEON_PRODUCT_DIR}")
 # CMAKE_RUNTIME_OUTPUT_DIRECTORY: the variable would also reach JUCE's own
 # helper sub-projects (juce_lv2_helper, vst3_helper), which are build tools and
 # would litter a directory that is meant to hold products only.
+
+if(OVERTEON_PREVIEW_ONLY)
+    set(CMAKE_AUTOMOC ON)
+    set(CMAKE_AUTORCC ON)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets ShaderTools)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    add_executable(overteon-qml-preview
+        ../Source/ui/qt/preview/main.cpp
+        ../Source/ui/qt/OvEngine.cpp
+        ../Source/ui/qt/OvParam.cpp
+        ../Source/ui/qt/OvEqView.cpp
+        ../Source/ui/qt/OvFogSource.cpp ../Source/ui/qt/OvFrameProbe.cpp
+        ../Source/ui/qt/OvMeterView.cpp
+        ../Source/ui/qt/OvSeamFrost.cpp ../Source/ui/qt/OvBlurTest.cpp
+        ../Source/ui/qt/OvFrost.cpp
+        ../Source/ui/qt/ov_ui.qrc)
+    target_include_directories(overteon-qml-preview PRIVATE ../Source/ui/qt)
+    target_link_libraries(overteon-qml-preview PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets
+        # OvEqView is a QQuickFramebufferObject and paints with a
+        # QOpenGLPaintDevice: GL tessellates the paths instead of the CPU
+        # rasterising them into an image.
+        Qt6::OpenGL)
+
+    # the preview checks for a compositing manager before Qt starts
+    if(UNIX AND NOT APPLE)
+        find_package(X11 REQUIRED)
+        target_link_libraries(overteon-qml-preview PRIVATE X11::X11)
+        # --jack: the preview as a real JACK client, so the metering can be
+        # driven by actual audio without a plug-in host in the way.
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(JACK REQUIRED jack)
+        target_include_directories(overteon-qml-preview PRIVATE ${JACK_INCLUDE_DIRS})
+        target_link_libraries(overteon-qml-preview PRIVATE ${JACK_LIBRARIES})
+        target_link_directories(overteon-qml-preview PRIVATE ${JACK_LIBRARY_DIRS})
+        foreach(_ext X11::Xext Xext)
+            if(TARGET ${_ext})
+                target_link_libraries(overteon-qml-preview PRIVATE ${_ext})
+                break()
+            endif()
+        endforeach()
+    endif()
+    set_target_properties(overteon-qml-preview PROPERTIES AUTOMOC ON AUTORCC ON)
+    if(CMAKE_CROSSCOMPILING AND DEFINED ENV{OVERTEON_HOST_RCC})
+        set_target_properties(overteon-qml-preview PROPERTIES
+            AUTORCC_EXECUTABLE "$ENV{OVERTEON_HOST_RCC}")
+    endif()
+    if(WIN32)
+        # a GUI subsystem binary so wine does not open a console window
+        set_target_properties(overteon-qml-preview PROPERTIES WIN32_EXECUTABLE TRUE)
+    endif()
+    # This branch returns before the product-directory and strip logic further
+    # down, so both are applied here as well; otherwise a preview-only tree
+    # silently produced an unstripped binary in the build directory.
+    set_target_properties(overteon-qml-preview PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${OVERTEON_PRODUCT_DIR}")
+    ov_maybe_strip(overteon-qml-preview)
+    return()
+endif()
+
+include(FetchContent)
+
+# Use the JUCE tree that is already downloaded into Source/third_party/JUCE
+# (JUCE 8.0.13, i.e. exactly the tag pinned below). FetchContent then does no
+# network I/O at all, so configure/build works offline. Pass
+# -DOVERTEON_VENDORED_JUCE=OFF to make FetchContent clone from GitHub instead
+# (needs proxychains on this machine).
+option(OVERTEON_VENDORED_JUCE
+       "Use the vendored JUCE tree instead of cloning from GitHub" ON)
+
+if(OVERTEON_VENDORED_JUCE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../Source/third_party/JUCE/CMakeLists.txt")
+    set(FETCHCONTENT_SOURCE_DIR_JUCE "${CMAKE_CURRENT_SOURCE_DIR}/../Source/third_party/JUCE"
+        CACHE PATH "Vendored JUCE checkout (skips the GitHub download)" FORCE)
+endif()
+
+FetchContent_Declare(JUCE
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG 8.0.13
+    GIT_SHALLOW TRUE
+    GIT_PROGRESS TRUE)
+FetchContent_MakeAvailable(JUCE)
+
+# VST2 needs an SDK on the include path.  Steinberg stopped shipping one in 2018,
+# so ../Source/third_party/vst2sdk/ carries the two headers JUCE's wrapper includes, written
+# against the clean-room reimplementation vendored beside them (see the notes at
+# the top of aeffect.h).  Set up before the plug-in targets are created — JUCE
+# refuses to add a VST target otherwise.
+juce_set_vst2_sdk_path("${CMAKE_CURRENT_SOURCE_DIR}/../Source/third_party/vst2sdk")
+
+# LV2 is a first-class JUCE format on all three platforms (no extra SDK needed).
+# Leave it out explicitly with -DOVERTEON_FORMATS="VST3;Standalone".
+set(PLUGIN_FORMATS LV2 VST3 VST Standalone)
+set(OVERTEON_FORMATS "${PLUGIN_FORMATS}" CACHE STRING "JUCE plug-in formats to build")
+set(PLUGIN_FORMATS ${OVERTEON_FORMATS})
+if(APPLE)
+    list(APPEND PLUGIN_FORMATS AU)
+    # Universal binary (Apple Silicon + Intel) unless caller overrides.
+    if(NOT CMAKE_OSX_ARCHITECTURES)
+        set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
+    endif()
+    # Reasonable deployment floor for current DAWs.
+    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
+    endif()
+endif()
+
+
 
 # ============================================================
 # Overteon — harmonic-injection EQ (active distortion + EQ)
@@ -770,6 +821,54 @@ foreach(_ov_exe
             RUNTIME_OUTPUT_DIRECTORY "${OVERTEON_PRODUCT_DIR}")
     endif()
 endforeach()
+
+# ---------------------------------------------------------------------------
+#  Strip the release binaries
+#
+#  Applied to the linked artefacts (the per-format modules and the executables),
+#  never to the Overteon static library: an archive's symbol table is how the
+#  linker resolves references between its members, so stripping it there breaks
+#  the link rather than the binary.
+#
+#  ld has no --strip-unneeded (that is the strip *program*'s option); its
+#  equivalent is -s, which drops .symtab and its string table and leaves
+#  .dynsym alone -- checked on the built module: the export table still holds
+#  its 680 entries and GetPluginFactory is still there to be found.
+# ---------------------------------------------------------------------------
+function(ov_maybe_strip _tgt)
+    if(NOT OVERTEON_STRIP_SYMBOLS)
+        return()
+    endif()
+    if(APPLE)
+        # -x: strip local symbols, keep the exported ones.  Mach-O has no
+        # GNU-style split between "needed" and "unneeded".
+        target_link_options(${_tgt} PRIVATE
+            "$<$<CONFIG:Release>:-Wl,-x>" "$<$<CONFIG:MinSizeRel>:-Wl,-x>")
+    elseif(UNIX)
+        target_link_options(${_tgt} PRIVATE
+            "$<$<CONFIG:Release>:LINKER:-s>"
+            "$<$<CONFIG:MinSizeRel>:LINKER:-s>")
+    endif()
+    # Windows: a PE file has no symbol table to strip -- clang-cl/MSVC put the
+    # symbols in a separate .pdb, which the packaging step already leaves out.
+endfunction()
+
+foreach(_fmt ${PLUGIN_FORMATS})
+    if(TARGET Overteon_${_fmt})
+        ov_maybe_strip(Overteon_${_fmt})
+    endif()
+endforeach()
+foreach(_ov_exe
+        overteon-qml-preview
+        ovctl
+        over-blur-test
+        over-ballistics-test
+        over-spectrum-test)
+    if(TARGET ${_ov_exe})
+        ov_maybe_strip(${_ov_exe})
+    endif()
+endforeach()
+
 
 # ---------------------------------------------------------------------------
 #  Short target names

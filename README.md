@@ -141,6 +141,46 @@ subdirectory. Scripts never hard-code this path: they source
 `-DOVERTEON_QT_UI=OFF` builds the WebView editor instead (useful for
 side-by-side comparison with the original).
 
+## What ends up in the binary
+
+Qt is linked as a shared library, as its licence requires, so the plug-in
+contains no Qt code — the modules appear in its `DT_NEEDED` / import table and
+are loaded by the host at run time. What the binary *does* carry for no good
+reason is a symbol table: `.symtab` and its 868 KB string table exist for a
+debugger and are dead weight in a plug-in that ships. Release builds now link
+with `-s`:
+
+| artefact | before | after |
+|---|---|---|
+| VST3 `Overteon.so` | 8 463 048 | 7 261 576 |
+| LV2 `libOverteon.so` | 8 442 640 | 7 069 128 |
+| Standalone `Overteon` | 9 010 976 | 7 725 696 |
+
+`.dynsym` is untouched, so `lv2_descriptor`, `GetPluginFactory` and
+`VSTPluginMain` are all still exported and the plug-in still loads — verified by
+running the stripped LV2 in `jalv.gtk3` and by `dlopen`ing all three formats.
+`-DOVERTEON_STRIP_SYMBOLS=OFF` keeps the symbols; Debug and RelWithDebInfo builds
+keep them regardless, because those exist to be debugged.
+
+Windows needs nothing here: a PE file has no symbol table, the symbols go in a
+separate `.pdb`, and packaging already leaves that out.
+
+## The Qt that ships beside it
+
+A Windows plug-in cannot use the host's Qt, so it needs its own — and copying the
+whole Qt install is how a 12 MB plug-in becomes 274 MB of 110 DLLs, most of them
+never opened. The import graph reaches nine modules and one platform plug-in:
+
+```sh
+python3 Scripts/qt-closure.py Overteon.dll --qt $QT --report
+#  9 module DLL(s), 1 plug-in(s), 35.2 MB of 174 available
+```
+
+`Scripts/qt-closure.py` walks the PE import tables with `llvm-objdump`, which
+reads a Windows binary on this Linux host — that is why it exists rather than
+`windeployqt`. `--with-qt` on the packager and `Scripts/deploy-win.sh` both use
+it, taking the Windows archive from 78 MB to 26 MB.
+
 ## Package
 
 ```sh

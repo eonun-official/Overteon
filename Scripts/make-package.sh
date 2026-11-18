@@ -173,20 +173,33 @@ find "$STAGE" -type f \( -name '*.lib' -o -name '*.exp' -o -name '*.pdb' \
 
 # A Windows archive is not runnable on its own: the editor is a Qt front end and
 # the plug-in resolves Qt6Core.dll and friends at load time.  Off by default so
-# the archive stays a download rather than a 300 MB one; --with-qt copies the
+# the archive stays a download rather than a 100 MB one; --with-qt copies the
 # runtime in and the README then says so.
+#
+# Only the reachable part of Qt goes in.  Copying the whole install put 110 DLLs
+# and 274 MB beside a 12 MB plug-in, when the import graph reaches nine modules
+# and one platform plug-in -- 35 MB.  Scripts/qt-closure.py computes that set
+# from the PE import tables, which works on this Linux host because
+# llvm-objdump reads PE.
 if [ "$WITH_QT" = 1 ]; then
     QT_DIR=${QT_MSVC:-$HOME/Qt-msvc/6.9.3/msvc2022_64}
     [ -d "$QT_DIR/bin" ] || { echo "--with-qt: no Qt at $QT_DIR (set QT_MSVC)" >&2; exit 1; }
-    mkdir -p "$STAGE/qt"
-    cp "$QT_DIR"/bin/Qt6*.dll "$STAGE/qt/" || exit 1
-    for _plugin in platforms imageformats styles iconengines generic networkinformation; do
-        [ -d "$QT_DIR/plugins/$_plugin" ] || continue
-        mkdir -p "$STAGE/qt/$_plugin"
-        cp "$QT_DIR"/plugins/"$_plugin"/*.dll "$STAGE/qt/$_plugin/" 2>/dev/null
-    done
+    # The platform plug-in is loaded by name at run time, so no import table
+    # mentions it: it has to be named here or the editor cannot open a window.
+    _qpa=
+    [ -f "$QT_DIR/plugins/platforms/qwindows.dll" ] && _qpa=plugins/platforms/qwindows.dll
+    _any=$(find "$STAGE" \( -name '*.dll' -o -name '*.exe' \) | head -1)
+    [ -n "$_any" ] || { echo "--with-qt: no PE file staged" >&2; exit 1; }
+    if [ -n "$_qpa" ]; then
+        python3 "$ROOT/Scripts/qt-closure.py" "$_any" --qt "$QT_DIR" \
+                --copy-to "$STAGE/qt" --extra "$_qpa" || exit 1
+    else
+        python3 "$ROOT/Scripts/qt-closure.py" "$_any" --qt "$QT_DIR" \
+                --copy-to "$STAGE/qt" || exit 1
+    fi
     with_qt=1
 fi
+
 
 # ---- the paperwork ----------------------------------------------------------
 for _doc in "$ROOT"/Assets/docs/CHANGELOG_*.md; do
