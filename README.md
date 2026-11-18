@@ -16,7 +16,8 @@ Source/     everything that is compiled
   src/        the JUCE plug-in (processor, parameters, DSP)
   ui/qt/      the Qt editor: C++ items, QML, shaders, resources
   web_fx/     the WebView editor's assets (legacy -DOVERTEON_QT_UI=OFF path)
-  third_party/ vendored JUCE, VST2 SDK, WebView2 (not tracked)
+  third_party/ pinned SDKs (JUCE fetched from upstream, VST2 headers tracked,
+              WebView2 only for the legacy WebView path)
 Tools/      developer tools that are not built into the product
   units/      headless checks for the meters and the analyser
   blurdemo/   the CPU-vs-GPU blur comparison
@@ -88,13 +89,16 @@ Overteon is licensed under the **GNU Affero General Public License v3**
 (AGPL-3.0) — the full text is in [LICENSE](LICENSE).
 
 It builds on JUCE 8.0.13 (AGPLv3 option) and Qt 6.9.3 (GPLv3 open-source
-option, statically linked).  Every third-party component, its licence and the
-exact combination terms are declared in [NOTICE](NOTICE); verbatim licence
-texts are in [LICENSES/](LICENSES/).
+option).  The released single-file VST3 statically links Qt; the development
+runtime under `Build/dist-win` uses shared Qt DLLs and is not a release
+artifact.  Every third-party component, its licence and the exact combination
+terms are declared in [NOTICE](NOTICE); verbatim licence texts are in
+[LICENSES/](LICENSES/).
 
 Because the complete corresponding source and build scripts are published here
-and tagged per release, the static-linking obligations of the GPLv3/LGPLv3 are
-satisfied — no separate object files are needed.
+and tagged per release, and JUCE is pinned to its exact upstream tag, the
+static-linking obligations of the GPLv3/LGPLv3 are satisfied — no separate
+object files are needed.
 
 The "Overteon" and "OVER|TEON" names and the logo are project marks and are not
 licensed by the AGPL-3.0; modified versions distributed to others must be

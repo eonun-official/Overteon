@@ -33,7 +33,10 @@ https://github.com/eonun-official/Overteon/issues
 - JUCE's bundled dependency notices: `LICENSES/JUCE-8.0.13/`
 
 The build fetches the pinned JUCE 8.0.13 source; it is not vendored in this
-repository.  The exact source is available at the upstream tag above.
+repository.  A local, untracked checkout may exist at `Source/third_party/JUCE`
+and the build uses it when present, but the upstream tag above is the
+authoritative corresponding source.  The exact source is available at the
+upstream tag above.
 
 ## VST3 SDK
 
@@ -42,7 +45,10 @@ licence is `LICENSES/JUCE-8.0.13/VST3-SDK-LICENSE.txt`.
 
 ## Distribution scope
 
-Only VST3 binaries are distributed.  No VST2 or LV2 binaries are shipped.
-The VST2 clean-room headers remain in the source tree for build compatibility;
-their BSD-3-Clause licence is `LICENSES/VST2-SDK-BSD-3-Clause.txt`.  They are
-not part of any distributed binary.
+The release artifact is the single-file VST3 plug-in.  No VST2 or LV2 binaries
+are shipped.  The VST2 clean-room headers remain in the source tree for build
+compatibility; the build uses the project-authored headers at
+`Source/third_party/vst2sdk`, and the Xaymar SDK at
+`Source/third_party/vst2sdk-xaymar` is a BSD-3-Clause reference/alternative
+(`LICENSES/VST2-SDK-BSD-3-Clause.txt`).  They are not part of any distributed
+binary.  `Build/dist-win` is a development runtime, not a release artifact.

@@ -1,12 +1,19 @@
 # Qt 6.9.3 — bundled third-party licence notices
 
-Overteon statically links Qt 6.9.3 (Core, Gui, Qml, Quick, Widgets,
-QuickWidgets, ShaderTools and the QML modules used by the editor).  Qt's own
-licence is GPLv3 (the open-source option); the project as a whole is AGPL-3.0,
-which AGPLv3 section 13 permits to be combined with GPLv3 works.
+The released single-file VST3 statically links Qt 6.9.3 (Core, Gui, Qml,
+Quick, OpenGL and Network, plus the QML modules used by the editor).  The
+development preview/build tools also use Widgets, QuickWidgets and
+ShaderTools.  Qt's own licence is GPLv3 (the open-source option); the project
+as a whole is AGPL-3.0, which AGPLv3 section 13 permits to be combined with
+GPLv3 works.
 
-Qt itself bundles third-party code.  Because Qt is statically linked, that code
-is part of the shipped binary and its notices must travel with the binary.
+`Build/dist-win` is a development runtime with shared Qt DLLs and additional
+Qt modules/plugins; it is not a release artifact, but the same Qt licences
+apply to it.
+
+Qt itself bundles third-party code.  Because the released VST3 statically links
+Qt, that code is part of the shipped binary and its notices must travel with
+the binary.
 The verbatim licence files are in `3rdparty/`, grouped by Qt module and
 component.  The directories were copied from the Qt 6.9.3 source tree used for
 the build (`qtbase`, `qtdeclarative`, `qtshadertools`, `qtsvg`).
@@ -34,8 +41,9 @@ public-domain and generated components may not have one.  Inclusion of a
 platform-specific component does not mean it is linked on Windows.
 
 `Qt-GPL-exception-1.0.txt` is the exception text shipped with the Qt source's
-GPLv3 option.  `BSD-3-Clause.txt` is the Qt source licence file used by some
-Qt components.
+GPLv3 option.  `BSD-3-Clause.txt` is the upstream Qt template text; the
+copyright holder for each Qt component is named in that component's own
+notice.
 
 This directory is a notice archive, not a replacement for the upstream
 licences.  The authoritative texts are the files themselves and the Qt 6.9.3
