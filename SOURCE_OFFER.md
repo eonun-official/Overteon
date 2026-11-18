@@ -8,8 +8,16 @@ commit tagged `v0.9.20` (or the exact commit named in the release notes).
 
 - Source: https://github.com/eonun-official/Overteon
 - Tag: `v0.9.20`
+- Notices tag: `v0.9.20-licences` (same code, completed third-party notices)
 - Build scripts: `Config/CMakeLists.txt`, `Config/CMakePresets.json`
 - Windows build notes: `Assets/docs/BUILD_Windows.md`
+
+## Version scope
+
+`v0.9.20` is the commit the released binary was built from.  `v0.9.20-licences`
+is a later, documentation-only tag that adds the completed third-party notices;
+the code is unchanged.  Older development tags and snapshots are retained as
+history and are superseded by the current `NOTICE` and `LICENSES/`.
 
 ## Qt 6.9.3
 

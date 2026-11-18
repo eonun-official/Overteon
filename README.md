@@ -95,6 +95,11 @@ artifact.  Every third-party component, its licence and the exact combination
 terms are declared in [NOTICE](NOTICE); verbatim licence texts are in
 [LICENSES/](LICENSES/).
 
+This notice applies to the current release; it is on `main` and on the
+`v0.9.20-licences` tag.  Older tags and development snapshots are retained as
+history and are superseded by it; do not redistribute an older binary without
+the current NOTICE and `LICENSES/`.
+
 Because the complete corresponding source and build scripts are published here
 and tagged per release, and JUCE is pinned to its exact upstream tag, the
 static-linking obligations of the GPLv3/LGPLv3 are satisfied — no separate

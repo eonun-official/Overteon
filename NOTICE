@@ -123,6 +123,16 @@ what those licences allow.
 
 
 ================================================================================
+VERSION SCOPE
+================================================================================
+
+This NOTICE and LICENSES/ are the authoritative third-party declaration for the
+current release.  The current declaration is on main and on the
+v0.9.20-licences tag.  Older tags and development snapshots are retained as
+project history; they may predate this notice and are superseded by it.  Do not
+redistribute an older binary without applying the current NOTICE and LICENSES/.
+
+================================================================================
 DISTRIBUTION SCOPE
 ================================================================================
 
