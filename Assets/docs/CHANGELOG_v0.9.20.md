@@ -1625,3 +1625,33 @@ UI 的频率轴是 5 Hz–24 kHz，曲线一直算到 24k。biquad 的幅度在 
 - Q 继续使用同一套按钮逻辑，可见行为不变。
 
 修改文件：`Source/ui/qt/qml/OvNeField.qml`。未动 DSP、参数和绘制。
+
+## 五十八、修复长时间运行后的纹理 / VRAM 泄漏（2026-11-18）
+
+### 现象
+
+插件在宿主里后台运行较长时间后，显存与内存持续上涨；随后界面严重掉帧，
+关闭编辑器或宿主时可能直接崩溃。
+
+### 根因
+
+`OvEqView::applyTexture()` 替换 `QSGImageNode` 的纹理时只调用了
+`setTexture()`，没有把旧纹理放进 `m_texRetired`。`QSGImageNode::setTexture()`
+不接管纹理所有权（`OvEqView.h` 中已有这条说明），因此每次上传都会泄漏一张
+旧纹理。glow bar 在音频持续时每帧重建，长时间后台运行后泄漏不断累积，最终
+耗尽显存，表现为掉帧和关闭时崩溃。
+
+### 修复
+
+- `applyTexture()` 在替换前保存旧纹理，替换成功后放入 `retired`，由下一帧
+  开头统一释放；保留一帧宽限，避免上一批仍在飞行中。
+- `createTextureFromImage()` 返回空时不再把节点设成空纹理，保持旧纹理并
+  返回 false。
+- 删除未使用的 `LayerNode` 死代码；它同样存在“替换纹理但不释放”的路径。
+- 背景与覆盖层仍只在缓存 key 变化时上传；glow bar 仍逐帧更新，但旧纹理
+  现在会被释放，VRAM 不再增长。
+
+修改文件：`Source/ui/qt/OvEqView.cpp`。
+
+只改纹理生命周期，DSP、参数、曲线和交互未动。
+

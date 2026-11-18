@@ -662,7 +662,7 @@ struct OvPaintTimer
 // ---------------------------------------------------------------------------
 namespace {
 
-// Upload `img` into `node` when `key` changed, and place it at `rect`.
+// Upload `img` into `node` and place it at `rect`.
 //
 // The image is copied into `keep` first: createTextureFromImage builds a
 // texture whose pixels are committed during the render pass, which happens
@@ -681,69 +681,24 @@ bool applyTexture (QQuickWindow* win, QSGImageNode* node, const QImage& img,
     if (node == nullptr || win == nullptr) return false;
     if (img.isNull() || rect.isEmpty())
         return false;
-    // If the caller handed us a real image, it IS new: buildLayers() only
-    // returns pixels for a layer whose cache key changed.  Comparing keys here
-    // as well was wrong — the overlay's key contains the whole curve cache tag,
-    // and the first frame after a preset load stored it while the texture was
-    // still the previous picture, so every later frame looked "unchanged" and
-    // the plot showed a stale layer.
-    if (node->texture() == nullptr || key != haveKey || true)
-    {
-        keep = img.copy();
-        node->setTexture (win->createTextureFromImage (keep));
-        haveKey = key;
-    }
+
+    // buildLayers() only returns pixels for a layer whose cache key moved, so
+    // a non-null image here is always a new upload.  QSGImageNode does NOT own
+    // its texture: the replaced texture must be retired or every upload leaks
+    // VRAM.  It gets one frame of grace because the previous frame's batch may
+    // still be in flight.
+    QSGTexture* old = node->texture();
+    keep = img.copy();
+    QSGTexture* tex = win->createTextureFromImage (keep);
+    if (tex == nullptr)
+        return false;
+    node->setTexture (tex);
+    if (old != nullptr)
+        retired.push_back (old);
+    haveKey = key;
     node->setRect (rect);
     return true;
 }
-
-// A cached QImage as a scene-graph texture.  `key` decides when it is
-// re-uploaded: the image itself is not compared, because that would cost a full
-// pass over the pixels every frame.
-class LayerNode
-{
-public:
-    // QSGImageNode instead of QSGSimpleTextureNode.
-    //
-    // QSGSimpleTextureNode crashed this renderer outright — SIGSEGV inside
-    // QSGOpaqueTextureMaterial::compare, on the first frame, with a single
-    // texture node in the tree and nothing else.  QSGImageNode is the node Qt
-    // provides for "draw this image as a quad"; it owns its texture and its
-    // material, so there is no lifetime to get wrong here.
-    QSGNode* node = nullptr;
-    QSGImageNode* img = nullptr;
-    QString key;
-    QImage pending;      // must outlive the texture upload
-
-    void init (QQuickWindow* win)
-    {
-        if (node != nullptr) return;
-        img  = win->createImageNode();
-        node = img;
-        img->setFiltering (QSGTexture::Linear);
-        img->setTextureCoordinatesTransform (QSGImageNode::NoTransform);
-    }
-
-    void refresh (QQuickWindow* win, const QImage& image, const QString& k,
-                  const QRectF& rect)
-    {
-        init (win);
-        if (image.isNull() || rect.isEmpty())
-        {
-            img->setRect (QRectF());
-            return;
-        }
-        if (k != key)
-        {
-            // Keep our own copy: the texture is uploaded from this image later,
-            // during the render pass, so the pixels have to still be there.
-            pending = image.copy();
-            img->setTexture (win->createTextureFromImage (pending));
-            key = k;
-        }
-        img->setRect (rect);
-    }
-};
 
 // The spectrum: a triangle strip from the baseline to the outline, with the
 // gradient carried in the vertex colours (opaque at the top, transparent at the
