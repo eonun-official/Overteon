@@ -1,4 +1,5 @@
 #include "OverteonProcessor.h"
+#include "Oversampling.h"
 #include "OvBallistics.h"   // ovb::Rms / ovb::onePoleCoef — the meters' detector
 
 namespace
@@ -164,7 +165,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout OverteonProcessor::createLay
             const auto name = (juce::String (pre) == "sc" ? "SC EQ " : "Post EQ ")
                             + juce::String (b + 1) + " ";
             const bool bump = (juce::String (pre) == "pq" && b == 3);
-            // every node spans the full band
+            // Every node spans the audible band.  The UI axis ends at 20 kHz,
+            // so the parameter stops there too: nothing can be dragged or
+            // automated outside the part of the curve the user can see.  The
+            // oversampling / signal path are untouched.
             ps.push_back (std::make_unique<FP> (juce::ParameterID { id + "Freq", 1 },
                               name + "Freq", timeRange (5.0f, 20000.0f, 800.0f),
                               bump ? 10000.0f : defF[b]));
@@ -264,14 +268,124 @@ int OverteonProcessor::loadGlobalOsFactor() const
     return -1;
 }
 
+namespace
+{
+    /// Read the global settings file for a read-modify-write.
+    ///
+    /// The old save path built a fresh element with only `osFactor` in it, so
+    /// adding a second preference (the editor size) would have had the two
+    /// writers erasing each other.  Every writer now starts from the file.
+    std::unique_ptr<juce::XmlElement> readGlobalSettings (const juce::File& f)
+    {
+        if (auto xml = juce::XmlDocument::parse (f))
+            if (xml->hasTagName ("HINJGLOBAL"))
+                return xml;
+        return std::make_unique<juce::XmlElement> ("HINJGLOBAL");
+    }
+}
+
 void OverteonProcessor::saveGlobalOsFactor (int idx) const
 {
     // Rare user gesture (oversampling switch): a tiny XML write is fine here.
-    juce::XmlElement x ("HINJGLOBAL");
-    x.setAttribute ("osFactor", idx);
     const auto f = getGlobalSettingsFile();
+    auto x = readGlobalSettings (f);
+    x->setAttribute ("osFactor", idx);
     f.getParentDirectory().createDirectory();
-    x.writeTo (f);
+    x->writeTo (f);
+}
+
+juce::Point<int> OverteonProcessor::loadEditorSize() const
+{
+    const auto f = getGlobalSettingsFile();
+    if (! f.existsAsFile()) return {};
+    if (auto xml = juce::XmlDocument::parse (f))
+        if (xml->hasTagName ("HINJGLOBAL"))
+        {
+            const int w = xml->getIntAttribute ("editorW", 0);
+            const int h = xml->getIntAttribute ("editorH", 0);
+            // The editor clamps to its own minimum; anything smaller is a
+            // corrupt or half-written value, not a size to restore.
+            if (w >= 460 && h >= 341) return { w, h };
+        }
+    return {};
+}
+
+void OverteonProcessor::saveEditorSize (int w, int h) const
+{
+    if (w <= 0 || h <= 0) return;
+    const auto f = getGlobalSettingsFile();
+    auto xml = readGlobalSettings (f);
+    xml->setAttribute ("editorW", w);
+    xml->setAttribute ("editorH", h);
+    f.getParentDirectory().createDirectory();
+    xml->writeTo (f);
+}
+
+juce::Point<int> OverteonProcessor::loadDefaultEditorSize() const
+{
+    const auto f = getGlobalSettingsFile();
+    if (! f.existsAsFile()) return {};
+    if (auto xml = juce::XmlDocument::parse (f))
+        if (xml->hasTagName ("HINJGLOBAL"))
+        {
+            const int w = xml->getIntAttribute ("defaultW", 0);
+            const int h = xml->getIntAttribute ("defaultH", 0);
+            if (w >= 460 && h >= 341) return { w, h };
+        }
+    return {};
+}
+
+void OverteonProcessor::saveDefaultEditorSize (int w, int h) const
+{
+    if (w <= 0 || h <= 0) return;
+    const auto f = getGlobalSettingsFile();
+    auto xml = readGlobalSettings (f);
+    xml->setAttribute ("defaultW", w);
+    xml->setAttribute ("defaultH", h);
+    f.getParentDirectory().createDirectory();
+    xml->writeTo (f);
+}
+
+int OverteonProcessor::loadMeterMode (const juce::String& key, int fallback) const
+{
+    const auto f = getGlobalSettingsFile();
+    if (! f.existsAsFile()) return fallback;
+    if (auto xml = juce::XmlDocument::parse (f))
+        if (xml->hasTagName ("HINJGLOBAL"))
+        {
+            const int v = xml->getIntAttribute (key, fallback);
+            if (v == 0 || v == 1) return v;
+        }
+    return fallback;
+}
+
+void OverteonProcessor::saveMeterMode (const juce::String& key, int value) const
+{
+    if (value != 0 && value != 1) return;
+    const auto f = getGlobalSettingsFile();
+    auto xml = readGlobalSettings (f);
+    xml->setAttribute (key, value);
+    f.getParentDirectory().createDirectory();
+    xml->writeTo (f);
+}
+
+int OverteonProcessor::loadIntSetting (const juce::String& key, int fallback) const
+{
+    const auto f = getGlobalSettingsFile();
+    if (! f.existsAsFile()) return fallback;
+    if (auto xml = juce::XmlDocument::parse (f))
+        if (xml->hasTagName ("HINJGLOBAL"))
+            return xml->getIntAttribute (key, fallback);
+    return fallback;
+}
+
+void OverteonProcessor::saveIntSetting (const juce::String& key, int value) const
+{
+    const auto f = getGlobalSettingsFile();
+    auto xml = readGlobalSettings (f);
+    xml->setAttribute (key, value);
+    f.getParentDirectory().createDirectory();
+    xml->writeTo (f);
 }
 
 void OverteonProcessor::cacheParams()
@@ -326,24 +440,17 @@ void OverteonProcessor::applyInit()
 void OverteonProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
+    // High-quality half-band FIRs, built explicitly so the transition width can
+    // be chosen.  The recipe (transition, stopband, integer latency, init) is
+    // shared with the limiter in Oversampling.h; the two oversamplers remain
+    // independent processors with independent state and factors.
     for (int s2 = 0; s2 < 5; ++s2)
     {
-        // FIR equiripple halfbands in DOUBLE, integer latency: flat passband,
-        // blunt symmetric rolloff, exact PDC, -300 dB self-noise.
-        osN[s2] = std::make_unique<juce::dsp::Oversampling<double>> (
-                2, s2 + 1,
-                juce::dsp::Oversampling<double>::filterHalfBandFIREquiripple,
-                true, true);
-        osN[s2]->initProcessing ((size_t) samplesPerBlock);
-        osD[s2] = std::make_unique<juce::dsp::Oversampling<double>> (
-                2, s2 + 1,
-                juce::dsp::Oversampling<double>::filterHalfBandFIREquiripple,
-                true, true);
-        osD[s2]->initProcessing ((size_t) samplesPerBlock);
+        omega::initHighQualityOversampling (osN[s2], s2 + 1, samplesPerBlock);
+        omega::initHighQualityOversampling (osD[s2], s2 + 1, samplesPerBlock);
         osLat[s2] = (int) std::lround (osN[s2]->getLatencyInSamples());
     }
     lastOsIdx = juce::jlimit (0, 4, (int) par.osFactor->load());
-    firGuardLat = 31;                       // (63-1)/2 linear-phase FIR group delay
     driveLat  = osLat[lastOsIdx];
 
     lastLimiterMode = juce::jlimit (0, 3, (int) par.protectMode->load());
@@ -365,30 +472,8 @@ void OverteonProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     for (auto& bb : scInv)   for (auto& f : bb) f.reset();
     for (auto& bb : postEq)  for (auto& f : bb) f.reset();
     for (auto& bb : postEq2) for (auto& f : bb) f.reset();
-    {
-        // linear-phase FIR low-pass at ~0.47 fs: gentle, symmetric, no phase
-        // rotation. Soft top-end roll instead of a brickwall at 20 kHz, while
-        // still rejecting the halfband fold-back region above it.
-        const double fc = 0.47 * sr;
-        double s = 0.0;
-        for (int i = 0; i < kGuardTaps; ++i)
-        {
-            const int kk = i - (kGuardTaps - 1) / 2;
-            const double sinc = (kk == 0) ? 2.0 * fc / sr
-                                          : std::sin (2.0 * juce::MathConstants<double>::pi * fc / sr * kk)
-                                            / (juce::MathConstants<double>::pi * kk);
-            const double bm = 0.42
-                            - 0.5  * std::cos (2.0 * juce::MathConstants<double>::pi * i / (kGuardTaps - 1))
-                            + 0.08 * std::cos (4.0 * juce::MathConstants<double>::pi * i / (kGuardTaps - 1));
-            guardCoef[(size_t) i] = sinc * bm;
-            s += guardCoef[(size_t) i];
-        }
-        for (auto& c : guardCoef) c /= s;
-        for (auto& z : guardZH) z.fill (0.0);
-        for (auto& z : guardZD) z.fill (0.0);
-        guardZHpos[0] = guardZHpos[1] = guardZDpos[0] = guardZDpos[1] = 0;
-    }
     meterInL = meterInR = meterOutL = meterOutR = 0.0f;
+    meterInPkL = meterInPkR = meterOutPkL = meterOutPkR = 0.0f;
     rmsInL.reset(); rmsInR.reset(); rmsOutL.reset(); rmsOutR.reset();
     rmsInL.tau = rmsInR.tau = rmsOutL.tau = rmsOutR.tau = kMeterRmsTau;
     gSmooth = 1.0;
@@ -399,12 +484,20 @@ void OverteonProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     for (auto& f : airLP) f.reset();
     fftIdx = 0;
     fftReady = false;
+    fftInIdx = 0;
+    fftInReady = false;
+    specInW = specOutW = 0;
+    specInWritten.store (0, std::memory_order_relaxed);
+    specOutWritten.store (0, std::memory_order_relaxed);
+    grSmooth = 0.0;
+    meterGr.store (0.0f);
+    meterGrPk.store (0.0f);
 }
 
 void OverteonProcessor::updateReportedLatency()
 {
     const bool schranz = (int) par.mode->load() == 2;
-    setLatencySamples ((schranz ? 0 : driveLat + firGuardLat)
+    setLatencySamples ((schranz ? 0 : driveLat)
                        + limiter.getLatencySamples());
 }
 
@@ -430,15 +523,26 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         {
             const auto* s = buffer.getReadPointer (c);
             float sum = 0.0f;
-            for (int i = 0; i < n; ++i) sum += s[i] * s[i];
+            float pk = 0.0f;
+            for (int i = 0; i < n; ++i)
+            {
+                sum += s[i] * s[i];
+                pk = juce::jmax (pk, std::abs (s[i]));
+            }
             const float ms = n > 0 ? sum / float (n) : 0.0f;
             (c == 0 ? meterInL : meterInR).store (std::sqrt (ms));
             (c == 0 ? meterOutL : meterOutR).store (std::sqrt (ms));
+            (c == 0 ? meterInPkL : meterInPkR).store (pk);
+            (c == 0 ? meterOutPkL : meterOutPkR).store (pk);
         }
         // The harmonic ratio is undefined while nothing is being generated;
-        // report the floor instead of freezing at the level it had.
+        // report the floor instead of freezing at the level it had.  Nothing
+        // passes the limiter either, so its ring reads zero.
         meterHarm.store (-100.0f);
         meterHarmPk.store (-100.0f);
+        grSmooth = 0.0;
+        meterGr.store (0.0f);
+        meterGrPk.store (0.0f);
         return;
     }
     const int nCh = juce::jmin (2, buffer.getNumChannels());
@@ -480,15 +584,32 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         }
 
     // ---- input gain + input meters ----
+    //
+    // The upper plot's monitor point is AFTER the sidechain EQ.  That tap is
+    // taken inside the drive block; this one only feeds it in Classic mode,
+    // where the sidechain EQ does not run at all (the saturator hears the
+    // input unchanged).  The legacy fftInData tap stays on the pre-EQ signal
+    // for the WebView editor.
+    const int dmodeIn = (int) par.mode->load();
     {
         const double ig = juce::Decibels::decibelsToGain ((double) par.inGain->load());
         for (int i = 0; i < n; ++i)
         {
             L[i] *= ig;
             R[i] *= ig;
-            fftInData[(size_t) fftInIdx] = (float) ((L[i] + R[i]) * 0.5);
+            const float mono = (float) ((L[i] + R[i]) * 0.5);
+            fftInData[(size_t) fftInIdx] = mono;
             if (++fftInIdx >= fftSize) { fftInIdx = 0; fftInReady = true; }
+            if (dmodeIn == 0)
+            {
+                // In the M/S domain the mono sum is the Mid component.
+                const float mid = (msm != 0) ? (float) L[i] : mono;
+                specRingIn[(size_t) (specInW & (uint32_t) (specRingSize - 1))] = mid;
+                ++specInW;
+            }
         }
+        if (dmodeIn == 0)
+            specInWritten.store (specInW, std::memory_order_release);
 
         // TRUE RMS, not max(|x|) with a decay coefficient.  What goes on screen
         // has to be the RMS of what went through: the bars are labelled level,
@@ -499,6 +620,15 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         rmsInR.process (R, n, sr);
         meterInL.store ((float) rmsInL.amplitude());
         meterInR.store ((float) rmsInR.amplitude());
+
+        float pkL = 0.0f, pkR = 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            pkL = juce::jmax (pkL, (float) std::abs (L[i]));
+            pkR = juce::jmax (pkR, (float) std::abs (R[i]));
+        }
+        meterInPkL.store (pkL);
+        meterInPkR.store (pkR);
     }
 
     // ---- drive: classic / harmonic injector ----
@@ -577,6 +707,33 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
                 }
             }
 
+            // ---- the upper plot's monitor point -------------------------
+            //
+            // AFTER the sidechain EQ, BEFORE the distortion: this is what the
+            // saturator actually hears, so the plot now moves when the SC EQ
+            // moves.  The old tap was the raw input, which is why the upper
+            // spectrum ignored the EQ entirely.  In the M/S domain the mono
+            // sum is the Mid component, not (M+S)/2.
+            //
+            // SOLO HARM is the exception: the harmonic solo mutes the dry, so
+            // the meaningful picture is the distortion output.  That tap is
+            // taken after the merge instead; skipping this one keeps the two
+            // signals from interleaving in the same ring.
+            if (! (dmode == 1 && par.harmSolo->load() > 0.5f))
+            {
+                const auto* l0 = dbuf.getReadPointer (0);
+                const auto* r0 = dbuf.getReadPointer (1);
+                for (int i = 0; i < n; ++i)
+                {
+                    const float mid = (msm != 0)
+                                    ? (float) l0[i]
+                                    : (float) ((l0[i] + r0[i]) * 0.5);
+                    specRingIn[(size_t) (specInW & (uint32_t) (specRingSize - 1))] = mid;
+                    ++specInW;
+                }
+                specInWritten.store (specInW, std::memory_order_release);
+            }
+
             // Schranz mode: output exactly what the saturator would hear — the
             // post-sidechain-EQ, pre-distortion signal. The rest of the chain is
             // deliberately bypassed, so POST EQ has no effect in this mode.
@@ -611,15 +768,29 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
                 }
                 limiter.process (ll, rr, n);
 
+                // Limiter ring: the block's deepest gain reduction, plus the
+                // same 131 ms one-pole the harmonic ratio uses for RMS mode.
+                {
+                    const double grDb = limiter.getLastGainReductionDb();
+                    meterGrPk.store ((float) grDb);
+                    grSmooth += ovb::onePoleCoef (double (n) / std::max (1.0, sr), kHarmTau)
+                              * (grDb - grSmooth);
+                    meterGr.store ((float) grSmooth);
+                }
+
                 auto* o0 = buffer.getWritePointer (0);
                 auto* o1 = nCh > 1 ? buffer.getWritePointer (1) : o0;
                 for (int i = 0; i < n; ++i)
                 {
                     const double l = ll[i], r = rr[i];
                     o0[i] = (float) l; o1[i] = (float) r;
-                    fftData[(size_t) fftIdx] = (float) ((l + r) * 0.5);
+                    const float mono = (float) ((l + r) * 0.5);
+                    fftData[(size_t) fftIdx] = mono;
                     if (++fftIdx >= fftSize) { fftIdx = 0; fftReady = true; }
+                    specRingOut[(size_t) (specOutW & (uint32_t) (specRingSize - 1))] = mono;
+                    ++specOutW;
                 }
+                specOutWritten.store (specOutW, std::memory_order_release);
                 // RMS on the output tap too, and no second, artificial decay on
                 // the input meter: this branch used to multiply meterInL by an
                 // extra exp(-dt/0.55) on top of the input stage's own release,
@@ -629,6 +800,15 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
                 rmsOutR.process (rr, n, sr);
                 meterOutL.store ((float) rmsOutL.amplitude());
                 meterOutR.store ((float) rmsOutR.amplitude());
+
+                float pkL = 0.0f, pkR = 0.0f;
+                for (int i = 0; i < n; ++i)
+                {
+                    pkL = juce::jmax (pkL, (float) std::abs (ll[i]));
+                    pkR = juce::jmax (pkR, (float) std::abs (rr[i]));
+                }
+                meterOutPkL.store (pkL);
+                meterOutPkR.store (pkR);
                 harmRatioS *= meterDecay (n, sr, kHarmTau);
                 meterHarm.store ((float) juce::Decibels::gainToDecibels (harmRatioS, -100.0));
                 // No dry/harm energies are measured in this branch, so there is
@@ -745,35 +925,11 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
         }
 
-        // shared linear-phase FIR guard on BOTH paths, in BOTH modes. Linear
-        // phase => zero phase rotation; identical filter on wet+dry => any
-        // residual leakage stays in-phase with the dry and cannot build the
-        // 20 kHz interference peak. Running it in both modes keeps the group
-        // delay (and therefore host PDC) constant across mode switches.
-        // The 0.47 fs gentle slope lets the top end extend past 20 kHz instead
-        // of a brickwall, while still rejecting the halfband fold-back band.
-        for (int ch = 0; ch < 2; ++ch)
-        {
-            auto* hch = dbuf.getWritePointer (ch);
-            auto* dch = dryBufD.getWritePointer (ch);
-            auto& zh = guardZH[ch]; auto& zd = guardZD[ch];
-            int& ph = guardZHpos[ch]; int& pd = guardZDpos[ch];
-            for (int i = 0; i < n; ++i)
-            {
-                zh[(size_t) ph] = hch[i];
-                double oh = 0.0; int idx = ph;
-                for (int t = 0; t < kGuardTaps; ++t)
-                { oh += guardCoef[(size_t) t] * zh[(size_t) idx]; if (--idx < 0) idx = kGuardTaps - 1; }
-                if (++ph >= kGuardTaps) ph = 0;
-                hch[i] = oh;
-                zd[(size_t) pd] = dch[i];
-                double od = 0.0; idx = pd;
-                for (int t = 0; t < kGuardTaps; ++t)
-                { od += guardCoef[(size_t) t] * zd[(size_t) idx]; if (--idx < 0) idx = kGuardTaps - 1; }
-                if (++pd >= kGuardTaps) pd = 0;
-                dch[i] = od;
-            }
-        }
+        // The old 63-tap guard low-pass at 0.47 fs is gone: with the half-band
+        // filters now flat to ~0.49 fs it would have been the first thing to
+        // roll off the top end, and it filtered the DRY path too.  Wet and dry
+        // still share the same linear-phase oversampling filters, so their
+        // relative phase is unchanged.
 
         // AIR PROTECT: a wet-ONLY high cut. Injected harmonics above this
         // frequency are removed so they can't smear the dry's high-frequency
@@ -836,6 +992,28 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
                 dryE  += dl_ * dl_ + dr_ * dr_;
             }
         }
+
+        // ---- SOLO HARM moves the UPPER plot to the distortion output -----
+        //
+        // With the harmonic solo on, the dry is muted and what leaves this
+        // stage is pure harmonics.  The SC EQ plot follows THAT signal instead
+        // of its usual pre-distortion point, so the solo shows the harmonic
+        // content itself.  The post EQ plot is not involved: it keeps reading
+        // the final output.  The pre-distortion tap for this block was skipped
+        // above, so the ring never interleaves two different signals.
+        if (dmode == 1 && so)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                const float mid = (msm != 0)
+                                ? (float) L[i]
+                                : (float) ((L[i] + R[i]) * 0.5);
+                specRingIn[(size_t) (specInW & (uint32_t) (specRingSize - 1))] = mid;
+                ++specInW;
+            }
+            specInWritten.store (specInW, std::memory_order_release);
+        }
+
         if (dmode != 1) harmE *= dmix * dmix;
         const double ratio = std::sqrt (harmE / juce::jmax (dryE, 1.0e-18));
         // Time-based, not per block.  0.15 per block was 131 ms at 48 kHz /
@@ -933,6 +1111,16 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         }
         limiter.process (ll, rr, n);
 
+        // Limiter ring: the block's deepest gain reduction, plus the same
+        // 131 ms one-pole the harmonic ratio uses for RMS mode.
+        {
+            const double grDb = limiter.getLastGainReductionDb();
+            meterGrPk.store ((float) grDb);
+            grSmooth += ovb::onePoleCoef (double (n) / std::max (1.0, sr), kHarmTau)
+                      * (grDb - grSmooth);
+            meterGr.store ((float) grSmooth);
+        }
+
         auto* o0 = buffer.getWritePointer (0);
         auto* o1 = nCh > 1 ? buffer.getWritePointer (1) : o0;
         for (int i = 0; i < n; ++i)
@@ -940,13 +1128,26 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             const double l = ll[i], r = rr[i];
             o0[i] = (float) l;
             o1[i] = (float) r;
-            fftData[(size_t) fftIdx] = (float) ((l + r) * 0.5);
+            const float mono = (float) ((l + r) * 0.5);
+            fftData[(size_t) fftIdx] = mono;
             if (++fftIdx >= fftSize) { fftIdx = 0; fftReady = true; }
+            specRingOut[(size_t) (specOutW & (uint32_t) (specRingSize - 1))] = mono;
+            ++specOutW;
         }
+        specOutWritten.store (specOutW, std::memory_order_release);
         rmsOutL.process (ll, n, sr);
         rmsOutR.process (rr, n, sr);
         meterOutL.store ((float) rmsOutL.amplitude());
         meterOutR.store ((float) rmsOutR.amplitude());
+
+        float pkL = 0.0f, pkR = 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            pkL = juce::jmax (pkL, (float) std::abs (ll[i]));
+            pkR = juce::jmax (pkR, (float) std::abs (rr[i]));
+        }
+        meterOutPkL.store (pkL);
+        meterOutPkR.store (pkR);
     }
 }
 

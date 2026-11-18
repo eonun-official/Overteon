@@ -8,6 +8,7 @@
 #include "OvTick.h"
 
 #include <QPainter>
+#include <QConicalGradient>
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
@@ -70,34 +71,16 @@ namespace
     }
 
     // ---- the pod's numbers, in real units --------------------------------
-    // Every one of these used to be a per-frame coefficient somewhere in this
-    // file; expressed per second they mean the same thing at jalv's 15 Hz idle
-    // rate and at the preview's 60-120 Hz.
-    constexpr double kBarSpanDb   = 60.0;                // bottom of the bar
-    constexpr double kBarFloorDb  = -60.0;
+    /// Peak-hold time before the trail starts falling.  Pro-Q 4's analyser
+    /// holds noticeably longer than the old 1.1 s, and 2.0 s reads as "the
+    /// peak stays put while I look at it" without turning into a memory.
+    constexpr double kPeakHoldSeconds = 2.0;
+    constexpr double kPeakNormPerSec = 0.18;
 
-    // IEC 60268-10 PPM Type II (EBU) is 20 dB in 1.7 s.  That was the rate here
-    // until the whole display was asked to run 25 % faster, so it is 20 dB in
-    // 1.7/1.25 = 1.36 s -> 14.7 dB/s.  (Type I / DIN, for reference, is 24 dB
-    // in 2.8 s.)
-    //
-    // Worth knowing: the measurement behind it is true RMS (ovb::Rms, tau
-    // 300 ms) whose own natural decay is 4.343/0.3 = 14.5 dB/s, and the display
-    // can never fall faster than the number it is chasing.  At 14.7 against
-    // 14.5 the two are now almost exactly equal, so the bar's measured fall is
-    // set by the DETECTOR: 14.5 dB/s, which is 24 % faster than the 11.7 dB/s
-    // this had before the change.  Making the bar faster than this would mean
-    // shortening the RMS window, i.e. changing the measurement rather than the
-    // display.
-    constexpr double kBarDbPerSec = 20.0 / 1.36;        // 20 dB in 1.36 s = 14.7 dB/s
-
-    constexpr double kPeakDbPerSec = 0.18 * 60.0 * 1.25; // 10.8 dB/s (the page's) x 1.25
-
-    // The ring follows a harmonic RATIO that the DSP smooths with a 131 ms
-    // one-pole (kHarmTau in OverteonProcessor.cpp), so 4.343/0.131 = 33 dB/s is that
-    // measurement's own decay — the display adds no shape of its own.
+    // The ring shows a harmonic RATIO; this is where its display bottoms out.
+    // RMS mode uses the DSP's 131 ms ratio, TRANSIENT the block's own — in
+    // neither case does the display add a ballistics curve of its own.
     constexpr double kHarmFloorDb = -48.0;
-    constexpr double kHarmDbPerSec = 4.343 / 0.105;      // 131 ms tau x 1.25
 
     // green plateau -> amber -> red, with a hot red in the last 3 %
     QColor harmColor (double f)
@@ -140,29 +123,9 @@ OvMeterView::OvMeterView (QQuickItem* parent) : QQuickPaintedItem (parent)
     for (Channel* c : { &m_outL, &m_outR, &m_inL, &m_inR })
         c->poly = flatten (c->path);
 
-    // ---- latching vs. displaying: two clocks, on purpose ------------------
-    // A professional meter has two separate rates and I had collapsed them into
-    // one, twice.
-    //
-    //   LATCH   the measurement arrives at whatever rate the host polls the
-    //           analyser: 11.8 Hz measured in jalv, 60-125 Hz in the preview.
-    //           That value is stored as the TARGET and nothing else.
-    //
-    //   DISPLAY runs at a fixed rate of its own and moves what is on screen
-    //           towards the target with ballistics.  This is where the smooth
-    //           motion comes from, and it is why a hardware meter moves at all
-    //           between two samples that are 85 ms apart.
-    //
-    // Painting only when data arrives (what I did last) cannot show motion
-    // between measurements, and moving towards the target with a 45 ms release
-    // against an 85 ms measurement interval snapped straight to the new value
-    // every time: min(1, 0.085/0.045) == 1. So the bars jumped to exact numbers,
-    // which is exactly what was reported.
-    //
-    // The ballistics below are the standard ones: an instant attack (a
-    // transient must show in the frame it happens) and a release of ~300 ms for
-    // 20 dB, which is the VU/PPM convention; the peak hold and its 10.8 dB/s
-    // fall are the page's own.
+    // Measurements are latched as they arrive; this display timer advances the
+    // independent peak-hold release and any explicitly selected bar smoothing.
+    // With smoothing OFF the bright bars use each measurement verbatim.
     m_timer.setInterval (1000 / OvTiming::kMeterHz);
     connect (&m_timer, &QTimer::timeout, this, [this] {
         ovtick::markKind ("meter-tick", ovtick::TickKind::MetersChanged);
@@ -223,9 +186,24 @@ void OvMeterView::setEngine (OvEngine* e)
     // forever.  The measurement is stored; the timer below moves the bars
     // towards it.
     if (m_engine != nullptr)
+    {
         connect (m_engine, &OvEngine::metersChanged, this,
                  [this] { m_target = m_engine->source().meters(); },
                  Qt::QueuedConnection);
+
+        // The RANGE lives in Settings, not in the meter data.  Without this the
+        // scale labels only changed on the next meter tick that happened to
+        // move something — silent editors looked frozen until audio played.
+        // Recompute both the labels' source and the arc length, then repaint.
+        connect (m_engine, &OvEngine::settingsChanged, this, [this] {
+            if (m_engine == nullptr) return;
+            m_grRange = m_engine->grRange();
+            const double grDb = (m_engine->harmMode() == 1)
+                              ? double (m_target.grPeak) : double (m_target.gr);
+            m_limitFrac = std::clamp (grDb / double (std::max (1, m_grRange)), 0.0, 1.0);
+            update();
+        });
+    }
 
     emit engineChanged();
     update();
@@ -255,6 +233,11 @@ quint64 OvMeterView::stateKey() const
         mix (q (ch->peak));
     }
     mix (q (m_harmFrac));
+    // The limiter arc and its scale are NOT meter values, but they are part of
+    // the picture: when the RANGE changes in Settings the labels must repaint
+    // even if no audio is running (the state key is what gates update()).
+    mix (q (m_limitFrac));
+    mix (quint64 (m_grRange));
     return key;
 }
 
@@ -268,76 +251,64 @@ void OvMeterView::advance (double dt)
     // filter against.
     const auto m = m_target;
 
-    struct T { Channel* ch; double db; };
-    const T list[] { { &m_outL, m.outL }, { &m_outR, m.outR },
-                     { &m_inL, m.inL },   { &m_inR, m.inR } };
+    struct T { Channel* ch; double pkDb; };
+    const T list[] { { &m_outL, m.outPkL }, { &m_outR, m.outPkR },
+                     { &m_inL, m.inPkL },   { &m_inR, m.inPkR } };
 
-    // drawLevel() in web_fx/index.html, step for step:
-    //   new max        -> hold for 1.1 s
-    //   after the hold -> fall back at about 10.8 dB/s, never below the level
-    //
-    // The motion itself comes from ovb::Fall (ui/qt/OvBallistics.h), which is
-    // the SAME code the light, the harmonic ring, the analyser and the glow
-    // bands use.  The bars used to carry their own copy of
-    //       step = 1 - (target/start)^(1/n_frames)
-    // here: an exponential, i.e. maximum speed on the first frame of a fall and
-    // an infinite tail, which is why a bar snapped to its value and then crept.
-    // Constant dB/s with a smootherstep ease-in lands exactly and starts from
-    // rest; the numbers are the same ones (20 dB in 0.35 s), only the curve is.
+    // A peak is held for kPeakHoldSeconds and then falls linearly at 0.18/s.
+    // The BRIGHT bar is driven by the block's SAMPLE PEAK rather than the
+    // 300 ms RMS: RMS cannot drop the moment the audio stops, and
+    // "instant" is exactly the mode where that matters.  Its own fall is a
+    // display choice — INSTANT follows the measurement; VU uses the meter
+    // standard's 300 ms response (99 % in 300 ms, i.e. tau 65 ms).
+    const int releaseMode = (m_engine != nullptr) ? m_engine->meterRelease() : 0;
+    const double vuAlpha = 1.0 - std::exp (-dt / 0.065);
+
     for (const auto& t : list)
     {
-        const double targetDb = ovb::normToDb (levelToFraction (t.db), kBarSpanDb, kBarFloorDb);
-        t.ch->levelFall.advance (targetDb, dt, kBarDbPerSec);
-        t.ch->level = ovb::dbToNorm (t.ch->levelFall.shown, kBarSpanDb, kBarFloorDb);
+        const double instant = levelToFraction (t.pkDb);
 
-        if (t.ch->level >= t.ch->peak)
+        if (releaseMode == 0)
+            t.ch->level = instant;
+        else
+            t.ch->level += (instant - t.ch->level) * vuAlpha;
+
+        if (instant >= t.ch->peak)
         {
-            t.ch->peak = t.ch->level;
-            t.ch->holdUntil = m_clock + 1.1;
-            // Start the trail's fall from rest again: it is a new peak.
-            t.ch->peakFall.reset (ovb::normToDb (t.ch->peak, kBarSpanDb, kBarFloorDb));
+            t.ch->peak = instant;
+            t.ch->holdUntil = m_clock + kPeakHoldSeconds;
         }
         else if (m_clock > t.ch->holdUntil)
         {
-            // 0.18 per second of the 0..1 scale is 10.8 dB/s of a 60 dB one.
-            t.ch->peakFall.advance (ovb::normToDb (t.ch->level, kBarSpanDb, kBarFloorDb),
-                                    dt, kPeakDbPerSec);
-            t.ch->peak = ovb::dbToNorm (t.ch->peakFall.shown, kBarSpanDb, kBarFloorDb);
+            t.ch->peak = std::max (instant, t.ch->peak - dt * kPeakNormPerSec);
         }
     }
 
-    // The harmonic ring is a METER too: it must move like one.  Mapping the
-    // raw value snapped it between readings — in the preview the source only
-    // changes `harm` when a new block is measured, so the ring sat still and
-    // then jumped.
+    // The harmonic ring has no display ballistics any more: MODE picks the
+    // MEASUREMENT and that measurement is what is drawn.
     //
-    // It also used to release in LINEAR AMPLITUDE (v -= v*step) while every
-    // other meter released in dB, so the ring's tail had a different shape from
-    // the bars beside it.  It is a dB quantity to begin with; it now goes
-    // through the same ovb::Fall, in dB, at 48 dB in 0.45 s.
+    //   RMS        the DSP's ratio, already smoothed over 131 ms
+    //   TRANSIENT  this block's own ratio (harmPeak), no time smoothing
+    //
+    // The old SMOOTH option (an ovb::Fall ramp on top) is gone with its
+    // property, so there is no second place where the ring's motion is shaped.
     {
-        // Which ratio the ring shows, and how it is smoothed, are display
-        // settings from the Settings panel; read them here so this view needs
-        // no extra signal connection.  Peak mode takes the DSP's UNSMOOTHED
-        // ratio (harmPeak) — showing the smoothed value under a peak's name
-        // would be a mean with a better label.
-        m_harmPeakMode = (m_engine != nullptr && m_engine->harmDetector() == 1);
-        m_noInterp     = (m_engine != nullptr && m_engine->harmInterp() == 1);
-        m_harmFall.noInterp = m_noInterp;
-
-        const double raw = m_harmPeakMode ? double (m.harmPeak) : double (m.harm);
+        m_harmMode = (m_engine != nullptr) ? m_engine->harmMode() : 1;
+        const double raw = (m_harmMode == 1) ? double (m.harmPeak) : double (m.harm);
         const double harmDb = std::clamp (raw, kHarmFloorDb, 0.0);
-        m_harmFall.advance (harmDb, dt, kHarmDbPerSec, 0.045);
-        m_harmFrac = ovb::dbToNorm (m_harmFall.shown, -kHarmFloorDb, kHarmFloorDb);
+        m_harmFrac = ovb::dbToNorm (harmDb, -kHarmFloorDb, kHarmFloorDb);
+    }
 
-        // Raw mode has to reach the level bars too: they own separate Fall
-        // objects, and a panel that says "no interpolation" while three of the
-        // four meters still ramp would be lying about what it set.
-        for (Channel* ch : { &m_outL, &m_outR, &m_inL, &m_inR })
-        {
-            ch->levelFall.noInterp = m_noInterp;
-            ch->peakFall.noInterp  = m_noInterp;
-        }
+    // ---- limiter ring ----------------------------------------------------
+    //
+    // The same MODE as the harmonic ring: TRANSIENT reads this block's deepest
+    // gain reduction, RMS the 131 ms one-pole.  Full circle = the RANGE chosen
+    // in Settings (6/12/24/48/96 dB), so the scale labels at 9 and 3 o'clock
+    // are range/4 and 3*range/4.
+    {
+        m_grRange = (m_engine != nullptr) ? m_engine->grRange() : 12;
+        const double grDb = (m_harmMode == 1) ? double (m.grPeak) : double (m.gr);
+        m_limitFrac = std::clamp (grDb / double (std::max (1, m_grRange)), 0.0, 1.0);
     }
     double f = m_harmFrac;
     // test hook: OVERTEON_HARM=0..1 pins the harmonic fraction so the ring's
@@ -379,8 +350,132 @@ void OvMeterView::drawPod (QPainter* g, PodPass pass)
             g->drawEllipse (ring);
         }
 
-        g->setPen (QPen (hc, 4.0, Qt::SolidLine, Qt::RoundCap));
-        g->drawArc (ring, 90 * 16, -int (frac * 360.0 * 16.0));
+        // ---- the ring: ONE continuous stroke ------------------------------
+        //
+        // The harmonic half and the limiter half are a SINGLE path: from the
+        // limiter's tip, through 12 o'clock, to the harmonic tip.  Drawing them
+        // as two strokes left two antialiased start caps meeting at 12 (plus a
+        // separate joint disc), and those edges were visible as a seam even
+        // when both halves had the same colour.  One path has one edge.
+        //
+        // Colour comes from a conical gradient: red on the counter-clockwise
+        // side of 12, harmonic colour on the clockwise side, blended across
+        // exactly one stroke diameter (4 px of arc length).  The limiter has a
+        // second, hard colour boundary just past its own tip — outside the
+        // path, so the tip's round cap stays red.
+        const double harmLen  = std::clamp (frac, 0.0, 1.0);
+        const double limitLen = std::clamp (m_limitFrac, 0.0, 1.0);
+        const QColor limitColour = m_settingsHover
+                                 ? QColor (QStringLiteral ("#33d17a"))
+                                 : QColor (QStringLiteral ("#ff2a44"));
+
+        if (limitLen <= 0.0005)
+        {
+            // No limiter: EXACTLY the pre-limiter drawing — a plain harmonic
+            // arc, one stroke, no gradient anywhere.
+            if (harmLen > 0.0005)
+            {
+                g->setPen (QPen (hc, 4.0, Qt::SolidLine, Qt::RoundCap));
+                g->drawArc (ring, 90 * 16, -int (harmLen * 360.0 * 16.0));
+            }
+        }
+        else if (harmLen <= 0.0005)
+        {
+            // Limiter only: one red arc; no harmonic colour to blend from.
+            g->setPen (QPen (limitColour, 4.0, Qt::SolidLine, Qt::RoundCap));
+            g->drawArc (ring, 90 * 16, int (limitLen * 360.0 * 16.0));
+        }
+        else
+        {
+            const double total    = harmLen + limitLen;
+            const double startDeg = 90.0 + limitLen * 360.0;
+
+            // One stroke diameter of arc length, converted to degrees on the
+            // ring's centreline: 2 px each side of 12.
+            constexpr double kPi = 3.14159265358979323846;
+            const double halfDeg = (2.0 / (ring.width() * 0.5)) * (180.0 / kPi);
+            const double t0 = (90.0 - halfDeg) / 360.0;
+            const double t1 = (90.0 + halfDeg) / 360.0;
+            // Hard switch back to the harmonic colour just past the limiter's
+            // tip; the tip's cap is inside the red zone, and this point is not
+            // on the path, so the switch itself is never seen.  One extra
+            // degree clears the cap's inner edge (which spans a slightly wider
+            // angle than the 28 px centreline used for the 12 o'clock blend).
+            const double tip = std::fmod (90.0 + limitLen * 360.0 + halfDeg + 1.0,
+                                          360.0) / 360.0;
+
+            QConicalGradient grad (ring.center(), 0.0);
+            if (tip >= t0 && tip <= t1)
+            {
+                // The limiter ends inside the 12 o'clock blend (it spans more
+                // than 97 % of the ring).  There is no separate plateau left
+                // to switch back from, so the simple two-stop form is exact
+                // where the path is visible.
+                grad.setColorAt (0.0, hc);
+                grad.setColorAt (t0, hc);
+                grad.setColorAt (t1, limitColour);
+                grad.setColorAt (1.0, limitColour);
+            }
+            else if (tip > t1)
+            {
+                // Hard cut just past the limiter's cap.  Without the extra
+                // stop QGradient interpolates red -> harmonic across the whole
+                // limiter arc, which made the red fade into the harmonic
+                // colour along its length.
+                const double cut = std::max (0.0, tip - 0.0005);
+                grad.setColorAt (0.0, hc);
+                grad.setColorAt (t0, hc);
+                grad.setColorAt (t1, limitColour);
+                grad.setColorAt (cut, limitColour);
+                grad.setColorAt (tip, hc);
+                grad.setColorAt (1.0, hc);
+            }
+            else
+            {
+                // The limiter span wraps through 0 degrees: red from 0 to its
+                // tip, then harmonic colour, then the 12 o'clock blend, then
+                // red again.
+                const double cut = std::max (0.0, tip - 0.0005);
+                grad.setColorAt (0.0, limitColour);
+                grad.setColorAt (cut, limitColour);
+                grad.setColorAt (tip, hc);
+                grad.setColorAt (t0, hc);
+                grad.setColorAt (t1, limitColour);
+                grad.setColorAt (1.0, limitColour);
+            }
+
+            QPainterPath p;
+            if (total >= 0.9995)
+            {
+                // The halves overlap: their union is the whole ring.  The
+                // white overlay below marks the shared part.
+                p.addEllipse (ring);
+            }
+            else
+            {
+                p.arcMoveTo (ring, startDeg);
+                p.arcTo (ring, startDeg, -total * 360.0);
+            }
+
+            g->setBrush (Qt::NoBrush);
+            g->setPen (QPen (QBrush (grad), 4.0, Qt::SolidLine, Qt::RoundCap));
+            g->drawPath (p);
+        }
+
+        // Where the two arcs occupy the SAME angle they cross; that part is
+        // white.  They start together at 12 and travel in opposite directions,
+        // so this only happens once their lengths add up to more than a full
+        // turn.  Qt angles: harmonic covers [90 - H*360, 90] clockwise, the
+        // limiter [90, 90 + L*360] counter-clockwise, so the shared run starts
+        // at 450 - H*360 and is (H + L - 1)*360 long.
+        const double overlap = frac + m_limitFrac - 1.0;
+        if (overlap > 0.0005)
+        {
+            g->setPen (QPen (QColor (255, 255, 255), 4.0, Qt::SolidLine, Qt::RoundCap));
+            g->drawArc (ring,
+                        int ((450.0 - frac * 360.0) * 16.0),
+                        int (overlap * 360.0 * 16.0));
+        }
     }
 
     // ---- bars + cap dots:  <g filter="url(#neon)">
@@ -479,6 +574,29 @@ void OvMeterView::drawPod (QPainter* g, PodPass pass)
     g->setPen (kLabel);
     g->drawText (QRectF (200, 43, 80, 10), Qt::AlignCenter, QStringLiteral ("HARM"));
 
+    // ---- limiter ring scale ----------------------------------------------
+    //
+    // The red arc travels counter-clockwise, so 9 o'clock is a quarter of the
+    // range and 3 o'clock is three quarters (12 dB -> 3 on the left, 9 on the
+    // right).  The labels sit in the gap between the ring and the upper/lower
+    // meter hooks, in the same small grey type as HARM.  Always visible: the
+    // scale belongs to the ring, it is not a tooltip.
+    f.setPixelSize (7);
+    f.setBold (false);
+    f.setLetterSpacing (QFont::AbsoluteSpacing, 0);
+    g->setFont (f);
+    g->setPen (kLabel);
+    const auto scaleText = [] (double v)
+    {
+        return (std::abs (v - std::round (v)) < 1.0e-6)
+             ? QString::number (qRound (v))
+             : QString::number (v, 'f', 1);
+    };
+    g->drawText (QRectF (186, 26, 22, 12), Qt::AlignRight | Qt::AlignVCenter,
+                 scaleText (m_grRange / 4.0));
+    g->drawText (QRectF (272, 26, 22, 12), Qt::AlignLeft | Qt::AlignVCenter,
+                 scaleText (m_grRange * 0.75));
+
     // IN / OUT captions and L / R marks
     f.setPixelSize (7);
     f.setLetterSpacing (QFont::AbsoluteSpacing, 0.5);
@@ -547,12 +665,35 @@ void OvMeterView::paint (QPainter* g)
         const int ih = std::max (1, int (std::lround ((64.0 * sx + 2 * kBleed) * gscale)));
 
         const auto qk = [] (double v) { return quint64 (std::clamp (v, 0.0, 1.0) * 127.0); };
-        const quint64 key = qk (m_outL.peak)
-                          | (qk (m_outR.peak) << 9)
-                          | (qk (m_inL.peak)  << 18)
-                          | (qk (m_inR.peak)  << 27)
-                          | (qk (m_harmFrac)  << 36)
-                          | (quint64 (iw * 31 + ih) << 48);
+        quint64 key = 1469598103934665603ull;
+        const auto mix = [&key] (quint64 v) { key = (key ^ v) * 1099511628211ull; };
+        // What APPEARS or DISAPPEARS, hashed separately so those changes can
+        // bypass the 30 Hz throttle (see m_glowStructKey).
+        quint64 sk = 1469598103934665603ull;
+        const auto mixAppearance = [&] (quint64 v) { mix (v); sk = (sk ^ v) * 1099511628211ull; };
+        for (const auto* ch : { &m_outL, &m_outR, &m_inL, &m_inR })
+        {
+            mix (qk (ch->level));
+            mix (qk (ch->peak));
+            // qk() is 7-bit: anything below 1/127 quantises to zero, so the
+            // halo key stopped changing while the bar / cap dot was still
+            // drawn (the draw threshold is 0.002).  The cached halo then kept
+            // the blurred dot at the bottom of the meter until some unrelated
+            // repaint — a settings hover — rebuilt it.  These presence bits
+            // change exactly when a bar or dot crosses the draw threshold.
+            mixAppearance (quint64 (ch->level > 0.002 ? 1 : 0));
+            mixAppearance (quint64 (ch->peak  > 0.002 ? 1 : 0));
+        }
+        mix (qk (m_harmFrac));
+        // The limiter arc lives in the ring's HALO too.  Without these two the
+        // halo key never changed when the limiter stopped, so the blurred red
+        // arc stayed behind after the sharp one was gone.
+        mix (qk (m_limitFrac));
+        mixAppearance (quint64 (m_harmFrac  > 0.0005 ? 1 : 0));
+        mixAppearance (quint64 (m_limitFrac > 0.0005 ? 1 : 0));
+        mix (quint64 (m_grRange));
+        mixAppearance (m_settingsHover ? 1u : 0u);
+        mixAppearance (quint64 (iw * 31 + ih));
 
         auto build = [&] (QImage& layer, QImage& blurred, PodPass pass, double sigmaCss)
         {
@@ -578,10 +719,13 @@ void OvMeterView::paint (QPainter* g)
         const auto nowT = std::chrono::steady_clock::now();
         const bool due = (nowT - m_glowBuiltAt)
                              > std::chrono::milliseconds (33);
-        if ((m_glowKey != key && due) || m_barsBlur.size() != QSize (iw, ih))
+        const bool appearanceChanged = (sk != m_glowStructKey);
+        if ((m_glowKey != key && (due || appearanceChanged))
+            || m_barsBlur.size() != QSize (iw, ih))
         {
             m_glowBuiltAt = nowT;
             m_glowKey = key;
+            m_glowStructKey = sk;
             build (m_barsLayer, m_barsBlur, GlowBars, 1.7);
 
             // The ring's filter is REPLACED in the hot zone.  The SVG carries

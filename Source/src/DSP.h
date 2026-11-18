@@ -215,7 +215,7 @@ struct Biquad
     {
         const double fs = fsIn;
         const double w  = juce::MathConstants<double>::twoPi
-                        * juce::jlimit (10.0, fs * 0.45, (double) fIn) / fs;
+                        * juce::jlimit (10.0, fs * 0.48, (double) fIn) / fs;
         const double cw = std::cos (w);
         const double al = std::sin (w) / (2.0 * juce::jmax (0.1, (double) qIn));
         const double a0 = 1.0 + al;
@@ -230,7 +230,7 @@ struct Biquad
     {
         const double fs = fsIn;
         const double w  = juce::MathConstants<double>::twoPi
-                        * juce::jlimit (10.0, fs * 0.45, (double) fIn) / fs;
+                        * juce::jlimit (10.0, fs * 0.48, (double) fIn) / fs;
         const double cw = std::cos (w);
         const double al = std::sin (w) / (2.0 * juce::jmax (0.1, (double) qIn));
         const double a0 = 1.0 + al;
@@ -245,7 +245,7 @@ struct Biquad
     {
         const double fs = fsIn;
         const double w  = juce::MathConstants<double>::twoPi
-                        * juce::jlimit (10.0, fs * 0.45, (double) fIn) / fs;
+                        * juce::jlimit (10.0, fs * 0.48, (double) fIn) / fs;
         const double cw = std::cos (w);
         const double al = std::sin (w) / (2.0 * juce::jmax (0.05, (double) qIn));
         const double a0 = 1.0 + al;
@@ -261,7 +261,7 @@ struct Biquad
         const double fs = fsIn;
         const double A  = std::pow (10.0, (double) dB / 40.0);
         const double w  = juce::MathConstants<double>::twoPi
-                        * juce::jlimit (10.0, fs * 0.45, (double) fIn) / fs;
+                        * juce::jlimit (10.0, fs * 0.48, (double) fIn) / fs;
         const double al = std::sin (w) / (2.0 * juce::jmax (0.1, (double) qIn));
         const double cw = std::cos (w);
         const double a0 = 1.0 + al / A;
@@ -277,7 +277,7 @@ struct Biquad
         const double fs = fsIn;
         const double A  = std::pow (10.0, (double) dB / 40.0);
         const double w  = juce::MathConstants<double>::twoPi
-                        * juce::jlimit (10.0, fs * 0.45, (double) fIn) / fs;
+                        * juce::jlimit (10.0, fs * 0.48, (double) fIn) / fs;
         const double cw = std::cos (w);
         const double al = std::sin (w) / (2.0 * juce::jmax (0.1, (double) qIn));
         const double sq = 2.0 * std::sqrt (A) * al;
@@ -294,7 +294,7 @@ struct Biquad
         const double fs = fsIn;
         const double A  = std::pow (10.0, (double) dB / 40.0);
         const double w  = juce::MathConstants<double>::twoPi
-                        * juce::jlimit (10.0, fs * 0.45, (double) fIn) / fs;
+                        * juce::jlimit (10.0, fs * 0.48, (double) fIn) / fs;
         const double cw = std::cos (w);
         const double al = std::sin (w) / (2.0 * juce::jmax (0.1, (double) qIn));
         const double sq = 2.0 * std::sqrt (A) * al;

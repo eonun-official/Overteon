@@ -1,6 +1,6 @@
 import QtQuick
 
-// #about modal: logo, wordmark, version, three paragraphs, credits, close.
+// #about modal: the 0.9.10 layout and content, with Xyas added to the credits.
 Item {
     id: root
 
@@ -28,12 +28,16 @@ Item {
         border.color: OvTheme.line
         radius: 10
 
+        MouseArea { anchors.fill: parent }
+
         Column {
             id: content
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: 26
+            anchors.leftMargin: 30
+            anchors.rightMargin: 30
+            anchors.topMargin: 26
             spacing: 10
 
             Image {
@@ -68,6 +72,7 @@ Item {
                 font.pixelSize: 10
                 font.letterSpacing: 1.5
                 anchors.horizontalCenter: parent.horizontalCenter
+                bottomPadding: 4
             }
 
             Text {
@@ -77,7 +82,8 @@ Item {
                 font.family: OvTheme.uiFont
                 font.pixelSize: 10
                 lineHeight: 1.7
-                text: "The moment saturation occurs, the topology engine wakes. It extracts only the harmonics the saturator has just created — sample-accurate, inside the oversampled domain — while your dry signal passes completely untouched."
+                textFormat: Text.StyledText
+                text: "OVERTEON is inspired by passive equalisers, taken one step further: colour that never costs dynamics. The harmonics created by saturation are separated from the dry signal and merged back only at the output, so the dry keeps its own transients and support while the Post EQ tunes the combined result."
             }
             Text {
                 width: parent.width
@@ -86,7 +92,29 @@ Item {
                 font.family: OvTheme.uiFont
                 font.pixelSize: 10
                 lineHeight: 1.7
-                text: "This additive-only design solves phase interference and pre-ringing at the same time: the original signal is never subtracted from or re-phased, so there is no phase conflict to fix."
+                textFormat: Text.StyledText
+                topPadding: 2
+                text: "<b>HARMONIC</b> — the full design. The sidechain EQ shapes what the saturator hears; only the newly generated harmonics are extracted, and the dry passes through an identical idle oversampler so the merge is phase-exact. The Post EQ then tunes the result."
+            }
+            Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                color: OvTheme.dim
+                font.family: OvTheme.uiFont
+                font.pixelSize: 10
+                lineHeight: 1.7
+                textFormat: Text.StyledText
+                text: "<b>SCHRANZ</b> — the sidechain EQ is the output. Hard, dramatic shaping goes straight into the limiter; the saturator and Post EQ are bypassed, and punch, compression and overload colour come from the limiter itself."
+            }
+            Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                color: OvTheme.dim
+                font.family: OvTheme.uiFont
+                font.pixelSize: 10
+                lineHeight: 1.7
+                textFormat: Text.StyledText
+                text: "<b>CLASSIC</b> — the conventional route. The whole signal is saturated, blended with the dry by MIX, then tuned by the Post EQ."
             }
 
             Text {
@@ -96,16 +124,41 @@ Item {
                 font.family: OvTheme.uiFont
                 font.pixelSize: 10
                 textFormat: Text.StyledText
-                text: "Produced by <b>Eur9ka</b>, <b>Eonun</b> &amp; <b>Xyas</b> · Designed by <b>Eonun</b>"
+                topPadding: 2
+                text: "Produced by <font color='" + OvTheme.pq + "'><b>Eur9ka</b></font>, <font color='" + OvTheme.pq + "'><b>Eonun</b></font> &amp; <font color='" + OvTheme.pq + "'><b>Xyas</b></font> &nbsp;·&nbsp; Designed by <font color='" + OvTheme.pq + "'><b>Eonun</b></font>"
             }
 
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                color: OvTheme.dim
-                font.family: OvTheme.uiFont
-                font.pixelSize: 10
-                text: "COPY EONUN"
-                opacity: 0.6
+            Item {
+                width: parent.width
+                height: siteText.implicitHeight + 6
+
+                Text {
+                    id: siteText
+                    anchors.centerIn: parent
+                    text: "eonun-official.github.io"
+                    color: siteMa.containsMouse ? OvTheme.pq : OvTheme.ink
+                    font.family: OvTheme.uiFont
+                    font.pixelSize: 10
+                    font.letterSpacing: 1
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.bottom
+                        anchors.topMargin: 1
+                        height: 1
+                        color: siteMa.containsMouse ? OvTheme.pq : "#48e7ebf2"
+                    }
+
+                    MouseArea {
+                        id: siteMa
+                        anchors.fill: parent
+                        anchors.margins: -4
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: Qt.openUrlExternally ("https://eonun-official.github.io")
+                    }
+                }
             }
 
             Text {
@@ -115,7 +168,6 @@ Item {
                 font.family: OvTheme.uiFont
                 font.pixelSize: 10
                 font.letterSpacing: 1.5
-                topPadding: 6
 
                 MouseArea {
                     id: closeMa
@@ -131,4 +183,6 @@ Item {
 
     function open()  { visible = true }
     function close() { visible = false; root.closed() }
+
+    Keys.onEscapePressed: root.close()
 }

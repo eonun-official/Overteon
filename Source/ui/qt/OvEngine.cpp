@@ -1,12 +1,13 @@
 #include "OvEnv.h"
 #include "OvEngine.h"
-#include "OvBallistics.h"
 #include "OvQmlTypes.h"
+#include "OvSpectrum.h"
 #include "OvTick.h"
 
 #include <cstdio>
 #include <cstdlib>
 
+#include <QCursor>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -22,12 +23,41 @@ OvEngine::OvEngine (std::unique_ptr<OvSource> source, QObject* parent)
         auto* p = new OvParam (*m_source, i, this);   // parented: QML must not delete it
         m_params.insert (p->id(), QVariant::fromValue<QObject*> (p));
         m_paramList.push_back (p);
+
+        // A UI edit must bump the parameter revision HERE.  OvParam::setNorm()
+        // writes its own cache before the next poll, so tick()'s
+        // "before vs after poll()" comparison can never see that change — the
+        // revision only moved for HOST edits, and a UI-only change (the band
+        // type menu is the clearest one) left the plots stale until something
+        // else repainted them.  Dragging looked fine only because the drag
+        // handlers call update() themselves.
+        connect (p, &OvParam::edited, this, [this, p] {
+            const QString id = p->id();
+            bool sc = false, pq = false;
+            if (id.startsWith (QLatin1String ("sc")))      sc = true;
+            else if (id.startsWith (QLatin1String ("pq"))) pq = true;
+            else if (id.startsWith (QLatin1String ("drive"))
+                     || id == QLatin1String ("protectMode")) sc = pq = true;
+            ++m_paramRevision;
+            emit paramRevisionChanged (sc, pq);
+        });
     }
+
+    // A/B starts with BOTH slots holding the state the plug-in came up with.
+    //
+    // B used to stay invalid until the first switch, which then seeded it from
+    // the ALREADY EDITED A — so the first A→B changed nothing (the slot label
+    // moved but the EQ and every other parameter stayed on A) and only later
+    // switches, once B existed, appeared to work.  Recording both slots here
+    // makes the first switch a real recall of the sound the plug-in started
+    // with, while A remains the live/edited one.
+    m_ab[0] = m_source->snapshotParams();
+    m_ab[1] = m_ab[0];
 
     m_meters = m_source->meters();
     m_driveMode = m_source->driveModeIndex();
     m_spectrum = QVariantList();
-    for (int i = 0; i < 128; ++i) m_spectrum << 0.0;
+    for (int i = 0; i < ovspec::kBins; ++i) m_spectrum << 0.0;
 
     refreshPresets();
 
@@ -35,10 +65,8 @@ OvEngine::OvEngine (std::unique_ptr<OvSource> source, QObject* parent)
     connect (&m_timer, &QTimer::timeout, this, &OvEngine::tick);
     m_timer.start();
 
-    // The light gets a clock of its own at the display rate.  Sharing the data
-    // poll was the bug: a property bound to a value that only changes when a
-    // measurement arrives cannot animate between measurements, so the accent
-    // glow snapped from one brightness to the next and looked inert.
+    // Sample the light at display rate; OvGpuGlass animates between values with
+    // the reference's 100 ms linear transition.
     m_lightTimer.setInterval (1000 / 60);
     connect (&m_lightTimer, &QTimer::timeout, this, &OvEngine::lightTick);
     m_lightTimer.start();
@@ -47,48 +75,21 @@ OvEngine::OvEngine (std::unique_ptr<OvSource> source, QObject* parent)
 OvEngine::~OvEngine() = default;
 
 // ---------------------------------------------------------------------------
-//  The light behind the accent glow.
-//
-//  The same ovb::Fall as every other meter (ui/qt/OvBallistics.h): instant
-//  attack, smootherstep-eased release, dB per SECOND.  It used to be its own
-//  copy of  step = 1 - (target/start)^(1/n_frames), which is why the light and
-//  the bars beside it fell at two different speeds.
-//
-//  Faster than the bars: a glow that lags behind the music reads as broken
-//  rather than as smooth.  60 dB in 120 ms.
+//  The light behind the accent glow.  0.9.10 uses the louder L/R measurement
+//  directly; only the QML glass adds the reference's 100 ms linear transition.
 // ---------------------------------------------------------------------------
 void OvEngine::lightTick()
 {
-    using clk = std::chrono::steady_clock;
-    const auto now = clk::now();
-    double dt = 1.0 / 60.0;
-    if (m_lightAt != clk::time_point())
-        dt = std::clamp (std::chrono::duration<double> (now - m_lightAt).count(),
-                         0.0005, 0.20);
-    m_lightAt = now;
+    const auto now = std::chrono::steady_clock::now();
 
-    // The same ovb::Fall the bars use, in dB — this used to be a third copy of
-    // the release formula, and the light and the bars disagreed about how fast
-    // a fall was.
-    //
-    // 60 dB in 0.12 s (500 dB/s) was still an order of magnitude faster than
-    // any meter, and the level it follows is now an RMS with a 300 ms
-    // integration.  It is set to that detector's own natural decay,
-    // 4.343/0.12 = 36 dB/s, so the glow tracks the measurement instead of
-    // racing ahead of it — and it is deliberately faster than the bars'
-    // 11.8 dB/s, because a glow that lags the music reads as broken.
-    constexpr double kLightDbPerSec = 4.343 / 0.096;   // 120 ms tau x 1.25
-    constexpr double kSpanDb = 60.0, kFloorDb = -60.0;
-
-    // The measurement is already in dB; the light follows the LOUDER channel.
-    const double targetOut = std::max (m_meters.outL, m_meters.outR);
-    const double targetIn  = std::max (m_meters.inL,  m_meters.inR);
-
-    m_outFall.advance (targetOut, dt, kLightDbPerSec);
-    m_inFall.advance  (targetIn,  dt, kLightDbPerSec);
-
-    const double nextOut = ovb::dbToNorm (m_outFall.shown, kSpanDb, kFloorDb);
-    const double nextIn  = ovb::dbToNorm (m_inFall.shown,  kSpanDb, kFloorDb);
+    // 0.9.10: (dB + 60) / 60，左右声道取较大者，随后由 QML 做平方映射。
+    // 光源自身不再叠加 Smooth； OvGpuGlass 的 100 ms 线性过渡对应原 CSS。
+    const auto toLight = [] (double db)
+    {
+        return std::clamp ((db + 60.0) / 60.0, 0.0, 1.0);
+    };
+    const double nextOut = toLight (std::max (m_meters.outL, m_meters.outR));
+    const double nextIn  = toLight (std::max (m_meters.inL,  m_meters.inR));
 
     // Threshold in the 0..1 domain: 0.002 is well under one pixel of glow.
     if (std::abs (nextOut - m_outLight) > 0.002 || std::abs (nextIn - m_inLight) > 0.002)
@@ -103,7 +104,9 @@ void OvEngine::lightTick()
         std::fprintf (stderr, "[l] %.3f  out %6.2f dB  in %6.2f dB  "
                               "light out %.4f in %.4f\n",
                       std::chrono::duration<double> (now.time_since_epoch()).count(),
-                      m_outFall.shown, m_inFall.shown, m_outLight, m_inLight);
+                      std::max (m_meters.outL, m_meters.outR),
+                      std::max (m_meters.inL, m_meters.inR),
+                      m_outLight, m_inLight);
     }
 }
 
@@ -220,33 +223,81 @@ void OvEngine::tick()
     // made both EQ plots repaint even with identical data, and each repaint
     // re-renders the plot and runs the glow blur.
     //
-    // The threshold below is in display units, 0..1 over the plot's 85 dB
-    // range, and the plot is ~900 px wide with 128 bins — one bin is about
-    // 7 px, so 0.004 (0.34 dB) cannot move a pixel.  It was 0.0005, which the
-    // FFT of a moving signal exceeds on almost every poll, so the plots
-    // repainted at the full 30 Hz for changes nobody could see.
-    if ((++m_tickCount % 2) == 0)
+    // The threshold below is in display units, 0..1 over the plot's 96 dB
+    // range, and the plot is ~900 px wide with 1024 bins — one bin is about
+    // one pixel, so 0.004 (0.38 dB) cannot move a pixel by more than a
+    // fraction.  It was 0.0005, which the FFT of a moving signal exceeds on
+    // almost every poll.
+    // The analyser is re-read at ~60 Hz wall-clock, not every poll and not
+    // every other poll.  The poll timer is 8 ms, but inside a plug-in the host
+    // only pumps Qt's events at its own idle rate (typically 30-60 Hz), so
+    // "every second tick" was actually 15-30 spectrum updates a second — the
+    // stutter this change is about.  A 12 ms gate gives 60 Hz whether the host
+    // pumps at 60 or Qt's timer is allowed to run at 125; the plot's own 60 Hz
+    // repaint is the other half of the pair.
+    const auto specNow = std::chrono::steady_clock::now();
+    const bool scanSpec = m_lastSpecScan == std::chrono::steady_clock::time_point()
+                       || specNow - m_lastSpecScan >= std::chrono::milliseconds (12);
+    if (scanSpec)
     {
-        // Each tap is asked separately and each may have nothing new: a
-        // 2048-point FFT at 48 kHz completes every 43 ms while a host can poll
-        // at 15 Hz, so most polls find the buffer already consumed.  A tap that
-        // reports no data leaves its table alone — writing zeros there made the
-        // spectrum disappear and return, and every bounce tripped the change
-        // threshold below, which repainted both plots each time.
-        float specIn[128], specOut[128];
-        const bool haveIn  = m_source->spectrumIn (specIn, 128);   // SC: enters
-        const bool haveOut = m_source->spectrum (specOut, 128);    // PQ: leaves
+        m_lastSpecScan = specNow;
 
-        if (m_inSpectrum.size() != 128)
-            m_inSpectrum = QVariantList (128, 0.0);
+        // Each tap is asked separately and each may have nothing new.  The
+        // analyser is continuous now (a ring of the newest samples), so while
+        // audio runs both report a fresh window on every scan; only a stopped
+        // transport leaves the table alone, and that is handled by the stale
+        // timer below.
+        float specIn[ovspec::kBins], specOut[ovspec::kBins];
+        const bool haveIn  = m_source->spectrumIn (specIn, ovspec::kBins);   // SC: enters
+        const bool haveOut = m_source->spectrum (specOut, ovspec::kBins);    // PQ: leaves
+
+        if (m_inSpectrum.size() != ovspec::kBins)
+            m_inSpectrum = QVariantList (ovspec::kBins, 0.0);
 
         bool changed = false;
+
+        // ---- silence has to reach the display -----------------------------
+        //
+        // A host that stops calling processBlock (transport stopped) stops
+        // advancing the sample ring, so both taps report nothing and would
+        // leave the last picture on screen for ever.  That is invisible with
+        // the eased display but wrong for RAW, whose whole point is that it
+        // shows the current measurement and nothing else.  After 150 ms
+        // without new samples the table is authoritative silence.
+        constexpr auto specStale = std::chrono::milliseconds (150);
+
+        auto zeroTable = [&changed] (QVariantList& table)
+        {
+            for (auto& v : table)
+                if (v.toDouble() > 0.0005) { v = 0.0; changed = true; }
+        };
+
         if (haveIn)
-            for (int i = 0; i < 128; ++i)
-                m_inSpectrum[i] = (double) specIn[i];
+        {
+            // Same gate as the output table.  Without it the upper plot only
+            // repainted when the LOWER one happened to change: this loop
+            // stored the values but never raised `changed`, so an input-only
+            // difference produced no spectrumChanged at all.
+            for (int i = 0; i < ovspec::kBins; ++i)
+            {
+                const double v = (double) specIn[i];
+                if (std::abs (m_inSpectrum.at (i).toDouble() - v) > 0.004)
+                {
+                    m_inSpectrum[i] = v;
+                    changed = true;
+                }
+            }
+            m_inSpecAt = specNow;
+        }
+        else if (m_inSpecAt != std::chrono::steady_clock::time_point()
+                 && specNow - m_inSpecAt > specStale)
+        {
+            zeroTable (m_inSpectrum);
+        }
 
         if (haveOut)
-            for (int i = 0; i < 128; ++i)
+        {
+            for (int i = 0; i < ovspec::kBins; ++i)
             {
                 const double v = (double) specOut[i];
                 if (std::abs (m_spectrum.at (i).toDouble() - v) > 0.004)
@@ -255,6 +306,13 @@ void OvEngine::tick()
                     changed = true;
                 }
             }
+            m_outSpecAt = specNow;
+        }
+        else if (m_outSpecAt != std::chrono::steady_clock::time_point()
+                 && specNow - m_outSpecAt > specStale)
+        {
+            zeroTable (m_spectrum);
+        }
         // OVERTEON_ENGDBG: what the poll actually saw, once a second.
         //
         // Without this, "the spectrum is not moving" has a dozen possible
@@ -299,22 +357,38 @@ void OvEngine::initAll()
     emit paramRevisionChanged (true, true);
 }
 
+namespace
+{
+    // The preset tree is handed to QML as nested maps/lists:
+    //   { name: "Factory", folders: [ {...} ], presets: ["Air Lift"] }
+    // QML builds one cascading panel per folder node, so the depth of the tree
+    // is the only limit on the depth of the menu.
+    QVariantMap presetNodeFromJson (const QJsonObject& o)
+    {
+        QVariantMap node;
+        node.insert (QStringLiteral ("name"), o.value (QStringLiteral ("name")).toString());
+
+        QVariantList folders;
+        for (const auto& v : o.value (QStringLiteral ("folders")).toArray())
+            folders.append (presetNodeFromJson (v.toObject()));
+        node.insert (QStringLiteral ("folders"), folders);
+
+        QStringList presets;
+        for (const auto& v : o.value (QStringLiteral ("presets")).toArray())
+            presets << v.toString();
+        node.insert (QStringLiteral ("presets"), presets);
+        return node;
+    }
+}
+
 void OvEngine::refreshPresets()
 {
     const auto json = QString::fromStdString (m_source->presetListJson());
-    QVariantMap out;
     const auto doc = QJsonDocument::fromJson (json.toUtf8());
-    if (doc.isObject())
-    {
-        const auto obj = doc.object();
-        for (auto it = obj.begin(); it != obj.end(); ++it)
-        {
-            QStringList names;
-            for (const auto& v : it.value().toArray())
-                names << v.toString();
-            out.insert (it.key(), names);
-        }
-    }
+
+    QVariantMap out;
+    if (doc.isObject()) out = presetNodeFromJson (doc.object());
+
     if (out != m_presets)
     {
         m_presets = out;
@@ -349,40 +423,60 @@ void OvEngine::setPresetName (const QString& name)
 // OvBallistics.h) and read the tables the engine produces.  One shared signal is
 // deliberate — the panel binds to it, and the ring and the two views each read
 // the property they care about.
-void OvEngine::setHarmDetector (int v)
+void OvEngine::setHarmMode (int v)
 {
     v = (v == 1) ? 1 : 0;
-    if (v != m_harmDetector) { m_harmDetector = v; emit settingsChanged(); }
+    if (v != m_harmMode) { m_harmMode = v; emit settingsChanged(); }
 }
 
-void OvEngine::setUpperDetector (int v)
+void OvEngine::setUpperMode (int v)
 {
     v = (v == 1) ? 1 : 0;
-    if (v != m_upperDetector) { m_upperDetector = v; emit settingsChanged(); }
+    if (v != m_upperMode) { m_upperMode = v; emit settingsChanged(); }
 }
 
-void OvEngine::setLowerDetector (int v)
+void OvEngine::setLowerMode (int v)
 {
     v = (v == 1) ? 1 : 0;
-    if (v != m_lowerDetector) { m_lowerDetector = v; emit settingsChanged(); }
+    if (v != m_lowerMode) { m_lowerMode = v; emit settingsChanged(); }
 }
 
-void OvEngine::setHarmInterp (int v)
+void OvEngine::setGrRange (int v)
 {
-    v = (v == 1) ? 1 : 0;
-    if (v != m_harmInterp) { m_harmInterp = v; emit settingsChanged(); }
+    if (v != 6 && v != 12 && v != 24 && v != 48) return;
+    if (v != m_grRange) { m_grRange = v; emit settingsChanged(); }
 }
 
-void OvEngine::setUpperInterp (int v)
+void OvEngine::setMeterRelease (int v)
 {
     v = (v == 1) ? 1 : 0;
-    if (v != m_upperInterp) { m_upperInterp = v; emit settingsChanged(); }
+    if (v != m_meterRelease) { m_meterRelease = v; emit settingsChanged(); }
 }
 
-void OvEngine::setLowerInterp (int v)
+// ---- window resize (the QML corner grip) ------------------------------------
+QPointF OvEngine::cursorGlobalPos() const
 {
-    v = (v == 1) ? 1 : 0;
-    if (v != m_lowerInterp) { m_lowerInterp = v; emit settingsChanged(); }
+    return QCursor::pos();
+}
+
+void OvEngine::requestWindowResize (int w, int h)
+{
+    if (windowResizeRequest) windowResizeRequest (w, h);
+}
+
+void OvEngine::windowSizeOriginal()
+{
+    if (windowSizeOriginalRequest) windowSizeOriginalRequest();
+}
+
+void OvEngine::windowSizeDefault()
+{
+    if (windowSizeDefaultRequest) windowSizeDefaultRequest();
+}
+
+void OvEngine::windowSizeSaveDefault()
+{
+    if (windowSizeSaveDefaultRequest) windowSizeSaveDefaultRequest();
 }
 
 // ---- global controls --------------------------------------------------------
@@ -446,6 +540,16 @@ void OvEngine::abCopyFrom (int from)
     }
 
     m_ab[other] = m_ab[from];
+
+    // Copying onto the active slot must also replace the live sound.  Merely
+    // updating its snapshot made B → A appear to do nothing while A was active.
+    if (other == m_abSlot)
+    {
+        m_source->restoreParams (m_ab[other]);
+        for (auto* pp : m_paramList) pp->poll();
+        ++m_paramRevision;
+        emit paramRevisionChanged (true, true);
+    }
     emit abChanged();
 }
 

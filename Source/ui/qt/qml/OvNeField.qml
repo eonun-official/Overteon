@@ -151,7 +151,11 @@ Item {
         y: -2
         width: input.width + 4
         height: root.height + 4
-        cursorShape: Qt.SizeVerCursor
+        // Hover shows a directional cursor.  During a scrub the window-level
+        // blank cursor takes over (OvPointer::setCursorHidden), because the box
+        // follows its node and the pointer can end up over the plot while this
+        // item still owns the drag.
+        cursorShape: root.key === "f" ? Qt.SizeHorCursor : Qt.SizeVerCursor
 
         // The drag is measured in WINDOW coordinates, not in this item's.
         //
@@ -170,36 +174,143 @@ Item {
         readonly property var winY: function (ev) {
             return root.mapToItem (null, ev.x, ev.y).y
         }
+        readonly property var winX: function (ev) {
+            return root.mapToItem (null, ev.x, ev.y).x
+        }
 
         property real startY: 0
+        property real startX: 0
         property real startNorm: 0
+        // Hand travel since the last event, accumulated.  The pointer is
+        // recentred only when it wanders far from the press point, so a normal
+        // drag never touches the OS pointer and stays perfectly smooth.
+        property real rawX: 0
+        property real rawY: 0
+        property real accumX: 0
+        property real accumY: 0
+        property int  anchorGX: 0
+        property int  anchorGY: 0
+        property bool hasAnchor: false
         property bool moved: false
+        property bool fine: false
+        property bool cursorHidden: false
+
+        function hideCursor () {
+            if (! cursorHidden) {
+                cursorHidden = true
+                if (typeof OvPointer !== "undefined") OvPointer.setCursorHidden (true)
+            }
+        }
+
+        function restoreCursor () {
+            if (cursorHidden) {
+                cursorHidden = false
+                if (typeof OvPointer !== "undefined") OvPointer.setCursorHidden (false)
+            }
+        }
+
+        /// Put the pointer back on the number that was being scrubbed.
+        ///
+        /// Frequency and gain move the node, so the box travels away from the
+        /// hand during the drag.  Once the box has settled at its node, the
+        /// hand's old position is no longer where the value lives; the cursor
+        /// goes to the centre of this field's text instead.  Q never moves the
+        /// node, so it is left where it was.
+        function warpToField () {
+            if (typeof OvPointer === "undefined" || ! OvPointer.warpTo) return
+            const tx = input.x + input.width - input.contentWidth * 0.5
+            OvPointer.warpTo (root, tx, input.height * 0.5)
+        }
+
+        Component.onDestruction: restoreCursor ()
 
         onPressed: (m) => {
             startY = winY (m)
+            startX = winX (m)
+            rawX = startX
+            rawY = startY
+            accumX = 0
+            accumY = 0
+            hasAnchor = false
+            if (typeof OvPointer !== "undefined" && OvPointer.cursorPos) {
+                const gp = OvPointer.cursorPos ()
+                anchorGX = gp.x
+                anchorGY = gp.y
+                hasAnchor = true
+            }
             moved = false
+            fine = (m.modifiers & Qt.ShiftModifier) !== 0
             const p = root.param ()
             startNorm = p ? p.norm : 0
             if (host) host.beginScrub ()
         }
 
         onCanceled: {
+            restoreCursor ()
             if (host) host.endScrub ()
         }
 
         onPositionChanged: (m) => {
             if (! pressed) return
-            const dy = startY - winY (m)
-            if (! moved && Math.abs (dy) < 3) return
+            const px = winX (m)
+            const py = winY (m)
+
+            // A recentre moves the OS pointer back to the press point.  That
+            // jump is not hand travel: swallow it and re-synchronise.  Any
+            // other discontinuity is treated the same way, so a warp can never
+            // become a value step — that was the left-drag oscillation.
+            if (Math.abs (px - rawX) + Math.abs (py - rawY) > 120) {
+                rawX = px
+                rawY = py
+                return
+            }
+
+            const dx = px - startX
+            const dy = startY - py
+            if (! moved && Math.abs (dx) < 3 && Math.abs (dy) < 3) return
             const p = root.param ()
             if (! p) return
             if (! moved) {
                 moved = true
+                // A value scrub has no cursor of its own: hide it and leave it
+                // out of the way until the drag ends.
+                hideCursor ()
                 p.beginGesture ()
                 input.focus = false          // stop editing, start scrubbing
             }
-            const k = (m.modifiers & Qt.ShiftModifier) ? 0.0012 : 0.005
-            p.setNorm (Math.max (0, Math.min (1, startNorm + dy * k)))
+
+            // Incremental hand travel.  The value is driven by this, not by the
+            // absolute pointer position, so it behaves identically in both
+            // directions and everywhere on the screen.
+            accumX += px - rawX
+            accumY += py - rawY
+            rawX = px
+            rawY = py
+
+            // Shift is the fine modifier.  Switching mid-drag re-anchors at the
+            // current value: no jump, no restart from the press point.
+            const fineNow = (m.modifiers & Qt.ShiftModifier) !== 0
+            if (fineNow !== fine) {
+                fine = fineNow
+                startNorm = p.norm
+                accumX = 0
+                accumY = 0
+            }
+            // Fine is deliberately slower on frequency: its axis is
+            // logarithmic, so the same normalised step is worth far more Hz at
+            // the top of the band.
+            const k = fine ? (root.key === "f" ? 0.0005 : 0.0012) : 0.005
+            // Frequency is horizontal; gain and Q are vertical (up = increase).
+            const delta = root.key === "f" ? accumX : -accumY
+            p.setNorm (Math.max (0, Math.min (1, startNorm + delta * k)))
+
+            // Recentre only after 220 px of raw travel.  Warping on EVERY event
+            // was what fought the hand when dragging left; now it happens rarely
+            // and the guard above absorbs the jump.
+            if (hasAnchor && (Math.abs (px - startX) > 220
+                              || Math.abs (py - startY) > 220))
+                OvPointer.warpGlobal (anchorGX, anchorGY)
+
             // Refresh the readout AND repaint the plot in this frame: the
             // number and the node it belongs to have to move together.
             if (host) host.refresh (false)
@@ -209,10 +320,15 @@ Item {
             if (moved) {
                 const p = root.param ()
                 if (p) p.endGesture ()
+                if (root.key === "f" || root.key === "g") {
+                    if (host && host.place) host.place ()   // settle the box first
+                    warpToField ()                          // still hidden: no flash
+                }
             } else {
                 input.forceActiveFocus ()    // a click, not a drag: type
                 input.selectAll ()
             }
+            restoreCursor ()
             moved = false
             if (host) host.endScrub ()
         }

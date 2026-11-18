@@ -23,15 +23,18 @@ namespace OvTiming
 
     // Every consumer uses these; they exist so a call site reads clearly, not
     // to allow a different rate.
-    constexpr int kPlotHz   = 30;
+    // The spectrum is no longer a 33 ms slide show: the analyser reads the
+    // newest samples from a continuous ring on every engine tick (16 ms), so
+    // the plots are allowed to repaint at 60 Hz like the display they sit in.
+    // The plot's own layers are cached, and only the spectrum outline is
+    // rebuilt, so this is one vertex strip per plot per frame.
+    constexpr int kPlotHz   = 60;
     constexpr int kPlotMs   = 1000 / kPlotHz;
-    // Meter and spectrum data arrive at 33 ms in the design (the page's mock
-    // pushes `meter` and `spectrum` on a 33 ms timer), so the surfaces that
-    // only show that data are refreshed at 30 Hz.  Anything the user touches —
-    // a drag, a knob — repaints from its own signal in the frame it happens,
-    // and the WINDOW still presents at kFrameHz.  This is fidelity to the
-    // design, not a compromise: refreshing a 2.4 MB plot texture faster than
-    // its data changes only burns CPU.
+    // Meter data still arrives at 33 ms in the design (the page's mock pushes
+    // `meter` on a 33 ms timer), so the surfaces that only show that data are
+    // refreshed at 30 Hz.  Anything the user touches — a drag, a knob —
+    // repaints from its own signal in the frame it happens, and the WINDOW
+    // still presents at kFrameHz.
     constexpr int kMeterHz  = 30;
     // The engine's poll runs the source's analysis — for the mock that is a
     // 2048-point FFT.  At kFrameHz that was 120 FFTs a second to feed displays

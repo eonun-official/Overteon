@@ -5,14 +5,14 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "OvSource.h"
-
-class OverteonProcessor;
+#include "OverteonProcessor.h"   // fftOrder/fftSize/specRingSize, one source of truth
 
 class OvJuceSource : public OvSource
 {
@@ -66,16 +66,21 @@ private:
 
     std::unique_ptr<juce::FileChooser> chooser;
 
-    static constexpr int kSpecBins = 128;
-    juce::dsp::FFT fft { 11 };
+    juce::dsp::FFT fft { OverteonProcessor::fftOrder };
     juce::dsp::WindowingFunction<float> window
-        { 1 << 11, juce::dsp::WindowingFunction<float>::hann };
-    std::array<float, (1 << 11) * 2> fftBuf {};
+        { OverteonProcessor::fftSize, juce::dsp::WindowingFunction<float>::hann };
+    std::array<float, OverteonProcessor::fftSize * 2> fftBuf {};
 
     /// Second analyser, for the input tap.  Its own FFT and window buffer so a
-    /// poll can return both spectra — the two taps are single-shot by design.
-    juce::dsp::FFT fftIn { 11 };
-    std::array<float, (1 << 11) * 2> fftInBuf {};
+    /// poll can return both spectra.
+    juce::dsp::FFT fftIn { OverteonProcessor::fftOrder };
+    std::array<float, OverteonProcessor::fftSize * 2> fftInBuf {};
+
+    /// Last ring counters this source read.  The analyser no longer waits for a
+    /// block boundary: it computes from the newest samples on every call, and
+    /// "no new samples" (transport stopped) is what makes it report nothing.
+    uint32_t lastInWritten  = 0;
+    uint32_t lastOutWritten = 0;
     /// Shared body of spectrum()/spectrumIn(); `inTap` picks the buffer.
     bool analyse (float* dest, int count, bool inTap);
 };

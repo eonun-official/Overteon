@@ -1,8 +1,12 @@
 import QtQuick
 
-// Preset trigger in the SIDECHAIN header pit: current preset name, then a
-// FACTORY / USER listing plus LOAD… / SAVE AS… (the #presetMenu of the
-// design, flattened to one column).  In-scene menu, see OvMenu.
+// Preset trigger in the SIDECHAIN header pit: the current preset name, then a
+// cascading folder tree plus LOAD… / SAVE AS….
+//
+// The tree is NOT flattened here any more.  The root panel shows the top-level
+// folders (Factory, User, and anything else found on disk); hovering a folder
+// opens its contents in a panel beside it, and a folder inside that panel opens
+// another one.  The panels themselves live in OvPresetFolderMenu.qml.
 Item {
     id: root
 
@@ -13,37 +17,19 @@ Item {
     implicitWidth: btnText.implicitWidth + 8
     implicitHeight: 20
 
-    readonly property int rowHeight: 24
-    readonly property int menuWidth: 156
+    Component { id: rootPanel; OvPresetFolderMenu { } }
 
-    function entries () {
-        const out = []
-        const p = (root.engine && root.engine.presets) ? root.engine.presets : ({})
-        for (const g of [ [ "FACTORY", "Factory" ], [ "USER", "User" ] ]) {
-            out.push ({ kind: "header", text: g[0], h: 22 })
-            const list = p[g[1]] || []
-            if (list.length === 0) out.push ({ kind: "empty", text: "(EMPTY)", h: 20 })
-            for (const n of list) out.push ({ kind: "preset", folder: g[1], text: n, h: rowHeight })
-        }
-        out.push ({ kind: "sep", text: "", h: 1 })
-        out.push ({ kind: "action", act: "load", text: "LOAD…", h: rowHeight })
-        out.push ({ kind: "action", act: "save", text: "SAVE AS…", h: rowHeight })
-        return out
-    }
-
-    readonly property var entryList: entries()
-
-    function menuHeight() {
-        let h = 6
-        for (const e of entryList) h += e.h
-        return h
-    }
+    /// The root panel, created on first open and reused afterwards.  It is
+    /// shown through OvMenu, so the shared click-catcher and Esc close it and
+    /// its child panels with it.
+    property var menu: null
 
     Text {
         id: btnText
         anchors.centerIn: parent
         text: root.current
-        color: (ma.containsMouse || menu.visible) ? root.accent : OvTheme.faint
+        color: (ma.containsMouse || (root.menu && root.menu.visible))
+               ? root.accent : OvTheme.faint
         font.family: OvTheme.uiFont
         font.pixelSize: 10
         elide: Text.ElideRight
@@ -56,104 +42,37 @@ Item {
         hoverEnabled: true
         onClicked: {
             if (root.engine) root.engine.refreshPresets()
-            if (menu.visible) { OvMenu.close() } else { root.openMenu() }
+            if (root.menu && root.menu.visible) OvMenu.close()
+            else root.openMenu()
         }
     }
 
-    function openMenu() {
+    function openMenu () {
         if (OvMenu.host === null) return
-        const p = root.mapToItem (OvMenu.host, 0, 0)
-        const x = Math.max (2, Math.min (OvMenu.host.width - menuWidth - 2,
-                                          p.x + root.width / 2 - menuWidth / 2))
-        OvMenu.show (menu, x, p.y + root.height + 7)
-    }
-
-    Item {
-        id: menu
-        visible: false
-        width: root.menuWidth
-        height: root.menuHeight()
-
-        Rectangle {
-            anchors.fill: parent
-            color: OvTheme.menuBg
-            border.color: OvTheme.line
-            radius: 5
-        }
-
-        Column {
-            x: 3
-            y: 3
-            Repeater {
-                model: root.entryList
-                delegate: Item {
-                    id: rowItem
-                    required property var modelData
-                    width: root.menuWidth - 6
-                    height: modelData.h
-
-                    Rectangle {
-                        visible: rowItem.modelData.kind === "sep"
-                        width: parent.width
-                        height: 1
-                        color: OvTheme.line
-                    }
-
-                    Text {
-                        visible: rowItem.modelData.kind === "header"
-                                 || rowItem.modelData.kind === "empty"
-                        anchors.left: parent.left
-                        anchors.leftMargin: 10
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: rowItem.modelData.text
-                        color: OvTheme.faint
-                        font.family: OvTheme.uiFont
-                        font.pixelSize: 9
-                    }
-
-                    Rectangle {
-                        visible: rowItem.modelData.kind === "preset"
-                                 || rowItem.modelData.kind === "action"
-                        anchors.fill: parent
-                        color: rowMa.containsMouse ? OvTheme.panel : "transparent"
-                    }
-
-                    Text {
-                        visible: rowItem.modelData.kind === "preset"
-                                 || rowItem.modelData.kind === "action"
-                        anchors.left: parent.left
-                        anchors.leftMargin: 12
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: rowItem.modelData.text
-                        color: rowMa.containsMouse ? OvTheme.ink : OvTheme.dim
-                        Behavior on color { ColorAnimation { duration: 120 } }
-                        font.family: OvTheme.uiFont
-                        font.pointSize: OvTheme.pt (9.5)
-                        font.letterSpacing: 1
-                    }
-
-                    MouseArea {
-                        id: rowMa
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        enabled: rowItem.modelData.kind === "preset"
-                                 || rowItem.modelData.kind === "action"
-                        onClicked: {
-                            const k = rowItem.modelData.kind
-                            if (k === "preset" && root.engine)
-                                root.engine.loadPreset (rowItem.modelData.folder,
-                                                        rowItem.modelData.text)
-                            else if (k === "action" && root.engine) {
-                                if (rowItem.modelData.act === "load") root.engine.loadPresetDialog()
-                                else root.engine.savePresetDialog()
-                            }
-                            OvMenu.close()
-                        }
-                    }
-                }
+        if (root.engine && root.engine.presets) {
+            if (root.menu === null) {
+                root.menu = rootPanel.createObject (OvMenu.host, {
+                    "engine": root.engine,
+                    "node": root.engine.presets,
+                    "path": "",
+                    "isRoot": true,
+                    "accent": root.accent
+                })
+            } else {
+                // refreshPresets() runs on every open; take the new tree.
+                root.menu.engine = root.engine
+                root.menu.node = root.engine.presets
             }
         }
+        if (root.menu === null) return
 
-        Component.onCompleted: if (OvMenu.host) parent = OvMenu.host
+        const host = OvMenu.host
+        const p = root.mapToItem (host, 0, 0)
+        const w = root.menu.width
+        const x = Math.max (2, Math.min (host.width - w - 2,
+                                          p.x + root.width / 2 - w / 2))
+        const y = Math.max (2, Math.min (p.y + root.height + 7,
+                                          host.height - root.menu.height - 2))
+        OvMenu.show (root.menu, x, y)
     }
 }

@@ -38,7 +38,7 @@ option(OVERTEON_PREVIEW_ONLY "Build only overteon-qml-preview (no JUCE plugin)" 
 #
 # This is a build decision, not a runtime switch: a fixed build cannot be
 # widened by anything, which is the point of it being a build flag.
-option(OVERTEON_RESIZABLE_WINDOW "Let the host resize the plug-in editor" OFF)
+option(OVERTEON_RESIZABLE_WINDOW "Let the host resize the plug-in editor" ON)
 
 if(OVERTEON_PREVIEW_ONLY)
     set(CMAKE_AUTOMOC ON)
@@ -49,6 +49,7 @@ if(OVERTEON_PREVIEW_ONLY)
     add_executable(overteon-qml-preview
         ../Source/ui/qt/preview/main.cpp
         ../Source/ui/qt/OvEngine.cpp
+        ../Source/ui/qt/OvPointer.cpp
         ../Source/ui/qt/OvParam.cpp
         ../Source/ui/qt/OvEqView.cpp
         ../Source/ui/qt/OvFogSource.cpp ../Source/ui/qt/OvFrameProbe.cpp
@@ -211,6 +212,7 @@ if(OVERTEON_QT_UI)
 
     target_sources(Overteon PRIVATE
         ../Source/ui/qt/OvEngine.cpp
+        ../Source/ui/qt/OvPointer.cpp
         ../Source/ui/qt/OvParam.cpp
         ../Source/ui/qt/OvJuceSource.cpp
         ../Source/ui/qt/OvEqView.cpp
@@ -226,30 +228,32 @@ if(OVERTEON_QT_UI)
         # Ardour/Mixbus ship Harrison LV2 plug-ins that do exactly that, and
         # without this the first QML compile jumps to a garbage address.  See
         # the file for the whole chain.
-        ../Source/ui/qt/OvCryptoShim.cpp
+        ../Source/ui/qt/OvCryptoShim.cpp)
 
+    if(UNIX AND NOT APPLE)
         # Fills in the glib symbols a host's bundled-but-outdated glib lacks.
         # Qt6Qml NEEDs Qt6Network, which NEEDs libproxy -> libpxbackend, and
         # libpxbackend is built against glib >= 2.80.  Ardour's official binary
         # ships its own older glib first on LD_LIBRARY_PATH, so loading this
         # plug-in failed with "libpxbackend-1.0.so: undefined symbol:
         # g_strv_builder_unref" before any of our code ran.  See the file.
-        ../Source/ui/qt/OvGlibShim.cpp)
+        target_sources(Overteon PRIVATE ../Source/ui/qt/OvGlibShim.cpp)
 
-    # Those symbols are the WHOLE POINT of that file, so they have to survive
-    # to the dynamic symbol table.  Two things would otherwise remove them:
-    #
-    #   * the target is built with -fvisibility=hidden, so they have to be
-    #     compiled with default visibility (the attribute in the source is not
-    #     enough on its own for every toolchain);
-    #   * the plug-in links with -flto, and link-time optimisation internalises a
-    #     global that nothing in the program references -- which is exactly the
-    #     case here, since the reference lives in libpxbackend.  Without
-    #     -fno-lto the object is optimised away and the .so exports nothing.
-    #     Verified: nm on the .so reported 0 of them until LTO was off.
-    set_source_files_properties(../Source/ui/qt/OvGlibShim.cpp PROPERTIES
-        COMPILE_OPTIONS "-fvisibility=default;-fno-lto"
-        COMPILE_FLAGS   "-fvisibility=default -fno-lto")
+        # Those symbols are the WHOLE POINT of that file, so they have to survive
+        # to the dynamic symbol table.  Two things would otherwise remove them:
+        #
+        #   * the target is built with -fvisibility=hidden, so they have to be
+        #     compiled with default visibility (the attribute in the source is not
+        #     enough on its own for every toolchain);
+        #   * the plug-in links with -flto, and link-time optimisation internalises a
+        #     global that nothing in the program references -- which is exactly the
+        #     case here, since the reference lives in libpxbackend.  Without
+        #     -fno-lto the object is optimised away and the .so exports nothing.
+        #     Verified: nm on the .so reported 0 of them until LTO was off.
+        set_source_files_properties(../Source/ui/qt/OvGlibShim.cpp PROPERTIES
+            COMPILE_OPTIONS "-fvisibility=default;-fno-lto"
+            COMPILE_FLAGS   "-fvisibility=default -fno-lto")
+    endif()
 
     # (The link-side half of this -- forcing OvGlibShim.o out of the shared
     # archive -- is per-format and lives in the PLUGIN_FORMATS loop below,
@@ -276,6 +280,20 @@ if(OVERTEON_QT_UI)
     # can unmap behind our back.
     target_link_libraries(Overteon PRIVATE
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::OpenGL)
+
+    if(WIN32 AND NOT QT6_IS_SHARED_LIBS_BUILD)
+        # A MODULE library does not get Qt's executable finalizers, so import
+        # the platform and QML plugins explicitly. Qt was built with /MT; every
+        # Overteon target must use the same runtime to remain a single binary.
+        set_property(TARGET Overteon PROPERTY MSVC_RUNTIME_LIBRARY
+            "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_link_libraries(Overteon PRIVATE
+            Qt6::QWindowsIntegrationPlugin
+            Qt6::qtquick2plugin
+            Qt6::qmlplugin
+            Qt6::modelsplugin
+            Qt6::workerscriptplugin)
+    endif()
 
     # OvQmlEditor walks and maps the host's X window chain itself
     if(UNIX AND NOT APPLE)
@@ -323,7 +341,7 @@ if(OVERTEON_QT_UI)
         endif()
 
         add_custom_command(OUTPUT ${_qsb}
-            COMMAND /usr/lib/qt6/bin/qsb --glsl 100,120,150,300es,310es,320,330,410,440
+            COMMAND Qt6::qsb --glsl 100,120,150,300es,310es,320,330,410,440
                     -o ${_qsb} ${_src}
             DEPENDS ${_src} ${_ov_blurfunc}
             COMMENT "qsb ${_shname}")
@@ -373,6 +391,11 @@ if(OVERTEON_QT_UI)
                 ../Source/ui/qt/ov_ui.qrc ${OVERTEON_SHADER_QRC})
             set_target_properties(Overteon_${_fmt} PROPERTIES AUTORCC ON)
             add_dependencies(Overteon_${_fmt} overteon_shaders)
+
+            if(WIN32 AND NOT QT6_IS_SHARED_LIBS_BUILD)
+                set_property(TARGET Overteon_${_fmt} PROPERTY MSVC_RUNTIME_LIBRARY
+                    "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+            endif()
 
             # -z,nodelete: the host must not unmap this module while it runs.
             #
@@ -430,6 +453,29 @@ if(OVERTEON_QT_UI)
         endif()
     endforeach()
 
+    if(WIN32 AND QT6_IS_SHARED_LIBS_BUILD AND TARGET Overteon_VST3)
+        # MSVC cannot delay-load Qt DLLs because they export data symbols. Keep
+        # the host-facing VST3 free of Qt imports instead: this loader resolves
+        # the real module by absolute path, which also searches its own folder
+        # for Qt and the other private runtime DLLs.
+        set_target_properties(Overteon_VST3 PROPERTIES
+            OUTPUT_NAME "OverteonCore"
+            SUFFIX ".dll")
+
+        add_library(Overteon_VST3_Bootstrap MODULE ../Source/src/OvVst3Bootstrap.cpp)
+        add_dependencies(Overteon_VST3_Bootstrap Overteon_VST3)
+        # The bootstrap is what the host loads directly, before we control the
+        # DLL search path. Static CRT keeps its imports down to KERNEL32, so it
+        # loads even on a machine without the VC++ redistributable.
+        set_property(TARGET Overteon_VST3_Bootstrap PROPERTY
+            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        set_target_properties(Overteon_VST3_Bootstrap PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "Overteon"
+            SUFFIX ".vst3"
+            LIBRARY_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:Overteon_VST3>")
+    endif()
+
     # host-free viewer: same QML, mock parameter source
     #
     # Not built for Windows.  It is a development instrument -- it opens its own
@@ -440,6 +486,7 @@ if(OVERTEON_QT_UI)
     add_executable(overteon-qml-preview
         ../Source/ui/qt/preview/main.cpp
         ../Source/ui/qt/OvEngine.cpp
+        ../Source/ui/qt/OvPointer.cpp
         ../Source/ui/qt/OvParam.cpp
         ../Source/ui/qt/OvEqView.cpp
         ../Source/ui/qt/OvFogSource.cpp ../Source/ui/qt/OvFrameProbe.cpp

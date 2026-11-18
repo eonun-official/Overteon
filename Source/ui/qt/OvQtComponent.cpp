@@ -5,6 +5,13 @@
 
 #include <QWindow>
 
+#if JUCE_WINDOWS
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <cstdio>
 #include <cstdlib>
 
@@ -84,6 +91,31 @@ public:
         // NSViewComponent and HWNDComponent use, and it needs no raw window
         // handles at all.
         const auto area = peer->getAreaCoveredBy (*component);
+
+       #if JUCE_WINDOWS
+        // The native client rectangle is the authoritative size of the frame
+        // that hosts the QWindow. JUCE editor bounds are logical on Windows,
+        // while this rectangle is physical and QWindow geometry is in DIPs.
+        // The Qt component fills the editor, so its origin is (0, 0).
+        RECT clientRect {};
+        const auto nativeHandle = static_cast<HWND> (peer->getNativeHandle());
+        if (nativeHandle != nullptr && GetClientRect (nativeHandle, &clientRect) != 0)
+        {
+            const int physicalWidth  = clientRect.right - clientRect.left;
+            const int physicalHeight = clientRect.bottom - clientRect.top;
+            if (physicalWidth > 0 && physicalHeight > 0)
+            {
+                const qreal dpr = window->devicePixelRatio();
+                expectedGeometry = QRect (0, 0,
+                                          qRound (physicalWidth  / dpr),
+                                          qRound (physicalHeight / dpr));
+                if (area.getWidth() > 0)
+                    lastHostScale = (double) physicalWidth / (double) area.getWidth();
+                window->setGeometry (expectedGeometry);
+                return;
+            }
+        }
+       #endif
 
         // ---- the HOST'S scale factor ------------------------------------
         //
@@ -176,15 +208,15 @@ public:
         // knowing, or caring, whether the factor came from the host, the
         // display, or both -- and it is a plain JUCE call, so the same code
         // runs on Windows, macOS and Linux.
-        const auto origin = peer->localToGlobal (juce::Point<int> (area.getX(),
-                                                                   area.getY()));
-        const auto far    = peer->localToGlobal (juce::Point<int> (area.getRight(),
-                                                                   area.getBottom()));
+        const auto origin     = peer->localToGlobal (juce::Point<int> (area.getX(),
+                                                                       area.getY()));
+        const auto bottomRight = peer->localToGlobal (juce::Point<int> (area.getRight(),
+                                                                        area.getBottom()));
 
         // physical pixels -> device-independent ones, which is the unit Qt
         // multiplies by devicePixelRatio to build the native window.
-        const int physW = far.x - origin.x;
-        const int physH = far.y - origin.y;
+        const int physW = bottomRight.x - origin.x;
+        const int physH = bottomRight.y - origin.y;
 
         // The host's own factor, for the inverse conversion in eventFilter():
         // physical / logical.  Kept as a ratio rather than assuming it equals

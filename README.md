@@ -11,7 +11,7 @@ The original WebView version is kept as the visual reference in
 ## Layout
 
 ```
-Config/     build system — CMakeLists.txt, presets, toolchain files
+Config/     build system — CMakeLists.txt, CMakePresets.json, toolchain files
 Source/     everything that is compiled
   src/        the JUCE plug-in (processor, parameters, DSP)
   ui/qt/      the Qt editor: C++ items, QML, shaders, resources
@@ -81,6 +81,24 @@ Artefacts land in `Build/host/Overteon_artefacts/Release/` and
 
 `-DOVERTEON_QT_UI=OFF` builds the WebView editor instead (useful for
 side-by-side comparison with the original).
+
+## Licence
+
+Overteon is licensed under the **GNU Affero General Public License v3**
+(AGPL-3.0) — the full text is in [LICENSE](LICENSE).
+
+It builds on JUCE 8.0.13 (AGPLv3 option) and Qt 6.9.3 (GPLv3 open-source
+option, statically linked).  Every third-party component, its licence and the
+exact combination terms are declared in [NOTICE](NOTICE); verbatim licence
+texts are in [LICENSES/](LICENSES/).
+
+Because the complete corresponding source and build scripts are published here
+and tagged per release, the static-linking obligations of the GPLv3/LGPLv3 are
+satisfied — no separate object files are needed.
+
+The "Overteon" and "OVER|TEON" names and the logo are project marks and are not
+licensed by the AGPL-3.0; modified versions distributed to others must be
+renamed.  See [NOTICE](NOTICE).
 
 ## Try the UI without a host
 

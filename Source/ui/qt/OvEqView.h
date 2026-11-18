@@ -109,6 +109,11 @@ public:
         QString overlayKey;
         QImage glow;         ///< null when unchanged since `glowKey`
         quint64 glowKey = 0;
+        /// Grid lines brightened around the pointer.  Rebuilt only when the
+        /// pointer moves to a new 2 px cell; `lightRect` is empty when the
+        /// pointer is outside the plot.
+        QImage light;        ///< null when unchanged since the last 2 px cell
+        QRectF lightRect;
         /// The analyser outline, already flattened to a polyline, and the
         /// baseline it fills down to.  Both in item coordinates.
         QVector<QPointF> spectrum;
@@ -148,12 +153,6 @@ public:
     double fogDir() const;
     double fogRange() const;
     void setPrefix (const QString&);
-
-    /// How much this view is enlarged on its way to the window: 1.0 at the
-    /// design size, 2.0 when the window is twice as large.  The overflow fog
-    /// divides by it, because the fog's reach and blur profile are a fixed
-    /// treatment rather than geometry that belongs to the design.
-    double displayScale() const;
 
     /// Everything the overflow fog's strokes are drawn from, as one number: the
     /// five bands, the dB range, which half this is.  The fog rebuilds only when
@@ -231,7 +230,11 @@ public:
     /// the pointer walks more than 30 px from the node — and those arrive
     /// here.  The page sets this when it opens the editor so the plot can
     /// apply them.
-    Q_INVOKABLE void setEditingBand (int band) { m_editBand = band; }
+    Q_INVOKABLE void setEditingBand (int band)
+    {
+        m_editBand = band;
+        if (band < 0) m_editRect = QRectF();
+    }
 
     /// True while a field of that editor is being scrubbed.
     ///
@@ -253,6 +256,18 @@ public:
     /// editor that was being reached for.  With this set, that rule is skipped
     /// and the box's own pointerleave decides instead.
     Q_INVOKABLE void setEditingPointerInside (bool on) { m_editPointerInside = on; }
+
+    /// The node editor's rectangle, in this item's coordinates.
+    ///
+    /// The 30 px walk-away rule alone only knows about the NODE, so the path
+    /// from a node to the box it opened passes through dead space and the box
+    /// can close before the hand arrives.  With the box published here, the plot
+    /// treats "inside the node radius OR inside the box (plus a small margin)"
+    /// as still engaged, and only starts the close delay outside both.
+    Q_INVOKABLE void setEditingRect (qreal x, qreal y, qreal w, qreal h)
+    {
+        m_editRect = QRectF (x, y, w, h);
+    }
 
     /// Repaint now, because a parameter was written from outside a plot gesture.
     ///
@@ -331,6 +346,10 @@ signals:
     /// The page keeps it glued to the node until it is dismissed — same as
     /// openEdit() in web_fx/index.html.
     void nodeEditRequested (int band);
+    /// The pointer left the editor's node (or the plot).  QML starts a short
+    /// close delay instead of dismissing immediately, FabFilter-style: moving
+    /// onto the editor box or back onto a node cancels it.
+    void nodeEditHoverEnded();
     /// A double-click on empty canvas needed a new node and the pool was full.
     /// The page shows "ALL 5 NODES IN USE — REMOVE ONE FIRST" for 1.4 s.
     void poolExhausted();
@@ -367,7 +386,7 @@ private:
     double toY (double db, double h, double rangeDb, double top, double bottom) const;
     double fromY (double y, double h, double rangeDb, double top, double bottom) const;
 
-    static double bandMagDb (int type, double fs, double f, double q, double dB, double at);
+    double bandMagDb (int type, double fs, double f, double q, double dB, double at) const;
     double bandMagAt (const Band&, double atHz) const;
     double totalMagAt (double atHz) const;
     double displayMult() const;
@@ -394,18 +413,26 @@ private:
                         const float* spec, QRectF& dest);
     QRectF m_glowDest;
 
+    /// Grid lines under the pointer, slightly brighter.  Returns false when the
+    /// pointer is outside the plot; `dest` is the image's destination rect.
+    /// The image is cached against the pointer's 2 px cell, so a fast mouse
+    /// rebuilds it at most once per cell rather than once per event.
+    bool ensureCursorLight (double w, double h, double top, double bottom,
+                            QRectF& dest);
+
     // ---- scene-graph state ------------------------------------------------
     // The node tree is fixed after the first frame; only the contents of the
     // spectrum node and the textures change.
     QSGNode*         m_sgRoot    = nullptr;
     QSGGeometryNode* m_sgSpectrum = nullptr;
     QSGImageNode*    m_sgBg      = nullptr;
+    QSGImageNode*    m_sgLight   = nullptr;
     QSGImageNode*    m_sgGlow    = nullptr;
     QSGImageNode*    m_sgOverlay = nullptr;
     QString m_texKeyBg, m_texKeyGlow, m_texKeyOv;
     // The images the textures are uploaded from.  They must outlive the upload,
     // which happens later in the render pass, so they are kept here.
-    QImage  m_texImgBg, m_texImgGlow, m_texImgOv;
+    QImage  m_texImgBg, m_texImgGlow, m_texImgOv, m_texImgLight;
     // Textures replaced this frame, freed at the START of the next one.
     //
     // QSGImageNode::setTexture() does NOT take ownership, so every replaced
@@ -458,6 +485,18 @@ private:
     std::vector<double>     m_curveY;     // item-space y per sample
     int                     m_curveStep = 1;
 
+    /// One designed biquad kept between x positions.  The curve evaluates five
+    /// bands at ~1000 x per frame; without this every point re-designed every
+    /// filter.  Per view, so the SC and Post plots cannot evict each other.
+    struct CoefCacheEntry
+    {
+        int type = -1;
+        double fs = 0, f = 0, q = 0, dB = 0;
+        double b0 = 0, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+    };
+    mutable CoefCacheEntry m_coefCache[16];
+    mutable unsigned m_coefNext = 0;
+
     /// y of the total response at each x, sampled every `m_curveStep` px.
     /// Rebuilt only when the key changes; returns a reference so the curve
     /// and the fog can share one evaluation.
@@ -471,11 +510,27 @@ private:
     QPointF m_grabOffset;
     int    m_hoverBand = -1;
 
+    // ---- pointer hint ----------------------------------------------------
+    //  The grid lines near the cursor brighten a little.  The spot image is
+    //  small (a fixed radius around the pointer) and cached against a 2 px
+    //  cell, so this costs one small texture at most once per two pixels of
+    //  travel and nothing at all while the mouse is still.
+    QPointF m_lightPos;
+    bool    m_lightInside = false;
+    QImage  m_light;
+    QString m_lightKey;
+    std::chrono::steady_clock::time_point m_lightUpdateAt {};
+    /// Extra brightness once the pointer has been still: 0..1, ramped over
+    /// 200 ms after 80 ms without movement (measured from Pro-Q 4).
+    double  m_lightBoost = 0.0;
+    std::chrono::steady_clock::time_point m_lightLastMove {};
+
     /// Band the page's numeric editor is bound to (-1 = closed).  See
     /// setEditingBand(): the plot owns the dismissal gestures.
     int    m_editBand = -1;
     bool   m_editScrub = false;
     bool   m_editPointerInside = false;
+    QRectF m_editRect;
 
     bool m_spectrumGate = false;
     std::chrono::steady_clock::time_point m_glowPainted {};
@@ -556,11 +611,11 @@ private:
     /// presentation.
     /// What the analyser said last, untouched (ui/qt/OvEqView.cpp copies it out
     /// for the debug trace and for anything that wants the measured value).
-    float  m_specRaw[128] = {};
+    float  m_specRaw[ovspec::kBins] = {};
     /// What is on screen: the averaged outline.  The averaging — power domain,
     /// 1/2 octave along frequency, a one-pole along time — is ovspec::
     /// SpectrumBallistics (ui/qt/OvSpectrum.h), which is the whole state.
-    float  m_specShown[128] = {};
+    float  m_specShown[ovspec::kBins] = {};
     ovspec::SpectrumBallistics m_specBall;
     std::chrono::steady_clock::time_point m_specAdvanceAt {};   // per view
     std::chrono::steady_clock::time_point m_specShownAt {};

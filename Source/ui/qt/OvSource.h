@@ -31,6 +31,18 @@ struct OvMeters
     float inR  = -90.0f;
     float outL = -90.0f;
     float outR = -90.0f;
+    /// Sample peak of the same block, dB.  No smoothing of any kind: when the
+    /// audio stops this reads the floor on the very next block, which is what
+    /// the meter's INSTANT release displays.
+    float inPkL  = -90.0f;
+    float inPkR  = -90.0f;
+    float outPkL = -90.0f;
+    float outPkR = -90.0f;
+    /// Limiter gain reduction, dB (positive).  `gr` is smoothed over the same
+    /// 131 ms as the harmonic ratio; `grPeak` is this block's deepest
+    /// reduction.  The ring's second (counter-clockwise) arc reads these.
+    float gr     = 0.0f;
+    float grPeak = 0.0f;
     float harm = -100.0f;                 // harmonic/dry ratio, dB (smoothed)
     /// Same ratio before the DSP's 131 ms smoothing.  The ring's Peak display
     /// holds this instead of the mean — see OverteonProcessor.h.
@@ -84,7 +96,12 @@ public:
     virtual void restoreParams (const Snapshot&) = 0;
 
     // ---- presets -------------------------------------------------------
-    virtual std::string presetListJson() = 0;                       // {"Factory":[...],"User":[...]}
+    /// Recursive tree of the presets folder:
+    ///   { "name": "...", "folders": [ <same shape> ... ], "presets": ["..."] }
+    /// The menu walks it to any depth; no folder names are hard-coded.
+    virtual std::string presetListJson() = 0;
+    /// `folder` is the RELATIVE path of the folder inside presets/, e.g.
+    /// "Factory" or "Factory/Drums".
     virtual bool loadPresetNamed (const std::string& folder,
                                   const std::string& name) = 0;
     virtual void openLoadDialog() = 0;

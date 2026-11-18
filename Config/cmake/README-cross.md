@@ -25,23 +25,24 @@ for t in rcc moc uic; do
   chmod +x ~/hostqt-bin/$t
 done
 
-cmake -S . -B build-win -G Ninja \
-      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-clangcl-xwin.cmake \
+# from the repository root
+cmake -S Config -B Build/win-preview -G Ninja \
+      -DCMAKE_TOOLCHAIN_FILE=$PWD/Config/cmake/toolchain-clangcl-xwin.cmake \
       -DOVERTEON_PREVIEW_ONLY=ON -DCMAKE_BUILD_TYPE=Release \
       -DOVERTEON_HOST_RCC=$HOME/hostqt-bin/rcc
-ninja -C build-win
+ninja -C Build/win-preview
 ```
 
-Produces `build-win/overteon-qml-preview.exe` — a real PE32+ binary linking
+Produces `Build/win-preview/overteon-qml-preview.exe` — a real PE32+ binary linking
 the MSVC CRT (through clang-cl + lld-link, not MinGW).
 
 ## Running it in wine
 
 ```
-mkdir -p dist-win && cp build-win/overteon-qml-preview.exe dist-win/
+mkdir -p Build/dist-win && cp Build/win-preview/overteon-qml-preview.exe Build/dist-win/
 cp ~/Qt-msvc/6.9.3/msvc2022_64/bin/Qt6{C,Gu,Qml,Quick,QmlModels,
-    QmlWorkerScript,QmlMeta,Network,OpenGL}.dll dist-win/
-WINEPREFIX=~/.wine-onyx DISPLAY=:3 wine dist-win/overteon-qml-preview.exe
+    QmlWorkerScript,QmlMeta,Network,OpenGL}.dll Build/dist-win/
+WINEPREFIX=~/.wine-onyx DISPLAY=:3 wine Build/dist-win/overteon-qml-preview.exe
 ```
 
 Verified: the window opens, renders the full UI (design background

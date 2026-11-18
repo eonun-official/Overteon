@@ -50,7 +50,7 @@ Item {
             font.family: OvTheme.uiFont
             font.pixelSize: 11
             font.letterSpacing: 0.6
-            width: 168
+            width: 150
         }
 
         Repeater {
@@ -61,8 +61,8 @@ Item {
                 required property int index
                 required property string modelData
 
-                width: chipText.implicitWidth + 22
-                height: 24
+                width: chipText.implicitWidth + 20
+                height: 20
                 radius: 5
                 color: segRow.current === index ? OvTheme.panel : "transparent"
                 border.width: 1
@@ -88,9 +88,73 @@ Item {
                     onClicked: segRow.picked (chip.index)
                 }
 
-                Behavior on color { ColorAnimation { duration: 90 } }
             }
         }
+    }
+
+    // ---- one action chip ------------------------------------------------
+    //
+    // Unlike Seg's options, these are ACTIONS, not a persistent mode: ORIGINAL
+    // and DEFAULT resize the window now.  The lit state only says "the window
+    // is currently exactly this preset", which is why nothing lights while the
+    // user has an arbitrary stretched size.
+    component WinChip: Rectangle {
+        id: winChip
+
+        property string label: ""
+        property bool   lit: false
+        signal clicked()
+
+        width: winChipText.implicitWidth + 20
+        height: 20
+        radius: 5
+        color: winChip.lit ? OvTheme.panel : "transparent"
+        border.width: 1
+        border.color: winChip.lit
+                      ? (chipMouse.containsMouse ? OvTheme.ink : OvTheme.line)
+                      : OvTheme.line
+
+        Text {
+            id: winChipText
+            anchors.centerIn: parent
+            text: winChip.label
+            color: winChip.lit ? OvTheme.ink : OvTheme.faint
+            font.family: OvTheme.uiFont
+            font.pixelSize: 10
+            font.letterSpacing: 0.8
+        }
+
+        MouseArea {
+            id: chipMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: winChip.clicked()
+        }
+    }
+
+    // The limiter ring's RANGE, as a chip index.  Stored as the dB value so a
+    // future option does not renumber the existing ones.
+    readonly property var grRangeValues: [ 6, 12, 24, 48 ]
+    readonly property int grRangeIndex: {
+        const r = engine ? engine.grRange : 12
+        const i = grRangeValues.indexOf (r)
+        return i < 0 ? 1 : i
+    }
+
+    // Is the window currently exactly one of the presets?  tolerance 1.5 px:
+    // the host may round the size it gives us.
+    readonly property bool atOriginal: Math.abs (width  - OvTheme.designW) < 1.5
+                                    && Math.abs (height - OvTheme.designH) < 1.5
+    readonly property bool atDefault: engine !== null && engine.windowDefaultSaved
+                                   && Math.abs (width  - engine.defaultWindowW) < 1.5
+                                   && Math.abs (height - engine.defaultWindowH) < 1.5
+
+    property bool defaultFlash: false
+    Timer {
+        id: defaultFlashTimer
+        interval: 1200
+        onTriggered: root.defaultFlash = false
     }
 
     // ---- dim layer -------------------------------------------------------
@@ -106,8 +170,8 @@ Item {
     // ---- card ------------------------------------------------------------
     Rectangle {
         id: box
-        width: 560
-        height: content.implicitHeight + 52
+        width: 520
+        height: content.implicitHeight + 44
         anchors.centerIn: parent
         color: "#14161c"
         border.color: OvTheme.line
@@ -121,8 +185,8 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: 26
-            spacing: 16
+            anchors.margins: 22
+            spacing: 12
 
             // ---- title ---------------------------------------------------
             Row {
@@ -165,23 +229,19 @@ Item {
 
             Rectangle { width: parent.width; height: 1; color: OvTheme.line }
 
-            // ---- interpolation ------------------------------------------
+            // ---- one MODE per meter --------------------------------------
             //
-            // ---- one block per meter ------------------------------------
-            //
-            // Detector and interpolation belong to the METER, not to the panel.
-            // "Raw" is not a mode of the whole UI: it is a choice about how one
-            // meter's value is produced, in the same category as RMS vs peak —
-            // so each meter carries both, and picking raw on the ring leaves the
-            // two analysers easing as before.
+            // Detector and interpolation used to be two independent rows.  They
+            // are one now: RMS means the power mean AND the eased display,
+            // TRANSIENT means the loudest bin AND the raw display.  The mixed
+            // combinations were not choices anyone wanted, and the harmonic ring
+            // has no display smoothing at all — its mode only picks the
+            // measurement (DSP-smoothed ratio vs. this block's ratio).
             Repeater {
                 model: [
-                    { title: "HARMONIC MONITOR", det: "harmDetector",
-                      itp: "harmInterp" },
-                    { title: "UPPER SPECTRUM",   det: "upperDetector",
-                      itp: "upperInterp" },
-                    { title: "LOWER SPECTRUM",   det: "lowerDetector",
-                      itp: "lowerInterp" }
+                    { title: "HARMONIC MONITOR", mode: "harmMode" },
+                    { title: "UPPER SPECTRUM",   mode: "upperMode" },
+                    { title: "LOWER SPECTRUM",   mode: "lowerMode" }
                 ]
 
                 Column {
@@ -198,20 +258,11 @@ Item {
                     }
 
                     Seg {
-                        label: "DETECTOR"
-                        options: ["RMS", "TRUE PEAK"]
-                        current: root.engine ? root.engine[modelData.det] : 0
+                        label: "MODE"
+                        options: ["RMS", "TRANSIENT"]
+                        current: root.engine ? root.engine[modelData.mode] : 1
                         onPicked: function (i) {
-                            if (root.engine) root.engine[modelData.det] = i
-                        }
-                    }
-
-                    Seg {
-                        label: "INTERPOLATION"
-                        options: ["SMOOTH", "NONE"]
-                        current: root.engine ? root.engine[modelData.itp] : 0
-                        onPicked: function (i) {
-                            if (root.engine) root.engine[modelData.itp] = i
+                            if (root.engine) root.engine[modelData.mode] = i
                         }
                     }
                 }
@@ -219,22 +270,119 @@ Item {
 
             Rectangle { width: parent.width; height: 1; color: OvTheme.line }
 
-            // ---- what each choice means ----------------------------------
-            Text {
+            // ---- level meters --------------------------------------------
+            //
+            // The composite meter's bright bar reads each block's SAMPLE PEAK
+            // (not the 300 ms RMS), so INSTANT really is instant: stop the
+            // audio and it is gone on the next block.  VU is the standard
+            // movement — 300 ms to 99 % of a step, i.e. a 65 ms time constant.
+            Column {
                 width: parent.width
-                color: OvTheme.faint
-                font.family: OvTheme.uiFont
-                font.pixelSize: 9
-                lineHeight: 1.35
-                wrapMode: Text.WordWrap
-                textFormat: Text.StyledText
-                text: "<b>RMS</b> averages energy over the meter's release window — " +
-                      "what a level normally shows.  <b>True peak</b> oversamples 4× " +
-                      "(BS.1770 reconstruction) and holds the loudest bin, so an " +
-                      "inter-sample peak reads where it actually is instead of several " +
-                      "dB low.  Both use the same release, so the two traces decay " +
-                      "together.  <b>Raw</b> removes the display ramp entirely: the " +
-                      "value on screen is the last measurement, nothing interpolated."
+                spacing: 6
+
+                Text {
+                    text: "LEVEL METERS"
+                    color: OvTheme.dim
+                    font.family: OvTheme.uiFont
+                    font.pixelSize: 10
+                    font.letterSpacing: 1.4
+                }
+
+                Seg {
+                    label: "RELEASE"
+                    options: ["INSTANT", "VU 300 ms"]
+                    current: root.engine ? root.engine.meterRelease : 0
+                    onPicked: function (i) {
+                        if (root.engine) root.engine.meterRelease = i
+                    }
+                }
+            }
+
+            Rectangle { width: parent.width; height: 1; color: OvTheme.line }
+
+            // ---- limiter ring ---------------------------------------------
+            //
+            // The red arc on the harmonic ring is limiter gain reduction; this
+            // is the dB a full counter-clockwise turn represents.  The two
+            // scale labels on the ring are range/4 (9 o'clock) and 3*range/4
+            // (3 o'clock).
+            Column {
+                width: parent.width
+                spacing: 6
+
+                Text {
+                    text: "LIMITER RING"
+                    color: OvTheme.dim
+                    font.family: OvTheme.uiFont
+                    font.pixelSize: 10
+                    font.letterSpacing: 1.4
+                }
+
+                Seg {
+                    label: "RANGE"
+                    options: ["6 dB", "12 dB", "24 dB", "48 dB"]
+                    current: root.grRangeIndex
+                    onPicked: function (i) {
+                        if (root.engine) root.engine.grRange = root.grRangeValues[i]
+                    }
+                }
+            }
+
+            Rectangle { width: parent.width; height: 1; color: OvTheme.line }
+
+            // ---- window size --------------------------------------------
+            //
+            // ORIGINAL is the fixed 1040x772 design.  DEFAULT is the preset
+            // written by SAVE AS DEFAULT (until one exists it behaves exactly
+            // like ORIGINAL).  SAVE AS DEFAULT only records the CURRENT size:
+            // the window still opens at the LAST-USED size, so a later free
+            // stretch is what comes back next time unless the preset is saved
+            // again.  Nothing here is persisted as a "mode".
+            Column {
+                width: parent.width
+                spacing: 6
+
+                Text {
+                    text: "WINDOW SIZE"
+                    color: OvTheme.dim
+                    font.family: OvTheme.uiFont
+                    font.pixelSize: 10
+                    font.letterSpacing: 1.4
+                }
+
+                Row {
+                    spacing: 6
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "PRESET"
+                        color: OvTheme.dim
+                        font.family: OvTheme.uiFont
+                        font.pixelSize: 11
+                        font.letterSpacing: 0.6
+                        width: 150
+                    }
+
+                    WinChip {
+                        label: "ORIGINAL"
+                        lit: root.atOriginal
+                        onClicked: if (root.engine) root.engine.windowSizeOriginal()
+                    }
+                    WinChip {
+                        label: "DEFAULT"
+                        lit: root.atDefault
+                        onClicked: if (root.engine) root.engine.windowSizeDefault()
+                    }
+                    WinChip {
+                        label: "SAVE AS DEFAULT"
+                        lit: root.defaultFlash
+                        onClicked: {
+                            if (root.engine) root.engine.windowSizeSaveDefault()
+                            root.defaultFlash = true
+                            defaultFlashTimer.restart()
+                        }
+                    }
+                }
             }
         }
     }

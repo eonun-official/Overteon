@@ -18,6 +18,7 @@
 
 class OverteonProcessor;
 class QQuickView;
+class QEvent;
 
 namespace ovqt { class Component; }
 
@@ -34,6 +35,17 @@ public:
 private:
     void timerCallback() override;
 
+    /// Forward a key the QML scene did not consume to the HOST window.
+    ///
+    /// The embedded QWindow sits between the user and the host, so without
+    /// this every key died in Qt and Space/transport never reached the DAW.
+    /// The key is posted to the host window that had focus before this editor
+    /// (WM_SETFOCUS lParam) or, failing that, to the plug-in window's root
+    /// owner.  Nothing here changes the focus chain — the mouse wheel needs
+    /// the editor focused on Windows.  Returns true when the event was
+    /// consumed (i.e. posted).
+    bool forwardKeyToHost (QEvent* event);
+
     /// The design size in CSS (logical) pixels.  The editor is this size unless
     /// the host gives it less.
     static constexpr int OvThemeWidth  = 1040;
@@ -49,9 +61,15 @@ private:
     /// and every plug-in format without a per-platform code path.
     std::unique_ptr<ovqt::Component> qtComponent;
 
-    /// Design size in DEVICE pixels (design x devicePixelRatio), clamped to the
-    /// screen so a scaled editor never asks for more than it can show.
+    /// Design size in the units expected by the host, clamped to the screen.
     juce::Point<int> targetSize() const;
+
+    /// The fixed 1040x772 design, with the platform's DPI and the screen fit
+    /// applied.  ORIGINAL always returns this, whatever is saved on disk.
+    juce::Point<int> designSize() const;
+
+    /// Apply the screen fit and the hard size clamps to an arbitrary size.
+    juce::Point<int> clampSize (juce::Point<int>) const;
 
     /// How many timer ticks until the "did the size actually land" check runs.
     /// The host applies the resize asynchronously, so the size cannot be read
@@ -59,4 +77,11 @@ private:
     /// through a few frames.
     int sizeCheckIn = 0;
     bool sizeReported = false;
+
+    /// Editor-size persistence.  `saveSizeIn` is a debounce: a drag calls
+    /// resized() dozens of times, and the file is written once, half a second
+    /// after the last one.  `lastSavedSize` starts at the value loaded from
+    /// disk so opening and closing an untouched editor writes nothing.
+    int saveSizeIn = 0;
+    juce::Point<int> lastSavedSize;
 };
