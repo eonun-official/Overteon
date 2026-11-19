@@ -22,6 +22,38 @@ Item {
 
     readonly property real norm: param ? Math.max (0, Math.min (1, param.norm)) : 0
     readonly property double value: param ? param.value : 0
+
+    // Wheel state.  The accumulator turns sub-detent deltas into whole notches;
+    // wheelHeld marks a gesture that the wheel opened, so the timeout that ends
+    // it can never be confused with a drag the pointer is still holding.
+    property real wheelAccum: 0
+    property bool wheelHeld: false
+
+    /// One wheel notch: `dir` is +1 up, -1 down.
+    function applyWheel (dir, shift) {
+        if (! param) return
+        if (param.isChoice || param.isBool) {
+            const count = param.isBool ? 2 : param.choices.length
+            if (count < 2) return
+            const from = Math.round (param.norm * (count - 1))
+            const to   = Math.max (0, Math.min (count - 1, from + dir))
+            if (to !== from) param.setNorm (to / (count - 1))
+            return
+        }
+        const step = shift ? 0.01 : 0.04
+        param.setNorm (Math.max (0, Math.min (1, param.norm + dir * step)))
+    }
+
+    Timer {
+        id: wheelEnd
+        interval: 350
+        repeat: false
+        onTriggered: {
+            if (root.wheelHeld && root.param) root.param.endGesture()
+            root.wheelHeld = false
+        }
+    }
+
     readonly property string shownText: {
         if (! param) return "—"
         if (fmt) return fmt (param.value)
@@ -110,6 +142,47 @@ Item {
         }
         onReleased: if (root.param) root.param.endGesture()
         onDoubleClicked: if (root.param) root.param.resetToDefault()
+
+        // ---- wheel ------------------------------------------------------
+        // Same target as dragging: the ring.  A notch moves a continuous
+        // parameter by 0.04 of its travel, which is the step the EQ canvas
+        // already uses for Q, so the two feel alike; Shift makes it 0.01.
+        //
+        // A discrete parameter moves exactly one item per notch instead, and it
+        // is computed from the item INDEX rather than by adding 1/(n-1) to the
+        // normalised value: that fraction is not exactly representable, so
+        // repeated additions drift off an item boundary and a 3-way switch
+        // eventually needs two notches to move.
+        onWheel: (wheel) => {
+            if (! root.param) { wheel.accepted = false; return }
+
+            // angleDelta is in eighths of a degree and one detent is 120.
+            // Devices that only report pixelDelta are accumulated against the
+            // same threshold, so a trackpad moves more slowly instead of firing
+            // a whole step for every pixel of travel.
+            const dy = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y
+                                                : wheel.pixelDelta.y
+            if (dy === 0) { wheel.accepted = false; return }
+
+            root.wheelAccum += dy
+            const notches = Math.trunc (root.wheelAccum / 120)
+            if (notches === 0) { wheel.accepted = true; return }
+            root.wheelAccum -= notches * 120
+
+            if (! root.wheelHeld) {
+                root.param.beginGesture()
+                root.wheelHeld = true
+            }
+            // A flung wheel can deliver a large delta at once; the count is
+            // capped so one event cannot spin a parameter through its range.
+            const count = Math.min (Math.abs (notches), 32)
+            const dir = notches > 0 ? 1 : -1
+            const shift = (wheel.modifiers & Qt.ShiftModifier) !== 0
+            for (let i = 0; i < count; ++i)
+                root.applyWheel (dir, shift)
+            wheelEnd.restart()
+            wheel.accepted = true
+        }
     }
 
     // Measured against the reference: the CSS .knob is a flex column
