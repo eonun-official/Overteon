@@ -1,227 +1,233 @@
 # Overteon
 
-The **Qt6/QML** editor for Overteon.  Same DSP, same parameter set, same
-presets, same plug-in identity as the original — the editor is rewritten in
-Qt Quick instead of the HTML/JS WebView.
+**一个把侧链均衡、饱和、谐波提取和后置均衡放在同一条信号拓扑里的效果器。**
 
-The original WebView version is kept as the visual reference in
-`Assets/reference/original/web_fx/`: every screen in `Source/ui/qt/qml/` is a
-1:1 port of a construct in that page.
+Overteon 不是为了"再加一个失真插件"。它把饱和拆成两步：先用一条 EQ 决定
+饱和器**听到**什么，再从饱和结果里**只取新产生的谐波**叠回干声。这样你可以
+只加厚度而不改音色，也可以把 SC EQ 的塑形变成谐波的颜色而不是干声的频响。
 
-## Layout
+默认模式是 **HARMONIC**。
 
 ```
-CMakeLists.txt  forwards into Config/, so `cmake ..` works from a build dir
-Config/     build system — CMakeLists.txt, presets, toolchain files
-Source/     everything that is compiled
-  src/        the JUCE plug-in (processor, parameters, DSP)
-  ui/qt/      the Qt editor: C++ items, QML, shaders, resources
-  web_fx/     the WebView editor's assets (legacy -DOVERTEON_QT_UI=OFF path)
-  third_party/ vendored JUCE, VST2 SDK, WebView2 (not tracked)
-Tools/      developer tools that are not built into the product
-  units/      headless checks for the meters and the analyser
-  blurdemo/   the CPU-vs-GPU blur comparison
-  preview-server/  the debug server the WebView editor talks to
-Scripts/    task scripts — demo, packaging, Windows and VM deployment
-Assets/     data that ships or documents the product
-  presets/    factory and user .hinj
-  reference/  the original web UI, kept for comparison
-  ov_shaders/ generated shader bundle manifest
-  docs/       changelogs and build notes
-Build/      all build output (git-ignored, except dist-win/): the product
-            directories, the ninja trees, and the release archives
+输入 ─────────────────────────────────────→ 对齐干声 ─┐
+输入 → SC EQ → 过采样饱和 → 提取谐波 → 去强调 ────────→ 相加 → Post EQ → 输出
 ```
 
-Nothing outside `Config/`, `Source/`, `Tools/`, `Scripts/` and `Assets/` is
-tracked, apart from the top-level `CMakeLists.txt`, the README and the
-`.gitignore`. Every path inside the build system is relative — the tree is
-meant to be cloned anywhere, and the products still land in `<repo>/Build/`
-whichever directory the build tree is in.
+核心关系：
 
-## Product identity
-
-Identical to the original plug-in, so a session saved with the old build loads
-in this one without remapping, and `.hinj` presets work in both directions:
-
-| | value |
-|---|---|
-| product name | `Overteon` |
-| LV2 URI | `https://eonun.com/plugins/Overteon` |
-| bundle id | `com.eonun.overteon` |
-| plug-in code | `Ovtn` |
-| bundle | `Overteon.lv2` / `Overteon.vst3` |
-| preset directory | `~/Eonun/Overteon Presets` |
-| QML import namespace | `Overteon 1.0` |
-| wordmark | `OVER\|TEON` |
-| parameters | 58, unchanged |
-| editor | Qt6 / QML + RHI |
-
-Because the identity is the original one, this build and the original WebView
-build cannot be installed side by side — install one or the other.
-
-## Build
-
-The build system is `Config/CMakeLists.txt`, and the CMakeLists at the top of
-the repository just forwards into it, so either entry point works:
-
-```sh
-# conventional
-mkdir -p build && cd build && cmake .. -G Ninja && ninja vst3
-
-# explicit, from the repository root
-cmake -S . -B Build/host -G Ninja -DCMAKE_BUILD_TYPE=Release
-ninja -C Build/host vst3
+```text
+输出 = 干声 + HARMONICS × 去强调后的谐波层
 ```
 
-`-G Ninja` is worth typing: the default generator here is Unix Makefiles, and
-`cmake ..` alone gives you `make vst3` instead.
+干声本身不经过 SC EQ，也不经过它的反向 EQ。它只经过 Post EQ、输出增益、
+立体声处理和 Auto Gain——所以"塑形谐波"和"塑形干声"是两件独立的事。
 
-A build tree remembers which entry point configured it — CMake refuses to
-reuse `Build/host` once it was configured through the other one. Pick one per
-tree, or start a fresh directory: `cmake -S . -B Build/host` after
-`cmake -S Config -B Build/host` fails with "does not match the source used to
-generate cache" until you delete the cache.
+---
 
-### Targets
+## 三种模式
 
-```sh
-ninja vst3   ninja vst2   ninja lv2   ninja standalone
-ninja preview      # overteon-qml-preview, the UI without a host
-ninja tools        # ovctl and the headless meter/analyser checks
-ninja package      # Build/packages/<build name>.zip
-ninja              # everything
-```
+下方 **MODE** 切换。
 
-Each format target builds the shared code plus that one format. JUCE's own
-targets (`Overteon_VST3`, `Overteon_LV2`, `Overteon_VST`, `Overteon_Standalone`)
-still exist; the short names are the ones to type. A format left out of
-`OVERTEON_FORMATS` has no short name, so asking for it fails with ninja's own
-"unknown target" rather than silently building nothing.
-
-`vst2` means VST2 — that is the format, not a typo for a second VST3.
-
-### Windows x64 cross-compile
-
-```sh
-cmake -S . -B Build/win -G Ninja \
-      -DCMAKE_TOOLCHAIN_FILE=$PWD/Config/cmake/toolchain-clangcl-xwin.cmake \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_PREFIX_PATH=$HOME/Qt-msvc/6.9.3/msvc2022_64
-WINEPATH=$HOME/Qt-msvc/6.9.3/msvc2022_64/bin ninja -C Build/win vst3
-```
-
-`CMAKE_TOOLCHAIN_FILE` must be absolute: CMake resolves it against the *build*
-directory, not the source directory. The presets in `Config/CMakePresets.json`
-have the same problem and are therefore only useful for the host builds.
-
-Products land in one directory per build, named for what it is, where and
-when it was made:
-
-```
-Build/Overteon_20261116-191811_unknown_linux_x86_64/
-    VST3/Overteon.vst3
-    LV2/Overteon.lv2
-    VST/libOverteon.so
-    Standalone/Overteon
-    overteon-qml-preview
-    ovctl
-Build/Overteon_20261116-192422_unknown_windows_x86_64/
-    VST3/Overteon.vst3   VST/Overteon.dll   LV2/Overteon.lv2   Standalone/Overteon.exe
-```
-
-`Build/host` and `Build/win` are the ninja build trees — scratch, not products.
-The product directory name is `<BuildName>_<Time>_<Host>_<OS>_<Platform>`, where
-the time is the time of *configuration* and is cached so that re-running cmake
-keeps writing into the same directory; `-DOVERTEON_BUILD_STAMP=...` chooses a
-different one. A non-Release build type is part of `<BuildName>`
-(`Overteon-Debug_...`) because single-config generators have no per-configuration
-subdirectory. Scripts never hard-code this path: they source
-`Scripts/product.sh` and call `product_dir linux|windows`.
-
-`-DOVERTEON_QT_UI=OFF` builds the WebView editor instead (useful for
-side-by-side comparison with the original).
-
-## What ends up in the binary
-
-Qt is linked as a shared library, as its licence requires, so the plug-in
-contains no Qt code — the modules appear in its `DT_NEEDED` / import table and
-are loaded by the host at run time. What the binary *does* carry for no good
-reason is a symbol table: `.symtab` and its 868 KB string table exist for a
-debugger and are dead weight in a plug-in that ships. Release builds now link
-with `-s`:
-
-| artefact | before | after |
+| 模式 | 做什么 | 适合 |
 |---|---|---|
-| VST3 `Overteon.so` | 8 463 048 | 7 261 576 |
-| LV2 `libOverteon.so` | 8 442 640 | 7 069 128 |
-| Standalone `Overteon` | 9 010 976 | 7 725 696 |
+| **CLASSIC** | 常规饱和：输入 → 饱和 → 按 HARMONICS 与干声混合 → Post EQ | 单纯要密度、要湿干平衡 |
+| **HARMONIC** | 默认模式。只把新谐波叠回干声，干声原样保留 | 加厚、加空气、加颗粒，但不改原始音色 |
+| **SCHRANZ** | 输出 SC EQ 之后、饱和器之前的信号 | 检查饱和器"原本会听到什么"，或把 SC EQ 当一条失真前塑形通道 |
 
-`.dynsym` is untouched, so `lv2_descriptor`, `GetPluginFactory` and
-`VSTPluginMain` are all still exported and the plug-in still loads — verified by
-running the stripped LV2 in `jalv.gtk3` and by `dlopen`ing all three formats.
-`-DOVERTEON_STRIP_SYMBOLS=OFF` keeps the symbols; Debug and RelWithDebInfo builds
-keep them regardless, because those exist to be debugged.
+三种模式的差别是**拓扑**，不是预设强度。CLASSIC 里 SC EQ 不参与（面板灰化），
+SCHRANZ 里饱和器与 Post EQ 都不参与（面板灰化），HARMONIC 里两者都在。
 
-Windows needs nothing here: a PE file has no symbol table, the symbols go in a
-separate `.pdb`, and packaging already leaves that out.
+---
 
-## The Qt that ships beside it
+## 界面
 
-A Windows plug-in cannot use the host's Qt, so it needs its own — and copying the
-whole Qt install is how a 12 MB plug-in becomes 274 MB of 110 DLLs, most of them
-never opened. The import graph reaches nine modules and one platform plug-in:
-
-```sh
-python3 Scripts/qt-closure.py Overteon.dll --qt $QT --report
-#  9 module DLL(s), 1 plug-in(s), 35.2 MB of 174 available
+```
+┌──────────────────────────────────────────────────────────────┐
+│ OVER|TEON                              BYP  A  B  INIT       │
+├──────────────────────────────────────────────────────────────┤
+│  SIDECHAIN EQ    [5 个节点 · 实时频谱 · SC EQ 量程]           │
+├──────────────────────────────────────────────────────────────┤
+│                    ◜ 谐波环 / 四路电平 ◝                      │
+├──────────────────────────────────────────────────────────────┤
+│  POST EQ         [5 个节点 · 实时频谱 · 量程 · 限制器]        │
+├──────────────────────────────────────────────────────────────┤
+│  INPUT  DRIVE  EVEN/ODD  HARMONICS  HARM GAIN  DE-EMPH  …     │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-`Scripts/qt-closure.py` walks the PE import tables with `llvm-objdump`, which
-reads a Windows binary on this Linux host — that is why it exists rather than
-`windeployqt`. `--with-qt` on the packager and `Scripts/deploy-win.sh` both use
-it, taking the Windows archive from 78 MB to 26 MB.
+**中央的环**同时是三样东西：谐波环、四路电平表、显示设置的入口。
 
-## Package
+**谐波环**量的是 `谐波层 RMS / 干声 RMS`，映射到 0…100%。
 
-```sh
-ninja -C Build/host package        # -> Build/packages/Overteon_<stamp>.zip
-ninja -C Build/win  package        # the Windows archive, cross-built on Linux
-```
+- 0% 不是"绝对没有谐波"，而是低于显示窗口
+- 100% 表示谐波层已经和干声同一量级
+- 它**不是**"谐波占总输出的百分比"，也不是 THD
 
-`Scripts/make-package.sh` stages the plug-in formats, the factory presets, the
-changelogs and a generated `README.txt` into one folder named for the version
-and the platform, and zips it. The archive keeps the product directory's name,
-so it always says which build it came from, and a `.sha256` sits beside it. The
-archive is verified after writing (`unzip -t` plus a check that the bundles are
-present), because a truncated archive is the classic packaging bug.
+**四路电平**：上排 OUT L/R（梅红），下排 IN L/R（青绿），RMS 检波，各带
+峰值尾条。它们不是 LUFS 响度计，也不是过采样真峰值表。
 
-Developer tools (`overteon-qml-preview`, `ovctl`, the headless tests,
-`libOverteon_SharedCode.a`) and Windows import libraries are not included —
-they are not something a user installs.
+---
 
-```sh
-./Scripts/make-package.sh --os windows --with-qt   # carry the Qt6 runtime too
-./Scripts/make-package.sh --product DIR --out DIR --force
-```
+## 八个旋钮
 
-A Windows archive is not runnable on its own, because the editor resolves
-`Qt6Core.dll` and friends at load time; `--with-qt` copies the Qt runtime into
-`qt/` inside the archive and says so in its README. It is off by default so the
-download stays 12 MB instead of 78 MB.
+| 旋钮 | 范围 | 作用 |
+|---|---|---|
+| **INPUT** | ±24 dB | 进链电平。会改变饱和器被推动的程度 |
+| **DRIVE** | 0.00 … 10.00 | 饱和强度。越高通常谐波越多 |
+| **EVEN/ODD** | −100% … +100% | 偶次 ↔ 奇次谐波倾向。居中为原始平衡 |
+| **HARMONICS** | 0 … 100% | Classic：干湿混合；Harmonic：谐波层叠加量 |
+| **HARM GAIN** | −12 … +24 dB | 只调谐波层的增益，不动干声 |
+| **DE-EMPH** | 0 … 100% | Bell/Shelf 反向 EQ 的程度；100% 为完整去强调 |
+| **AIR PROTECT** | 2 k … 20 kHz | 只低通谐波支路，保护干声的空气感 |
+| **OUTPUT** | ±24 dB | 最终输出 |
 
-`-DOVERTEON_AUTO_PACKAGE=ON` adds packaging to `ALL`, so a plain `ninja` also
-produces the archive. It costs a `find` when nothing changed, since the script
-exits immediately if the archive is newer than every product.
+三个饱和形态：**TANH**（平滑直接）、**TUBE**（带不对称，配 EVEN/ODD 用）、
+**TAPE**（较柔和、瞬态收束）。这些是插件内不同的非线性曲线，不是对某台
+硬件的建模。
 
-`Scripts/package.sh` is a different job: it installs the LV2 bundle into
-`~/.lv2` on this machine and verifies the copy.
+**SOLO HARM** 关掉干声只听谐波支路——检查 SC EQ、DRIVE、EVEN/ODD、DE-EMPH、
+AIR PROTECT 到底生成了什么。用它时电平会有很大差异，注意 OUTPUT。
 
-## Try the UI without a host
+**AUTO GAIN** 按处理前后 RMS 做平滑补偿，让开关效果时更容易公平比较。它不能
+保证感知响度完全一致，也不替代宿主最后的电平检查。
 
-```sh
-. Scripts/product.sh
-P=$(product_dir linux)
-"$P/overteon-qml-preview" --size 1040x772                # interactive
-"$P/overteon-qml-preview" --size 1040x772 --freeze --shot x.png
-```
+---
 
+## 两条 EQ
+
+上是 **SIDECHAIN EQ**（决定饱和器听到什么），下是 **POST EQ**（整理最终输出）。
+每条 5 个节点，每个节点都是完整的：
+
+- **8 种类型**：Bell、Notch、Low Shelf、High Shelf、Low Cut 12/24、High Cut 12/24
+- **全频段可放**：5 Hz … 20 kHz，任意节点任意类型
+- **每带独立 On/Off**：关掉的节点画成空心，但频率/增益/Q/类型都留着，开回来就一步
+- **量程独立**：SC EQ 有 ±12 / ±24 / ±48 / ±90 dB，Post EQ 有 ±3 / ±6 / ±12 / ±30 dB
+
+操作：拖动节点移位、滚轮调 Q、双击切换该带开关、悬停打开数值编辑框直接改。
+
+### SC EQ 为什么要"塑形"
+在 HARMONIC 模式里，抬高 SC EQ 的某个频段等于让饱和器更用力地处理那一块——
+它改变的是**谐波的颜色和密度**，不是干声的频响。切掉一个频段则会减少那里
+产生的谐波。
+
+深削（高 Q + 大量削减）本身会产生振铃——这是滤波器数学，不是 bug。想避免就把
+Q 收回来，或者改用 Shelf / Cut 类型。
+
+---
+
+## 立体声、过采样、限制器
+
+**立体声**：`ST`（正常）、`MID`（只保留处理后的中央，两侧回到干声）、
+`SIDE`（只保留处理后的两侧）、`M/S`（两者都在 M/S 域处理）。
+
+**SAT OS**：2x / 4x / 8x / 16x / 32x，默认 4x。倍率越高混叠越少、CPU 越多。
+这是**本机全局偏好**，不随预设走。
+
+**输出限制器**（Post EQ 标题栏）：
+
+| 模式 | 行为 | 延迟 |
+|---|---|---|
+| **OFF** | 完全旁通 | 0 |
+| **CLIP** | 0 延迟软膝削波，−1 dBFS 起弯 | 0 |
+| **MODERN** | 1.5 ms 前瞻，程序相关释放（默认） | 1.5 ms + OS |
+| **TRUE PEAK** | 2.5 ms 前瞻，上限 −0.1 dBFS | 2.5 ms + OS |
+
+MODERN 和 TRUE PEAK 不是削波器：它们先用前瞻算出增益，再把整段波形按同一条
+平滑曲线缩放，所以不产生静态削波谐波。**LIM OS** 是限制器独立的过采样。
+
+`OFF` 时输出不再保证低于 0 dB。
+
+---
+
+## 表头
+
+| 控件 | 行为 |
+|---|---|
+| **BYP** | 真正的旁通参数，宿主能看到、能自动化；宿主自己的 bypass 按钮和它同一个开关。旁通时电平表继续显示**输入** |
+| **A / B** | 两个独立按钮，同时常显。**左键**选中某个槽，**右键**把该槽复制到另一槽 |
+| **INIT** | 参数全部复位 |
+| **点击谐波环** | 打开显示设置：三个表**各自**选 Detector（`RMS` / `TRUE PEAK`）和 Interpolation（`SMOOTH` / `NONE`）。全部是显示设置，不碰一个采样点 |
+| **悬停 logo** | 显示提示；点击打开关于面板 |
+
+A/B 存的是完整参数快照，所以来回切是**比较**，不是单向棘轮。
+
+---
+
+## 预设
+
+`.hinj` 格式，`Factory/` 与 `User/` 两个目录，与早期版本双向互通。
+
+`SAT OS` 是全局偏好不是预设内容——加载预设不会覆盖你当前的过采样选择。
+`INIT` 是唯一的全参数复位，会把过采样也带回默认。
+
+---
+
+## 从哪里开始
+
+四个起点，都不需要先动 EQ：
+
+| 想做的事 | 设置 |
+|---|---|
+| **只要厚度，不改音色** | HARMONIC，`DRIVE` 2–3，`HARMONICS` 30–50%，SC EQ 保持平 |
+| **常规饱和** | CLASSIC，`DRIVE` 4–6，`HARMONICS` 60–80%，用 Post EQ 修整 |
+| **只处理中央**（人声、底鼓、贝斯） | `STEREO` = MID，其余照常 |
+| **做声音设计** | SCHRANZ 直接用 SC EQ 深削塑形，或 HARMONIC 里用高 Q 的 Notch 造共振 |
+
+判断手段只有两个：**SOLO HARM** 听谐波支路，**A/B** 比两套参数。先把 `DRIVE`
+和 `HARMONICS` 的关系摸清，再动 SC EQ——SC EQ 改变的是谐波的颜色，不是音量。
+
+---
+
+## 安装
+
+发行包里有四种格式：
+
+| 格式 | Linux | Windows |
+|---|---|---|
+| VST3 | `~/.vst3/Overteon.vst3` | `C:\Program Files\Common Files\VST3\` |
+| LV2 | `~/.lv2/Overteon.lv2` | 放进 LV2 路径 |
+| VST2 | `~/.vst/Overteon.so` | `C:\Program Files\VstPlugins\Overteon.dll` |
+| Standalone | 直接运行 | 直接运行 |
+
+Linux 只需要插件文件本身。Windows 发行包另外附带编辑器所需的运行库，
+不需要单独安装——若你拿到的是不含运行库的精简包，插件在宿主里会直接加载失败
+（宿主通常报"插件缺失"或"无法加载"），补上运行库即可。
+
+---
+
+## 兼容性
+
+| 项目 | 状态 |
+|---|---|
+| 参数数量 | 69，全部可自动化 |
+| 预设 | `.hinj` 双向互通 |
+| 旧工程 | 产品身份与参数 ID 未变，可直接打开，无需重映射 |
+| 已验证宿主 | Ardour 9.8、Mixbus 12、jalv |
+| 平台 | Linux 已验证；Windows 在 wine 中验证；macOS 未测 |
+
+---
+
+## 已知限制
+
+- **EQ 悬停编辑框未在最后一次布局改动后复验。** 指针进入节点命中半径时打开
+  数值框的接线（`onHoverBandChanged` → `nodeEdit.open`）在代码里是完整的、
+  编译通过，但最后一次改完表头之后没有重新确认过。这一项不作"可用"声称。
+  双击切开关走的是另一条信号，不受此项影响。
+- **macOS 完全未测试。**
+- **可调窗口尺寸**是编译期开关，默认关。打开后的拉伸行为没有在真实宿主里逐项跑过。
+- **中央环的光晕**仍是较旧的绘制路径，尚未与其他部分统一——在很低的机器上
+  它可能比界面其余部分更耗资源。
+
+---
+
+## 许可与署名
+
+Overteon 以 **AGPL-3.0** 发布，完整条款见 `LICENSE`。
+
+它建立在 JUCE 与 Qt 之上，两者的许可选项与全部第三方组件声明见 `NOTICE`，
+逐条许可证原文在 `LICENSES/`。构建系统与依赖版本在 [technologies.md](technologies.md)。
+
+`Overteon` / `OVER|TEON` 名称与 logo 是项目标识，不随 AGPL-3.0 授权；
+修改后分发需要改名。
+
+制作：**Eur9ka**、**Eonun**、**Xyas**　设计：**Eonun**
