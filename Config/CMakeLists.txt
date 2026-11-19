@@ -268,6 +268,80 @@ option(OVERTEON_VENDORED_JUCE
 
 set(OVERTEON_JUCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Source/third_party/JUCE")
 
+# ---------------------------------------------------------------------------
+#  The one change this project makes to JUCE
+#
+#  JUCE builds juce_vst3_helper as a separate CMake project and configures it at
+#  build time, forwarding only the compiler paths.  Under a cross-compile that
+#  nested configure sees the HOST platform, probes clang-cl as if it were native
+#  and dies ("posix_spawn failed"), taking the VST3 target with it.  Upstream
+#  8.0.13 does not forward the toolchain, the emulator or the build type.
+#
+#  The patch lives in Config/cmake/patches/ and is applied to the submodule only
+#  when actually cross-compiling, so a host build leaves the submodule pristine
+#  and `git status` in it stays clean.  Applied idempotently: if the forwarded
+#  settings are already in the file, nothing happens.
+# ---------------------------------------------------------------------------
+if(CMAKE_CROSSCOMPILING AND WIN32)
+    find_program(OVERTEON_GIT git)
+
+    # Each entry is "patch file" then "text that proves it is already applied".
+    # Checking for a marker rather than trusting a state file keeps this
+    # idempotent: re-running cmake must not fail because the tree is already
+    # patched, and the next run repairs a half-patched tree.
+    set(_ov_juce_patches
+        "juce-vst3-helper-forward-toolchain.patch|CMAKE_CROSSCOMPILING_EMULATOR"
+        "juce-mingw-guard.patch|JUCE_MINGW 1")
+
+    foreach(_ov_entry ${_ov_juce_patches})
+        string(REPLACE "|" ";" _ov_split "${_ov_entry}")
+        list(GET _ov_split 0 _ov_file)
+        list(GET _ov_split 1 _ov_marker)
+        set(_ov_path "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/${_ov_file}")
+
+        if(NOT EXISTS "${_ov_path}")
+            message(FATAL_ERROR "cross-compiling needs ${_ov_path}, which is missing")
+        endif()
+
+        # The file a patch touches is read from the patch itself, so the marker
+        # is checked against the right target without a second table to keep in
+        # sync with the patches directory.
+        file(STRINGS "${_ov_path}" _ov_target_lines REGEX "^\\+\\+\\+ b/")
+        if(NOT _ov_target_lines)
+            message(FATAL_ERROR "${_ov_path} has no +++ header")
+        endif()
+        list(GET _ov_target_lines 0 _ov_target)
+        string(REGEX REPLACE "^\\+\\+\\+ b/" "" _ov_target "${_ov_target}")
+        string(STRIP "${_ov_target}" _ov_target)
+        set(_ov_target "${OVERTEON_JUCE_DIR}/${_ov_target}")
+
+        if(NOT EXISTS "${_ov_target}")
+            message(FATAL_ERROR "${_ov_file} targets ${_ov_target}, which does not exist")
+        endif()
+
+        file(READ "${_ov_target}" _ov_text)
+        string(FIND "${_ov_text}" "${_ov_marker}" _ov_already)
+        if(_ov_already GREATER -1)
+            continue()
+        endif()
+
+        if(NOT OVERTEON_GIT)
+            message(FATAL_ERROR "applying ${_ov_file} needs git")
+        endif()
+        execute_process(
+            COMMAND "${OVERTEON_GIT}" apply "${_ov_path}"
+            WORKING_DIRECTORY "${OVERTEON_JUCE_DIR}"
+            RESULT_VARIABLE _ov_rc
+            OUTPUT_VARIABLE _ov_out
+            ERROR_VARIABLE  _ov_out)
+        if(NOT _ov_rc EQUAL 0)
+            message(FATAL_ERROR
+                "could not apply ${_ov_file} to the JUCE submodule:\n${_ov_out}")
+        endif()
+        message(STATUS "Overteon: applied ${_ov_file}")
+    endforeach()
+endif()
+
 if(OVERTEON_VENDORED_JUCE)
     if(EXISTS "${OVERTEON_JUCE_DIR}/CMakeLists.txt")
         set(FETCHCONTENT_SOURCE_DIR_JUCE "${OVERTEON_JUCE_DIR}"
@@ -287,50 +361,6 @@ FetchContent_Declare(JUCE
     GIT_PROGRESS TRUE)
 FetchContent_MakeAvailable(JUCE)
 
-# ---------------------------------------------------------------------------
-#  The one change this project makes to JUCE
-#
-#  JUCE builds juce_vst3_helper as a separate CMake project and configures it at
-#  build time, forwarding only the compiler paths.  Under a cross-compile that
-#  nested configure sees the HOST platform, probes clang-cl as if it were native
-#  and dies ("posix_spawn failed"), taking the VST3 target with it.  Upstream
-#  8.0.13 does not forward the toolchain, the emulator or the build type.
-#
-#  The patch lives in Config/cmake/patches/ and is applied to the submodule only
-#  when actually cross-compiling, so a host build leaves the submodule pristine
-#  and `git status` in it stays clean.  Applied idempotently: if the forwarded
-#  settings are already in the file, nothing happens.
-# ---------------------------------------------------------------------------
-if(CMAKE_CROSSCOMPILING AND WIN32)
-    set(_ov_juce_utils "${OVERTEON_JUCE_DIR}/extras/Build/CMake/JUCEUtils.cmake")
-    set(_ov_juce_patch "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/juce-vst3-helper-forward-toolchain.patch")
-
-    if(EXISTS "${_ov_juce_utils}")
-        file(READ "${_ov_juce_utils}" _ov_juce_utils_text)
-        string(FIND "${_ov_juce_utils_text}" "CMAKE_CROSSCOMPILING_EMULATOR" _ov_already)
-        if(_ov_already LESS 0)
-            if(NOT EXISTS "${_ov_juce_patch}")
-                message(FATAL_ERROR "cross-compiling needs ${_ov_juce_patch}, which is missing")
-            endif()
-            find_program(OVERTEON_GIT git)
-            if(NOT OVERTEON_GIT)
-                message(FATAL_ERROR
-                    "cross-compiling needs git to apply ${_ov_juce_patch}")
-            endif()
-            execute_process(
-                COMMAND "${OVERTEON_GIT}" apply --verbose "${_ov_juce_patch}"
-                WORKING_DIRECTORY "${OVERTEON_JUCE_DIR}"
-                RESULT_VARIABLE _ov_patch_rc
-                OUTPUT_VARIABLE _ov_patch_out
-                ERROR_VARIABLE  _ov_patch_out)
-            if(NOT _ov_patch_rc EQUAL 0)
-                message(FATAL_ERROR
-                    "could not apply ${_ov_juce_patch} to the JUCE submodule:\n${_ov_patch_out}")
-            endif()
-            message(STATUS "Overteon: applied the vst3_helper cross-compile patch to JUCE")
-        endif()
-    endif()
-endif()
 
 # VST2 needs an SDK on the include path.  Steinberg stopped shipping one in 2018,
 # so ../Source/third_party/vst2sdk/ carries the two headers JUCE's wrapper includes, written

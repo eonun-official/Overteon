@@ -62,6 +62,20 @@ in this one without remapping, and `.hinj` presets work in both directions:
 Because the identity is the original one, this build and the original WebView
 build cannot be installed side by side — install one or the other.
 
+## Getting the tree
+
+JUCE is a submodule pinned to upstream tag 8.0.13, so clone recursively:
+
+```sh
+git clone --recursive <this repository>
+```
+
+A clone made without `--recursive` has an empty `Source/third_party/JUCE` and
+configure stops with a message saying so; `git submodule update --init
+--recursive` fixes it. Nothing else has to be downloaded: the pinned JUCE is
+what the build expects, and configure does no network I/O when the submodule is
+present.
+
 ## Build
 
 The build system is `Config/CMakeLists.txt`, and the CMakeLists at the top of
@@ -116,6 +130,22 @@ WINEPATH=$HOME/Qt-msvc/6.9.3/msvc2022_64/bin ninja -C Build/win vst3
 `CMAKE_TOOLCHAIN_FILE` must be absolute: CMake resolves it against the *build*
 directory, not the source directory. The presets in `Config/CMakePresets.json`
 have the same problem and are therefore only useful for the host builds.
+
+Two patches under `Config/cmake/patches/` make the cross-compile work, and
+configure applies them to the submodule itself, only when
+`CMAKE_CROSSCOMPILING AND WIN32`:
+
+* `juce-vst3-helper-forward-toolchain.patch` — JUCE configures `juce_vst3_helper`
+  as a separate CMake project and forwards only the compiler paths, so that
+  nested configure sees the host platform and dies probing clang-cl. Upstream
+  8.0.13 does not forward the toolchain, the emulator or the build type.
+* `juce-mingw-guard.patch` — `juce_TargetPlatform.h` refuses MinGW outright;
+  the Qt editor can be built with Qt's MinGW toolchain, so the guard is relaxed.
+
+Because they apply to the submodule, a cross-compiling tree shows
+`Source/third_party/JUCE` as modified. A host build does not: it leaves the
+submodule pristine, and configure checks for each patch's marker before applying
+it, so re-running cmake is harmless.
 
 Products land in one directory per build, named for what it is, where and
 when it was made:

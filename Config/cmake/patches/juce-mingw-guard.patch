@@ -1,0 +1,28 @@
+Subject: [PATCH] relax the MinGW guard so the Qt editor can be built with it
+
+juce_TargetPlatform.h refuses MinGW outright.  That refusal is about JUCE's
+own audio backends; this project's Qt editor is a separate front end and can
+be built with Qt's MinGW toolchain, which is what
+Config/cmake/toolchain-mingw64.cmake sets up.
+
+The guard is replaced with JUCE_MINGW=1 and nothing else in the header
+changes, so a MinGW build compiles the code JUCE already has for that
+platform instead of stopping at the #error.
+
+Kept as a patch over the submodule rather than a fork so the pinned upstream
+tag stays readable.
+---
+--- a/modules/juce_core/system/juce_TargetPlatform.h
++++ b/modules/juce_core/system/juce_TargetPlatform.h
+@@ -110,7 +110,10 @@
+   #endif
+ 
+   #ifdef __MINGW32__
+-    #error "MinGW is not supported. Please use an alternative compiler."
++    // Upstream JUCE refuses MinGW.  Overteon builds the Qt editor with
++    // Qt's own MinGW toolchain (see Config/cmake/toolchain-mingw64.cmake),
++    // so the guard is relaxed here.  Nothing else in this header changes.
++    #define JUCE_MINGW 1
+   #endif
+ 
+   /** If defined, this indicates that the processor is little-endian. */
