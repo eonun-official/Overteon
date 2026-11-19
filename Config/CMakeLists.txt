@@ -251,17 +251,33 @@ endif()
 
 include(FetchContent)
 
-# Use the JUCE tree that is already downloaded into Source/third_party/JUCE
-# (JUCE 8.0.13, i.e. exactly the tag pinned below). FetchContent then does no
-# network I/O at all, so configure/build works offline. Pass
-# -DOVERTEON_VENDORED_JUCE=OFF to make FetchContent clone from GitHub instead
-# (needs proxychains on this machine).
+# JUCE is a git submodule at Source/third_party/JUCE, pinned to upstream tag
+# 8.0.13.  Keeping it as a submodule rather than a vendored copy means the exact
+# commit is recorded in this repository, so
+#
+#     git clone --recursive <this repo>
+#
+# gives a buildable tree with no separate download step, and `git submodule
+# update --init` repairs a clone made without --recursive.
+#
+# FetchContent is still what pulls the module targets in, but it must not do any
+# network I/O when the submodule is present -- hence the SOURCE_DIR bypass below.
+# Set -DOVERTEON_VENDORED_JUCE=OFF to let FetchContent clone from GitHub instead.
 option(OVERTEON_VENDORED_JUCE
-       "Use the vendored JUCE tree instead of cloning from GitHub" ON)
+       "Use the JUCE submodule instead of cloning from GitHub" ON)
 
-if(OVERTEON_VENDORED_JUCE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../Source/third_party/JUCE/CMakeLists.txt")
-    set(FETCHCONTENT_SOURCE_DIR_JUCE "${CMAKE_CURRENT_SOURCE_DIR}/../Source/third_party/JUCE"
-        CACHE PATH "Vendored JUCE checkout (skips the GitHub download)" FORCE)
+set(OVERTEON_JUCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Source/third_party/JUCE")
+
+if(OVERTEON_VENDORED_JUCE)
+    if(EXISTS "${OVERTEON_JUCE_DIR}/CMakeLists.txt")
+        set(FETCHCONTENT_SOURCE_DIR_JUCE "${OVERTEON_JUCE_DIR}"
+            CACHE PATH "JUCE submodule checkout (skips the GitHub download)" FORCE)
+    else()
+        message(FATAL_ERROR
+            "Source/third_party/JUCE is empty -- the submodule is not checked out.\n"
+            "  git submodule update --init --recursive\n"
+            "or pass -DOVERTEON_VENDORED_JUCE=OFF to fetch JUCE from GitHub instead.")
+    endif()
 endif()
 
 FetchContent_Declare(JUCE
@@ -270,6 +286,51 @@ FetchContent_Declare(JUCE
     GIT_SHALLOW TRUE
     GIT_PROGRESS TRUE)
 FetchContent_MakeAvailable(JUCE)
+
+# ---------------------------------------------------------------------------
+#  The one change this project makes to JUCE
+#
+#  JUCE builds juce_vst3_helper as a separate CMake project and configures it at
+#  build time, forwarding only the compiler paths.  Under a cross-compile that
+#  nested configure sees the HOST platform, probes clang-cl as if it were native
+#  and dies ("posix_spawn failed"), taking the VST3 target with it.  Upstream
+#  8.0.13 does not forward the toolchain, the emulator or the build type.
+#
+#  The patch lives in Config/cmake/patches/ and is applied to the submodule only
+#  when actually cross-compiling, so a host build leaves the submodule pristine
+#  and `git status` in it stays clean.  Applied idempotently: if the forwarded
+#  settings are already in the file, nothing happens.
+# ---------------------------------------------------------------------------
+if(CMAKE_CROSSCOMPILING AND WIN32)
+    set(_ov_juce_utils "${OVERTEON_JUCE_DIR}/extras/Build/CMake/JUCEUtils.cmake")
+    set(_ov_juce_patch "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/juce-vst3-helper-forward-toolchain.patch")
+
+    if(EXISTS "${_ov_juce_utils}")
+        file(READ "${_ov_juce_utils}" _ov_juce_utils_text)
+        string(FIND "${_ov_juce_utils_text}" "CMAKE_CROSSCOMPILING_EMULATOR" _ov_already)
+        if(_ov_already LESS 0)
+            if(NOT EXISTS "${_ov_juce_patch}")
+                message(FATAL_ERROR "cross-compiling needs ${_ov_juce_patch}, which is missing")
+            endif()
+            find_program(OVERTEON_GIT git)
+            if(NOT OVERTEON_GIT)
+                message(FATAL_ERROR
+                    "cross-compiling needs git to apply ${_ov_juce_patch}")
+            endif()
+            execute_process(
+                COMMAND "${OVERTEON_GIT}" apply --verbose "${_ov_juce_patch}"
+                WORKING_DIRECTORY "${OVERTEON_JUCE_DIR}"
+                RESULT_VARIABLE _ov_patch_rc
+                OUTPUT_VARIABLE _ov_patch_out
+                ERROR_VARIABLE  _ov_patch_out)
+            if(NOT _ov_patch_rc EQUAL 0)
+                message(FATAL_ERROR
+                    "could not apply ${_ov_juce_patch} to the JUCE submodule:\n${_ov_patch_out}")
+            endif()
+            message(STATUS "Overteon: applied the vst3_helper cross-compile patch to JUCE")
+        endif()
+    endif()
+endif()
 
 # VST2 needs an SDK on the include path.  Steinberg stopped shipping one in 2018,
 # so ../Source/third_party/vst2sdk/ carries the two headers JUCE's wrapper includes, written

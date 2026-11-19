@@ -33,10 +33,10 @@ dist/
 *.pdb
 
 # ---- third-party blobs ---------------------------------------------------
-# Vendored, not source: JUCE is fetched by Config/CMakeLists.txt (pinned to
-# 8.0.13) and the WebView2 NuGet package is only needed when building the
-# legacy WebView editor with -DOVERTEON_QT_UI=OFF.
-Source/third_party/JUCE/
+# JUCE is a git submodule pinned to upstream 8.0.13 (see .gitmodules), so a
+# plain `git clone --recursive` brings it in and `git submodule update --init`
+# repairs a non-recursive clone.  WebView2 is only needed for the legacy
+# WebView editor, -DOVERTEON_QT_UI=OFF, so it stays vendored and ignored.
 Source/third_party/juce.zip
 Source/third_party/webview2/
 Source/third_party/webview2.nupkg
