@@ -54,3 +54,9 @@ __pycache__/
 
 # accidental archive of the tree
 *.tar
+# ---- office / editor locks -----------------------------------------------
+# LibreOffice and ONLYOFFICE drop a lock file beside a document while it is
+# open.  These are per-machine state, never content: committing one makes every
+# checkout look dirty the moment somebody opens the README.
+.~lock.*#
+#
