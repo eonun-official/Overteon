@@ -142,7 +142,7 @@ inline void spectrumFromRing (const std::vector<float>& ring, int ringPos,
         const float db = (b0 >= 1 && b0 < top)
                        ? binDb (b0) + (binDb (b0 + 1) - binDb (b0)) * t
                        : binDb (1);
-        dst[i] = std::clamp ((db + 85.0f) / 85.0f, 0.0f, 1.0f);
+        dst[i] = std::clamp ((db + 90.0f) / 96.0f, 0.0f, 1.0f);
     }
 }
 

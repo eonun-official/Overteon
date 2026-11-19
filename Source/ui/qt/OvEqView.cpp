@@ -1,5 +1,6 @@
 #include "OvEnv.h"
 #include "OvEqView.h"
+#include "OvBiquad.h"
 #include "OvFrost.h"
 #include "OvEngine.h"
 #include "OvQmlTypes.h"
@@ -8,6 +9,7 @@
 
 #include <QPainter>
 #include <QPainterPath>
+#include <QFontMetricsF>
 #include <QCursor>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -44,7 +46,7 @@ namespace
 
 namespace
 {
-    constexpr double kFMin = 5.0, kFMax = 24000.0;
+    constexpr double kFMin = 5.0, kFMax = 20000.0;
     const double kLogMin = std::log (kFMin);
     const double kLogSpan = std::log (kFMax) - kLogMin;
 
@@ -61,94 +63,37 @@ namespace
     constexpr double kNodeHitRadius = 12.0;
 
     const QColor kBg      ("#16181d");
-    const QColor kMinor   ("#1e222a");
-    const QColor kMajor   ("#2a2f39");
-    const QColor kZero    ("#333a45");
-    const QColor kHLine   ("#21262f");
+    // The grid was lifted a step: at the old values the faded ends of the
+    // lines disappeared entirely on a dark display.  These are still quiet
+    // enough to sit behind the curve.
+    const QColor kMinor   ("#252a34");
+    const QColor kMajor   ("#313844");
+    const QColor kZero    ("#3c4553");
+    const QColor kHLine   ("#282e38");
     const QColor kLabel   ("#4a525f");
+
+    // The fixed frequency set of the EQ grid.  Shared by the background
+    // renderer and the cursor hint, so the two cannot draw different lines.
+    constexpr int kGridMinors[] = { 20, 30, 40, 50, 60, 70, 80, 90, 200, 300, 400, 500,
+                                    600, 700, 800, 900, 2000, 3000, 4000, 5000, 6000,
+                                    7000, 8000, 9000, 20000 };
+    constexpr int kGridMajors[] = { 10, 100, 1000, 10000 };
+
+    inline double gridDbStep (double rangeDb)
+    {
+        return rangeDb <= 3.0 ? 1.0 : rangeDb <= 6.0 ? 2.0
+             : rangeDb <= 12.0 ? 4.0 : rangeDb <= 24.0 ? 8.0
+             : rangeDb <= 30.0 ? 10.0 : rangeDb <= 48.0 ? 16.0 : 30.0;
+    }
 
     // Same 8-way type table as the DSP / WebView editor:
     // 0 Bell 1 Notch 2 LowShelf 3 HighShelf 4 LC12 5 LC24 6 HC12 7 HC24
     bool isGainType (int t)  { return t == 0 || t == 2 || t == 3; }
     bool isShelf  (int t)    { return t == 2 || t == 3; }
 
-    struct Coefs { double b0, b1, b2, a1, a2; };
-
-    Coefs rbj (int type, double fs, double fIn, double qIn, double dB)
-    {
-        const double w  = 2.0 * M_PI * std::clamp (fIn, 5.0, fs * 0.45) / fs;
-        const double cw = std::cos (w), sw = std::sin (w);
-        const double al = sw / (2.0 * std::max (0.1, qIn));
-        Coefs c {};
-
-        switch (type)
-        {
-            case 0: // peak
-            {
-                const double A  = std::pow (10.0, dB / 40.0);
-                const double a0 = 1.0 + al / A;
-                c = { (1.0 + al * A) / a0, (-2.0 * cw) / a0, (1.0 - al * A) / a0,
-                      (-2.0 * cw) / a0, (1.0 - al / A) / a0 };
-                break;
-            }
-            case 1: // notch
-            {
-                const double al2 = sw / (2.0 * std::max (0.05, qIn));
-                const double a0  = 1.0 + al2;
-                c = { 1.0 / a0, -2.0 * cw / a0, 1.0 / a0, -2.0 * cw / a0, (1.0 - al2) / a0 };
-                break;
-            }
-            case 2: // low shelf
-            {
-                const double A  = std::pow (10.0, dB / 40.0);
-                const double sq = 2.0 * std::sqrt (A) * al;
-                const double a0 = (A + 1.0) + (A - 1.0) * cw + sq;
-                c = { A * ((A + 1.0) - (A - 1.0) * cw + sq) / a0,
-                      2.0 * A * ((A - 1.0) - (A + 1.0) * cw) / a0,
-                      A * ((A + 1.0) - (A - 1.0) * cw - sq) / a0,
-                      -2.0 * ((A - 1.0) + (A + 1.0) * cw) / a0,
-                      ((A + 1.0) + (A - 1.0) * cw - sq) / a0 };
-                break;
-            }
-            case 3: // high shelf
-            {
-                const double A  = std::pow (10.0, dB / 40.0);
-                const double sq = 2.0 * std::sqrt (A) * al;
-                const double a0 = (A + 1.0) - (A - 1.0) * cw + sq;
-                c = { A * ((A + 1.0) + (A - 1.0) * cw + sq) / a0,
-                      -2.0 * A * ((A - 1.0) + (A + 1.0) * cw) / a0,
-                      A * ((A + 1.0) + (A - 1.0) * cw - sq) / a0,
-                      2.0 * ((A - 1.0) - (A + 1.0) * cw) / a0,
-                      ((A + 1.0) - (A - 1.0) * cw - sq) / a0 };
-                break;
-            }
-            case 4: case 5: // high pass (12 / 24)
-            {
-                const double a0 = 1.0 + al;
-                c = { (1.0 + cw) * 0.5 / a0, -(1.0 + cw) / a0, (1.0 + cw) * 0.5 / a0,
-                      -2.0 * cw / a0, (1.0 - al) / a0 };
-                break;
-            }
-            default: // 6 / 7 low pass
-            {
-                const double a0 = 1.0 + al;
-                c = { (1.0 - cw) * 0.5 / a0, (1.0 - cw) / a0, (1.0 - cw) * 0.5 / a0,
-                      -2.0 * cw / a0, (1.0 - al) / a0 };
-                break;
-            }
-        }
-        return c;
-    }
-
-    double magDb (const Coefs& c, double w)
-    {
-        const double cw = std::cos (w), c2 = std::cos (2.0 * w);
-        const double num = c.b0 * c.b0 + c.b1 * c.b1 + c.b2 * c.b2
-                         + 2.0 * (c.b0 * c.b1 + c.b1 * c.b2) * cw + 2.0 * c.b0 * c.b2 * c2;
-        const double den = 1.0 + c.a1 * c.a1 + c.a2 * c.a2
-                         + 2.0 * (c.a1 + c.a1 * c.a2) * cw + 2.0 * c.a2 * c2;
-        return 10.0 * std::log10 (std::max (num, 1e-16) / std::max (den, 1e-16));
-    }
+    // The RBJ coefficient/magnitude maths lives in OvBiquad.h — the same
+    // implementation OvJackSource uses to shape the output spectrum, so the
+    // curve and the bars can never disagree.
 
     QString fmtHz (double v)
     {
@@ -228,6 +173,29 @@ OvEqView::OvEqView (QQuickItem* parent) : QQuickItem (parent)
     // moved more than one pixel and that gate swallows most updates.
     m_repaint.setInterval (OvTiming::kPlotMs);
     connect (&m_repaint, &QTimer::timeout, this, [this] {
+        // Pointer-highlight idle boost: after 80 ms without movement the hint
+        // ramps up over 200 ms, then stays.  This is plain arithmetic on the
+        // existing plot timer; m_dirty is set only while the value moves, so
+        // a settled view does no extra repainting.
+        {
+            const auto now = std::chrono::steady_clock::now();
+            const double idle = std::chrono::duration<double> (now - m_lightLastMove).count();
+            if (m_lightInside && idle >= 0.08)
+            {
+                if (m_lightBoost < 1.0)
+                {
+                    m_lightBoost = std::min (1.0, m_lightBoost
+                                            + double (OvTiming::kPlotMs) / 1000.0 / 0.20);
+                    m_dirty = true;
+                }
+            }
+            else if (m_lightBoost > 0.0)
+            {
+                m_lightBoost = 0.0;      // movement snaps back to the base level
+                m_dirty = true;
+            }
+        }
+
         if (m_spectrumStamp != m_lastSpectrumStamp)
         {
             m_lastSpectrumStamp = m_spectrumStamp;
@@ -506,19 +474,39 @@ double OvEqView::fromY (double y, double, double rangeDb, double top, double bot
     return ((top + bottom) * 0.5 - y) / ((bottom - top) * 0.5) * rangeDb;
 }
 
-double OvEqView::bandMagDb (int type, double fs, double f, double q, double dB, double at)
+double OvEqView::bandMagDb (int type, double fs, double f, double q, double dB, double at) const
 {
+    // Designing a biquad is trig-heavy (cos, sin, pow, sqrt).  The curve
+    // evaluates every band at ~1000 x positions per frame with the same band
+    // parameters, so without this table every point designed its own filter.
+    // The table belongs to THIS view: the SC and Post plots each have their
+    // own 16 slots and can never evict each other's entries.
+    auto coefsFor = [this] (int t, double sr, double fr, double qq, double g) -> ovbq::Coefs
+    {
+        for (auto& e : m_coefCache)
+            if (e.type == t && e.fs == sr && e.f == fr && e.q == qq && e.dB == g)
+                return ovbq::Coefs { e.b0, e.b1, e.b2, e.a1, e.a2 };
+
+        auto& e = m_coefCache[m_coefNext++ & 15u];
+        e.type = t; e.fs = sr; e.f = fr; e.q = qq; e.dB = g;
+        const ovbq::Coefs c = ovbq::rbj (t, sr, fr, qq, g);
+        e.b0 = c.b0; e.b1 = c.b1; e.b2 = c.b2; e.a1 = c.a1; e.a2 = c.a2;
+        return c;
+    };
+
     const double w = 2.0 * M_PI * at / fs;
     switch (type)
     {
-        case 0: return std::abs (dB) < 0.01 ? 0.0 : magDb (rbj (0, fs, f, q, dB), w);
-        case 2: return std::abs (dB) < 0.01 ? 0.0 : magDb (rbj (2, fs, f, q, dB), w);
-        case 3: return std::abs (dB) < 0.01 ? 0.0 : magDb (rbj (3, fs, f, q, dB), w);
-        case 1: return magDb (rbj (1, fs, f, q, 0.0), w);
-        case 4: return magDb (rbj (4, fs, f, q, 0.0), w);
-        case 5: return magDb (rbj (4, fs, f, q, 0.0), w) + magDb (rbj (4, fs, f, 0.707, 0.0), w);
-        case 6: return magDb (rbj (6, fs, f, q, 0.0), w);
-        case 7: return magDb (rbj (6, fs, f, q, 0.0), w) + magDb (rbj (6, fs, f, 0.707, 0.0), w);
+        case 0: return std::abs (dB) < 0.01 ? 0.0 : ovbq::magDb (coefsFor (0, fs, f, q, dB), w);
+        case 2: return std::abs (dB) < 0.01 ? 0.0 : ovbq::magDb (coefsFor (2, fs, f, q, dB), w);
+        case 3: return std::abs (dB) < 0.01 ? 0.0 : ovbq::magDb (coefsFor (3, fs, f, q, dB), w);
+        case 1: return ovbq::magDb (coefsFor (1, fs, f, q, 0.0), w);
+        case 4: return ovbq::magDb (coefsFor (4, fs, f, q, 0.0), w);
+        case 5: return ovbq::magDb (coefsFor (4, fs, f, q, 0.0), w)
+                     + ovbq::magDb (coefsFor (4, fs, f, 0.707, 0.0), w);
+        case 6: return ovbq::magDb (coefsFor (6, fs, f, q, 0.0), w);
+        case 7: return ovbq::magDb (coefsFor (6, fs, f, q, 0.0), w)
+                     + ovbq::magDb (coefsFor (6, fs, f, 0.707, 0.0), w);
         default: return 0.0;
     }
 }
@@ -531,8 +519,12 @@ double OvEqView::bandMagAt (const Band& b, double atHz) const
 
 double OvEqView::totalMagAt (double atHz) const
 {
+    // A muted band is bypassed by the DSP (identity coefficients), so the
+    // drawn total must leave it out as well; otherwise the curve keeps showing
+    // a correction the audio no longer makes.
     double sum = 0.0;
-    for (const auto& b : m_bands) sum += bandMagAt (b, atHz);
+    for (const auto& b : m_bands)
+        if (b.on) sum += bandMagAt (b, atHz);
     return sum;
 }
 
@@ -550,25 +542,6 @@ QPointF OvEqView::nodePosition (int index)
     refreshNodePositions();
     if (index < 0 || index > 4) return QPointF();
     return QPointF (m_bands[index].x, m_bands[index].y);
-}
-
-// How much the design is enlarged on its way to the window.
-//
-// mapToScene maps item units to window pixels, so the length of the image of a
-// 1-unit vector is exactly the factor the design is drawn at: 1.0 at 1040x772,
-// 0.62 in a 700x480 window, 1.5 in a 1560x1158 one.  Taking both axes and
-// averaging keeps this honest if a rotation or a non-uniform scale is ever
-// introduced, and it degrades to 1.0 for an item that is not in a window
-// (mapToScene returns item coordinates then) rather than to a division by zero.
-double OvEqView::displayScale() const
-{
-    const QPointF o  = mapToScene (QPointF (0, 0));
-    const QPointF ex = mapToScene (QPointF (1, 0));
-    const QPointF ey = mapToScene (QPointF (0, 1));
-    const double sx = std::hypot (ex.x() - o.x(), ex.y() - o.y());
-    const double sy = std::hypot (ey.x() - o.x(), ey.y() - o.y());
-    const double s  = (sx + sy) * 0.5;
-    return (std::isfinite (s) && s > 0.05 && s < 64.0) ? s : 1.0;
 }
 
 // ------------------------------------------------------------ debug HUD
@@ -689,7 +662,7 @@ struct OvPaintTimer
 // ---------------------------------------------------------------------------
 namespace {
 
-// Upload `img` into `node` when `key` changed, and place it at `rect`.
+// Upload `img` into `node` and place it at `rect`.
 //
 // The image is copied into `keep` first: createTextureFromImage builds a
 // texture whose pixels are committed during the render pass, which happens
@@ -708,69 +681,24 @@ bool applyTexture (QQuickWindow* win, QSGImageNode* node, const QImage& img,
     if (node == nullptr || win == nullptr) return false;
     if (img.isNull() || rect.isEmpty())
         return false;
-    // If the caller handed us a real image, it IS new: buildLayers() only
-    // returns pixels for a layer whose cache key changed.  Comparing keys here
-    // as well was wrong — the overlay's key contains the whole curve cache tag,
-    // and the first frame after a preset load stored it while the texture was
-    // still the previous picture, so every later frame looked "unchanged" and
-    // the plot showed a stale layer.
-    if (node->texture() == nullptr || key != haveKey || true)
-    {
-        keep = img.copy();
-        node->setTexture (win->createTextureFromImage (keep));
-        haveKey = key;
-    }
+
+    // buildLayers() only returns pixels for a layer whose cache key moved, so
+    // a non-null image here is always a new upload.  QSGImageNode does NOT own
+    // its texture: the replaced texture must be retired or every upload leaks
+    // VRAM.  It gets one frame of grace because the previous frame's batch may
+    // still be in flight.
+    QSGTexture* old = node->texture();
+    keep = img.copy();
+    QSGTexture* tex = win->createTextureFromImage (keep);
+    if (tex == nullptr)
+        return false;
+    node->setTexture (tex);
+    if (old != nullptr)
+        retired.push_back (old);
+    haveKey = key;
     node->setRect (rect);
     return true;
 }
-
-// A cached QImage as a scene-graph texture.  `key` decides when it is
-// re-uploaded: the image itself is not compared, because that would cost a full
-// pass over the pixels every frame.
-class LayerNode
-{
-public:
-    // QSGImageNode instead of QSGSimpleTextureNode.
-    //
-    // QSGSimpleTextureNode crashed this renderer outright — SIGSEGV inside
-    // QSGOpaqueTextureMaterial::compare, on the first frame, with a single
-    // texture node in the tree and nothing else.  QSGImageNode is the node Qt
-    // provides for "draw this image as a quad"; it owns its texture and its
-    // material, so there is no lifetime to get wrong here.
-    QSGNode* node = nullptr;
-    QSGImageNode* img = nullptr;
-    QString key;
-    QImage pending;      // must outlive the texture upload
-
-    void init (QQuickWindow* win)
-    {
-        if (node != nullptr) return;
-        img  = win->createImageNode();
-        node = img;
-        img->setFiltering (QSGTexture::Linear);
-        img->setTextureCoordinatesTransform (QSGImageNode::NoTransform);
-    }
-
-    void refresh (QQuickWindow* win, const QImage& image, const QString& k,
-                  const QRectF& rect)
-    {
-        init (win);
-        if (image.isNull() || rect.isEmpty())
-        {
-            img->setRect (QRectF());
-            return;
-        }
-        if (k != key)
-        {
-            // Keep our own copy: the texture is uploaded from this image later,
-            // during the render pass, so the pixels have to still be there.
-            pending = image.copy();
-            img->setTexture (win->createTextureFromImage (pending));
-            key = k;
-        }
-        img->setRect (rect);
-    }
-};
 
 // The spectrum: a triangle strip from the baseline to the outline, with the
 // gradient carried in the vertex colours (opaque at the top, transparent at the
@@ -929,18 +857,28 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     {
         m_sgRoot = new QSGNode;
         m_sgBg      = window()->createImageNode();
+        m_sgLight   = window()->createImageNode();
         auto* spn = new SpectrumNode; m_sgSpectrum = spn;
         m_sgGlow    = window()->createImageNode();
         m_sgOverlay = window()->createImageNode();
         m_sgRoot->appendChildNode (m_sgBg);
+        m_sgRoot->appendChildNode (m_sgLight);
         m_sgRoot->appendChildNode (m_sgSpectrum);
         m_sgRoot->appendChildNode (m_sgGlow);
         m_sgRoot->appendChildNode (m_sgOverlay);
-        for (QSGImageNode* n : { m_sgBg, m_sgGlow, m_sgOverlay })
+        for (QSGImageNode* n : { m_sgBg, m_sgLight, m_sgGlow, m_sgOverlay })
         {
             n->setFiltering (QSGTexture::Linear);
             n->setTextureCoordinatesTransform (QSGImageNode::NoTransform);
         }
+
+        // The light node is always in the tree (fixed z-order, no dynamic
+        // re-parenting), so it must always have a valid texture: an attached
+        // image node with a null texture crashes the opaque-batch comparison.
+        QImage empty (1, 1, QImage::Format_ARGB32_Premultiplied);
+        empty.fill (Qt::transparent);
+        m_texImgLight = empty;
+        m_sgLight->setTexture (window()->createTextureFromImage (m_texImgLight));
     }
 
     const QRectF full (0, 0, width(), height());
@@ -961,6 +899,19 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
         if (! L.background.isNull())
             slot (m_sgBg, applyTexture (window(), m_sgBg, L.background, L.bgKey,
                                         m_texKeyBg, m_texImgBg, full, m_texRetired));
+    }
+
+    // ---- pointer hint ----------------------------------------------------
+    {
+        if (! L.light.isNull())
+        {
+            QSGTexture* old = m_sgLight->texture();
+            m_texImgLight = L.light;
+            m_sgLight->setTexture (window()->createTextureFromImage (m_texImgLight));
+            if (old != nullptr)
+                m_texRetired.push_back (old);   // one frame of grace, as below
+        }
+        m_sgLight->setRect (L.lightRect);       // empty when outside the plot
     }
 
     // ---- spectrum (the only thing that changes per frame) ----------------
@@ -999,12 +950,12 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     // them when there is nothing to show, so a stopped signal removes the bar
     // instead of freezing the last frame of it.
     {
-        float spec[128] = {};
+        float spec[ovspec::kBins] = {};
         if (m_engine != nullptr)
         {
             const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
                                           : m_engine->spectrumTable();
-            const int n = std::min (128, int (tbl.size()));
+            const int n = std::min (ovspec::kBins, int (tbl.size()));
             for (int i = 0; i < n; ++i) spec[i] = float (tbl.at (i).toDouble());
         }
         QRectF dest;
@@ -1241,32 +1192,47 @@ const QImage& OvEqView::backgroundImage (double w, double h, double top,
 
     // ---- vertical frequency grid: full height, so both EQ sections read
     //      as one continuous background (exactly like the canvas version)
-    static const int minors[] = { 20, 30, 40, 50, 60, 70, 80, 90, 200, 300, 400, 500,
-                                  600, 700, 800, 900, 2000, 3000, 4000, 5000, 6000,
-                                  7000, 8000, 9000, 20000 };
-    static const int majors[] = { 10, 100, 1000, 10000 };
 
-    g.setPen (QPen (kMinor, 1.0));
-    for (int f : minors)
+    // Grid lines fade toward their ends and sit a little brighter through the
+    // middle.  The gradients are constructed only when this cached background
+    // is rebuilt, never per frame.
+    const auto fadePen = [] (const QColor& c, QPointF a, QPointF b)
+    {
+        auto at = [&c] (double t)
+        {
+            QColor x = c;
+            x.setAlphaF (c.alphaF() * t);
+            return x;
+        };
+        QLinearGradient grad (a, b);
+        grad.setColorAt (0.00, at (0.00));
+        grad.setColorAt (0.20, at (0.28));
+        grad.setColorAt (0.50, at (1.00));
+        grad.setColorAt (0.80, at (0.28));
+        grad.setColorAt (1.00, at (0.00));
+        return QPen (QBrush (grad), 1.0);
+    };
+
+    g.setPen (fadePen (kMinor, QPointF (0, 0), QPointF (0, h)));
+    for (int f : kGridMinors)
     {
         const double x = toX (f, w);
         g.drawLine (QPointF (x, 0), QPointF (x, h));
     }
-    g.setPen (QPen (kMajor, 1.0));
-    for (int f : majors)
+    g.setPen (fadePen (kMajor, QPointF (0, 0), QPointF (0, h)));
+    for (int f : kGridMajors)
     {
         const double x = toX (f, w);
         g.drawLine (QPointF (x, 0), QPointF (x, h));
     }
 
     // ---- horizontal dB lines (plot only)
-    const double step = m_rangeDb <= 3.0 ? 1.0 : m_rangeDb <= 6.0 ? 2.0
-                      : m_rangeDb <= 12.0 ? 4.0 : m_rangeDb <= 24.0 ? 8.0
-                      : m_rangeDb <= 30.0 ? 10.0 : m_rangeDb <= 48.0 ? 16.0 : 30.0;
+    const double step = gridDbStep (m_rangeDb);
     for (double db = -m_rangeDb; db <= m_rangeDb + 1e-6; db += step)
     {
         const double y = toY (db, h, m_rangeDb, top, bottom);
-        g.setPen (QPen (std::abs (db) < 1e-6 ? kZero : kHLine, 1.0));
+        g.setPen (fadePen (std::abs (db) < 1e-6 ? kZero : kHLine,
+                           QPointF (0, 0), QPointF (w, 0)));
         g.drawLine (QPointF (0, y), QPointF (w, y));
     }
 
@@ -1279,12 +1245,17 @@ const QImage& OvEqView::backgroundImage (double w, double h, double top,
     static const int labels[] = { 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000 };
     static const char* labelText[] = { "20", "50", "100", "200", "500", "1k",
                                        "2k", "5k", "10k", "20k" };
+    const QFontMetricsF fm (f9);
     for (int i = 0; i < 10; ++i)
     {
-        const double x = toX (labels[i], w) + 2.0;
-        g.drawText (QPointF (x, bottom - 4.0), QString::fromLatin1 (labelText[i]));
-        g.drawText (QPointF (x, m_headerTop ? 22.0 : h - 8.0),
-                     QString::fromLatin1 (labelText[i]));
+        const QString t = QString::fromLatin1 (labelText[i]);
+        // The axis now ends exactly at 20 kHz, so the last label has to be
+        // pulled back inside the plot instead of starting past its edge.
+        double x = toX (labels[i], w) + 2.0;
+        if (x + fm.horizontalAdvance (t) > w - 2.0)
+            x = w - fm.horizontalAdvance (t) - 2.0;
+        g.drawText (QPointF (x, bottom - 4.0), t);
+        g.drawText (QPointF (x, m_headerTop ? 22.0 : h - 8.0), t);
     }
 
     // ---- dB labels (accent tinted, inside the plot)
@@ -1303,6 +1274,86 @@ const QImage& OvEqView::backgroundImage (double w, double h, double top,
     return m_bg;
 }
 
+bool OvEqView::ensureCursorLight (double w, double h, double top, double bottom,
+                                  QRectF& dest)
+{
+    dest = QRectF();
+    if (! m_lightInside)
+        return false;
+
+    const QPointF p = m_lightPos;
+    if (p.x() < 0.0 || p.x() > w || p.y() < top || p.y() > bottom)
+        return false;
+
+    constexpr double kRadius = 105.0;
+
+    // Cache against a 2 px cell: the falloff is soft enough that a two-pixel
+    // step is invisible, and this keeps a fast mouse from rebuilding the image
+    // on every event.
+    const QPointF q (std::round (p.x() * 0.5) * 2.0,
+                     std::round (p.y() * 0.5) * 2.0);
+    const int boostStep = int (std::lround (m_lightBoost * 12.0));
+    const QString key = QStringLiteral ("%1,%2|%3x%4|%5,%6|%7|%8")
+                            .arg (q.x()).arg (q.y())
+                            .arg (w, 0, 'f', 1).arg (h, 0, 'f', 1)
+                            .arg (top, 0, 'f', 1).arg (bottom, 0, 'f', 1)
+                            .arg (m_rangeDb).arg (boostStep);
+    dest = QRectF (q.x() - kRadius, q.y() - kRadius,
+                   kRadius * 2.0, kRadius * 2.0);
+    if (key == m_lightKey && ! m_light.isNull())
+        return true;
+
+    m_lightKey = key;
+
+    const double dpr = window() != nullptr ? window()->devicePixelRatio() : 1.0;
+    const int pw = std::max (2, int (std::lround (kRadius * 2.0 * dpr)));
+    m_light = QImage (pw, pw, QImage::Format_ARGB32_Premultiplied);
+    m_light.fill (Qt::transparent);
+
+    QPainter g (&m_light);
+    g.setRenderHint (QPainter::Antialiasing, true);
+    g.scale (dpr, dpr);
+    g.translate (-dest.topLeft());
+    g.setClipRect (QRectF (0.0, top, w, bottom - top));
+
+    // One radial brush evaluated in item coordinates: every stroke is
+    // brightest at the pointer and gone at the radius, and because it is a
+    // brush (not a separate overlay per line) the two axes cannot disagree.
+    // The tint is this view's own accent — red on the upper EQ, green on the
+    // lower one — so the hint reads as part of the section rather than as a
+    // neutral grey spotlight.
+    const QColor tint (m_accent);
+    // Stillness adds another 50 % on top of the base hint (24 -> 36/255).
+    QColor peak = tint; peak.setAlpha (24 + boostStep);
+    QColor mid  = tint; mid.setAlpha (9 + (boostStep + 1) / 2);
+    QColor edge = tint; edge.setAlpha (0);
+    QRadialGradient spot (q, kRadius);
+    spot.setColorAt (0.00, peak);
+    spot.setColorAt (0.50, mid);
+    spot.setColorAt (1.00, edge);
+    g.setPen (QPen (QBrush (spot), 1.0));
+
+    for (int f : kGridMinors)
+    {
+        const double x = toX (f, w);
+        if (x >= dest.left() && x <= dest.right())
+            g.drawLine (QPointF (x, dest.top()), QPointF (x, dest.bottom()));
+    }
+    for (int f : kGridMajors)
+    {
+        const double x = toX (f, w);
+        if (x >= dest.left() && x <= dest.right())
+            g.drawLine (QPointF (x, dest.top()), QPointF (x, dest.bottom()));
+    }
+    for (double db = -m_rangeDb; db <= m_rangeDb + 1e-6; db += gridDbStep (m_rangeDb))
+    {
+        const double y = toY (db, h, m_rangeDb, top, bottom);
+        if (y >= dest.top() && y <= dest.bottom())
+            g.drawLine (QPointF (dest.left(), y), QPointF (dest.right(), y));
+    }
+    return true;
+}
+
 void OvEqView::paintContent (QPainter* g, double w, double h,
                              double top, double bottom, const QColor& accent)
 {
@@ -1312,10 +1363,21 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
     g->drawImage (QRectF (0, 0, w, h), backgroundImage (w, h, top, bottom, accent),
                   QRectF (0, 0, m_bg.width(), m_bg.height()));
 
-    // The 128-bin table, read once here and used twice: the fill below and the
+    // Grid lines under the pointer, a touch brighter.  Drawn over the cached
+    // background and under the spectrum, exactly where the grid itself lives.
+    QRectF lightDest;
+    if (ensureCursorLight (w, h, top, bottom, lightDest))
+    {
+        g->setRenderHint (QPainter::SmoothPixmapTransform, true);
+        g->drawImage (lightDest, m_light,
+                      QRectF (0, 0, m_light.width(), m_light.height()));
+        g->setRenderHint (QPainter::SmoothPixmapTransform, false);
+    }
+
+    // The 256-bin table, read once here and used twice: the fill below and the
     // glow bar in the control pit.
-    float spec[128] = {};
-    float specRaw[128] = {};      // exactly what the analyser said
+    float spec[ovspec::kBins] = {};
+    float specRaw[ovspec::kBins] = {};      // exactly what the analyser said
 
     // ---- ballistics ------------------------------------------------------
     // The host polls the analyser at ~12 Hz (measured 11.8 in jalv) while this
@@ -1351,34 +1413,48 @@ void OvEqView::paintContent (QPainter* g, double w, double h,
         // draw, and it came from the tap this section owns — the top section is
         // the INPUT and the bottom one the OUTPUT)
 
-        // The spectrum is 128 FFT bins across a log axis, so neighbouring bins
+        // The spectrum is 256 log-spaced bins across the axis, so neighbouring bins
         // are 20 % apart in x and a straight polyline between them reads as a
         // staircase of square steps — and the mock's square-wave harmonics make
         // every step a spike.  Joining the points with a Catmull-Rom spline
         // through them keeps the peaks where they are but removes the corners.
-        double xs[128], ys[128];
-        for (int i = 0; i < 128; ++i)
+        double xs[ovspec::kBins], ys[ovspec::kBins];
+        for (int i = 0; i < ovspec::kBins; ++i)
         {
-            const double f = 20.0 * std::pow (1000.0, (double) i / 127.0);
+            const double f = 20.0 * std::pow (1000.0, (double) i / double (ovspec::kBins - 1));
             xs[i] = toX (f, w);
-            ys[i] = bottom - (double) spec[i] * (bottom - top) * 0.92;
+            // The table is -90..+6 dBFS over its 0..1, so 0 dBFS lands 6.25 %
+            // below the top; that headroom is the point of the range.  Clamped
+            // because the Catmull-Rom segment below can overshoot at a peak,
+            // and a fill that pokes through the frame reads as a broken scale.
+            ys[i] = std::clamp (bottom - (double) spec[i] * (bottom - top),
+                                top, bottom);
         }
 
         QPainterPath sp;
         sp.moveTo (0.0, bottom);
         sp.lineTo (xs[0], ys[0]);
-        for (int i = 0; i < 127; ++i)
+        if (! m_specBall.interp)
         {
-            const double x0 = (i > 0) ? xs[i - 1] : xs[0];
-            const double y0 = (i > 0) ? ys[i - 1] : ys[0];
-            const double x1 = xs[i], y1 = ys[i];
-            const double x2 = xs[i + 1], y2 = ys[i + 1];
-            const double x3 = (i + 2 < 128) ? xs[i + 2] : x2;
-            const double y3 = (i + 2 < 128) ? ys[i + 2] : y2;
-            // Catmull-Rom -> cubic Bezier
-            sp.cubicTo (QPointF (x1 + (x2 - x0) / 6.0, y1 + (y2 - y0) / 6.0),
-                        QPointF (x2 - (x3 - x1) / 6.0, y2 - (y3 - y1) / 6.0),
-                        QPointF (x2, y2));
+            // RAW: straight segments through the measured bins, same reason as
+            // the scene-graph path — the detail is the point.
+            for (int i = 1; i < ovspec::kBins; ++i) sp.lineTo (xs[i], ys[i]);
+        }
+        else
+        {
+            for (int i = 0; i < ovspec::kBins - 1; ++i)
+            {
+                const double x0 = (i > 0) ? xs[i - 1] : xs[0];
+                const double y0 = (i > 0) ? ys[i - 1] : ys[0];
+                const double x1 = xs[i], y1 = ys[i];
+                const double x2 = xs[i + 1], y2 = ys[i + 1];
+                const double x3 = (i + 2 < ovspec::kBins) ? xs[i + 2] : x2;
+                const double y3 = (i + 2 < ovspec::kBins) ? ys[i + 2] : y2;
+                // Catmull-Rom -> cubic Bezier
+                sp.cubicTo (QPointF (x1 + (x2 - x0) / 6.0, y1 + (y2 - y0) / 6.0),
+                            QPointF (x2 - (x3 - x1) / 6.0, y2 - (y3 - y1) / 6.0),
+                            QPointF (x2, y2));
+            }
         }
         sp.lineTo (w, bottom);
         sp.closeSubpath();
@@ -1424,10 +1500,11 @@ QString OvEqView::curveCacheKeyTag() const
 {
     QString t;
     for (int i = 0; i < 5; ++i)
-        t += QStringLiteral ("%1,%2,%3,%4,%5;")
+        t += QStringLiteral ("%1,%2,%3,%4,%5,%6;")
                  .arg (m_bands[i].freq).arg (m_bands[i].gain)
                  .arg (m_bands[i].q).arg (m_bands[i].type)
-                 .arg (int (m_bands[i].active));
+                 .arg (int (m_bands[i].active))
+                 .arg (int (m_bands[i].on));
     return t;
 }
 
@@ -1525,8 +1602,8 @@ void OvEqView::advanceSpectrum (float* spec, float* specRaw)
         if (m_specAdvanceAt != clk::time_point()
             && now - m_specAdvanceAt < std::chrono::microseconds (1500))
         {
-            std::memcpy (spec, m_specShown, sizeof (float) * 128);
-            if (specRaw != nullptr) std::memcpy (specRaw, m_specRaw, sizeof (float) * 128);
+            std::memcpy (spec, m_specShown, sizeof (float) * ovspec::kBins);
+            if (specRaw != nullptr) std::memcpy (specRaw, m_specRaw, sizeof (float) * ovspec::kBins);
             return;
         }
         m_specAdvanceAt = now;
@@ -1540,12 +1617,12 @@ void OvEqView::advanceSpectrum (float* spec, float* specRaw)
                          0.0005, 0.20);
     m_specShownAt = now;
 
-    float raw[128] = {};
+    float raw[ovspec::kBins] = {};
     if (m_engine != nullptr)
     {
         const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
                                       : m_engine->spectrumTable();
-        const int n = std::min (128, int (tbl.size()));
+        const int n = std::min (ovspec::kBins, int (tbl.size()));
         for (int i = 0; i < n; ++i)
             raw[i] = float (tbl.at (i).toDouble());
     }
@@ -1554,8 +1631,8 @@ void OvEqView::advanceSpectrum (float* spec, float* specRaw)
     // The averaging itself: ui/qt/OvSpectrum.h, tuned by measurement.
     m_specBall.advance (raw, m_specShown, dt);
 
-    std::memcpy (spec, m_specShown, sizeof (float) * 128);
-    if (specRaw != nullptr) std::memcpy (specRaw, m_specRaw, sizeof (float) * 128);
+    std::memcpy (spec, m_specShown, sizeof (float) * ovspec::kBins);
+    if (specRaw != nullptr) std::memcpy (specRaw, m_specRaw, sizeof (float) * ovspec::kBins);
 }
 
 void OvEqView::buildLayers (Layers& out)
@@ -1588,6 +1665,16 @@ void OvEqView::buildLayers (Layers& out)
         out.bgKey = m_bgKey;
     }
 
+    // ---- pointer hint ----------------------------------------------------
+    {
+        const QString prevLight = m_lightKey;
+        QRectF dest;
+        const bool have = ensureCursorLight (w, h, top, bottom, dest);
+        out.lightRect = have ? dest : QRectF();
+        if (have && m_lightKey != prevLight)
+            out.light = m_light.copy();
+    }
+
     const QString prevOv = m_overlayKey;
     out.overlay = overlayImage (w, h, top, bottom, accent);
     if (m_overlayKey != prevOv || out.overlay.isNull())
@@ -1603,21 +1690,21 @@ void OvEqView::buildLayers (Layers& out)
 
     // ---- the spectrum, flattened -----------------------------------------
     //
-    // The analyser outline, Catmull-Rom through the 128 log-spaced samples so
+    // The analyser outline, Catmull-Rom through the 256 log-spaced samples so
     // the fill does not read as a staircase, then flattened to a polyline the
     // node can triangulate.  Same smoothing the painter path used.
     {
         // THE BALLISTICS, not the raw table.  Reading the table directly is
         // what made this fill unsmoothed and completely unlike the painter one.
-        float spec[128] = {};
-        float specRaw[128] = {};
+        float spec[ovspec::kBins] = {};
+        float specRaw[ovspec::kBins] = {};
         advanceSpectrum (spec, specRaw);
 
         if (ovEnvFlag ("OVERTEON_SPECDBG"))
         {
             // OVERTEON_SPECDBG=1 prints every 30th frame (a readable trace);
             // OVERTEON_SPECDBG=all prints every frame, which is what a
-            // frame-to-frame smoothness measurement needs.  The whole 128-bin
+            // frame-to-frame smoothness measurement needs.  The whole 256-bin
             // array is printed either way: "it shakes" is a statement about
             // neighbouring bins, so 16 of them cannot answer it.
             static int n = 0;
@@ -1626,32 +1713,36 @@ void OvEqView::buildLayers (Layers& out)
             if (everyFrame || ++n % 30 == 0)
             {
                 std::fprintf (stderr, "[sp] %s", qPrintable (m_prefix));
-                for (int i = 0; i < 128; ++i) std::fprintf (stderr, " %.3f", spec[i]);
+                for (int i = 0; i < ovspec::kBins; ++i) std::fprintf (stderr, " %.3f", spec[i]);
                 std::fprintf (stderr, "\n");
             }
         }
 
-        double xs[128], ys[128];
-        for (int i = 0; i < 128; ++i)
+        double xs[ovspec::kBins], ys[ovspec::kBins];
+        for (int i = 0; i < ovspec::kBins; ++i)
         {
-            const double f = 20.0 * std::pow (1000.0, (double) i / 127.0);
+            const double f = 20.0 * std::pow (1000.0, (double) i / double (ovspec::kBins - 1));
             xs[i] = toX (f, w);
-            ys[i] = bottom - (double) spec[i] * (bottom - top) * 0.92;
+            // The table is -90..+6 dBFS over its 0..1, so 0 dBFS lands 6.25 %
+            // below the top; that headroom is the point of the range.  Clamped
+            // because the Catmull-Rom segment below can overshoot at a peak,
+            // and a fill that pokes through the frame reads as a broken scale.
+            ys[i] = std::clamp (bottom - (double) spec[i] * (bottom - top),
+                                top, bottom);
         }
 
         out.spectrumBottom = bottom;
         out.spectrumTop    = top;
-        out.spectrum.reserve (128 * 6 + 2);
+        const bool raw = ! m_specBall.interp;
+        out.spectrum.reserve (ovspec::kBins * (raw ? 1 : 3) + 2);
 
         // ---- the two anchors the plot's axis needs ----------------------
         //
-        // The frequency axis runs 5 Hz .. 24 kHz (kFMin/kFMax, the same as the
-        // design), but the analyser only produces 20 Hz .. 20 kHz — 128 bins
-        // over three decades.  Those are different ranges, and the fill has to
-        // say what it means in the strip outside the data:
+        // The frequency axis runs 5 Hz .. 20 kHz (kFMin/kFMax), and the
+        // analyser produces 20 Hz .. 20 kHz — 256 bins over three decades.
+        // The only strip outside the data is 5..20 Hz at the left:
         //
         //   5 .. 20 Hz    x = 0 .. 170 px      no measurement
-        //   20k .. 24 kHz x = 1017 .. 1040 px  no measurement
         //
         // The design's path starts with `moveTo(0, pb)` and ends with
         // `lineTo(W, pb)` — from the plot floor at the axis ends up to the
@@ -1662,29 +1753,41 @@ void OvEqView::buildLayers (Layers& out)
         // graph had been cut in half.
         out.spectrum.push_back (QPointF (0.0, bottom));
 
-        const int kSub = 5;                   // 5 segments per span is plenty
-        for (int i = 0; i < 127; ++i)
+        if (raw)
         {
-            const double x0 = (i > 0) ? xs[i - 1] : xs[0];
-            const double y0 = (i > 0) ? ys[i - 1] : ys[0];
-            const double x1 = xs[i],     y1 = ys[i];
-            const double x2 = xs[i + 1], y2 = ys[i + 1];
-            const double x3 = (i + 2 < 128) ? xs[i + 2] : x2;
-            const double y3 = (i + 2 < 128) ? ys[i + 2] : y2;
-
-            // cubic Bezier control points of the Catmull-Rom segment
-            const QPointF c1 (x1 + (x2 - x0) / 6.0, y1 + (y2 - y0) / 6.0);
-            const QPointF c2 (x2 - (x3 - x1) / 6.0, y2 - (y3 - y1) / 6.0);
-            for (int k = 0; k < kSub; ++k)
-            {
-                const double t = double (k) / kSub;
-                const double mt = 1.0 - t;
-                const double bx = mt*mt*mt*x1 + 3*mt*mt*t*c1.x() + 3*mt*t*t*c2.x() + t*t*t*x2;
-                const double by = mt*mt*mt*y1 + 3*mt*mt*t*c1.y() + 3*mt*t*t*c2.y() + t*t*t*y2;
-                out.spectrum.push_back (QPointF (bx, by));
-            }
+            // One vertex per measured bin, straight segments.  A spline here
+            // would round off exactly the narrow peaks that make the outline
+            // read as detailed — and at 1024 bins the points are already about
+            // a pixel apart, so there is no staircase left to smooth.
+            for (int i = 0; i < ovspec::kBins; ++i)
+                out.spectrum.push_back (QPointF (xs[i], ys[i]));
         }
-        out.spectrum.push_back (QPointF (xs[127], ys[127]));
+        else
+        {
+            const int kSub = 2;               // ~1 px between bins already
+            for (int i = 0; i < ovspec::kBins - 1; ++i)
+            {
+                const double x0 = (i > 0) ? xs[i - 1] : xs[0];
+                const double y0 = (i > 0) ? ys[i - 1] : ys[0];
+                const double x1 = xs[i],     y1 = ys[i];
+                const double x2 = xs[i + 1], y2 = ys[i + 1];
+                const double x3 = (i + 2 < ovspec::kBins) ? xs[i + 2] : x2;
+                const double y3 = (i + 2 < ovspec::kBins) ? ys[i + 2] : y2;
+
+                // cubic Bezier control points of the Catmull-Rom segment
+                const QPointF c1 (x1 + (x2 - x0) / 6.0, y1 + (y2 - y0) / 6.0);
+                const QPointF c2 (x2 - (x3 - x1) / 6.0, y2 - (y3 - y1) / 6.0);
+                for (int k = 0; k < kSub; ++k)
+                {
+                    const double t = double (k) / kSub;
+                    const double mt = 1.0 - t;
+                    const double bx = mt*mt*mt*x1 + 3*mt*mt*t*c1.x() + 3*mt*t*t*c2.x() + t*t*t*x2;
+                    const double by = mt*mt*mt*y1 + 3*mt*mt*t*c1.y() + 3*mt*t*t*c2.y() + t*t*t*y2;
+                    out.spectrum.push_back (QPointF (bx, by));
+                }
+            }
+            out.spectrum.push_back (QPointF (xs[ovspec::kBins - 1], ys[ovspec::kBins - 1]));
+        }
         // ...and the mirror at the top of the axis (see the anchors above).
         out.spectrum.push_back (QPointF (w, bottom));
     }
@@ -1742,19 +1845,18 @@ void OvEqView::fogSegments (const QPointF& origin, QVector<FogSegment>& out)
             const double outward = dir > 0 ? (mid - edge) : (edge - mid);
             if (outward > 0.0)
             {
-                // FADE HERE, before any blur — not in the shader afterwards.
+                // Fade AFTER the blur, not before it.
                 //
-                // The painter version multiplied each band's alpha by
-                // (1 - k/12)^1.15 and THEN blurred it, so the fade itself is
-                // smoothed along with the stroke.  Applying the same ramp to the
-                // blurred result instead gives every output pixel the weight of
-                // ITS OWN position, including energy blurred in from much further
-                // out — where the fade is nearly zero but the incoming stroke was
-                // at full alpha.  Measured: 1.30x too bright across the whole
-                // crossing, which is exactly the "the fog does not match" report.
-                const double t = std::clamp (outward / std::max (1e-6, kRange), 0.0, 1.0);
+                // 0.9.10 strokes each graded band and applies its
+                // (1 - k/12)^1.15 alpha to the already-blurred band
+                // (`c.globalAlpha` after `c.filter = blur(...)`).  That keeps
+                // the solid core of the stroke: the blur spreads the full
+                // colour, then the whole halo is faded together.  Pre-fading
+                // the segments and blurring afterwards spreads energy that is
+                // already faint, which is what made the current fog look dimmer
+                // and softer than the old one.  blur.frag applies the same
+                // (1 - t)^1.15 ramp to the blurred result (`fade: true`).
                 QColor c = colour;
-                c.setAlphaF (colour.alphaF() * std::pow (1.0 - t, 1.15));
 
                 out.push_back ({ QPointF (origin.x() + prevX, origin.y() + prevY),
                                  QPointF (origin.x() + xx,    origin.y() + yy),
@@ -1777,7 +1879,7 @@ void OvEqView::fogSegments (const QPointF& origin, QVector<FogSegment>& out)
                               h, rangeDb, top, plot.bottom());
               },
               QColor (accent.red(), accent.green(), accent.blue(),
-                      int (0.22f * accent.alphaF() * 255.0f + 0.5f)),
+                      int ((b.on ? 0.22f : 0.10f) * accent.alphaF() * 255.0f + 0.5f)),
               1.0f);
     }
 
@@ -1819,11 +1921,10 @@ void OvEqView::paintOverflowFog (QPainter* g, const QPointF& origin)
 //  fogEdge  the plot edge the curve escapes from
 //  fogDir   +1 when it escapes downward (this half's header is on top),
 //           -1 when it escapes upward
-//  fogRange how far it reaches.  Deliberately divided by displayScale(): the
-//           reach and the blur profile are a TREATMENT tuned at the design
-//           size, not geometry, so they keep the same size on screen at every
-//           window size.  The curve inside still scales, because that is the
-//           plot.
+//  fogRange how far it reaches, in DESIGN pixels (the page's 224).  The whole
+//           design is scaled together, so the overflow covers the same number
+//           of dB at every window size; a fixed screen-pixel reach made the
+//           curve look taller than its own grid in a small window.
 // ---------------------------------------------------------------------------
 quint64 OvEqView::curveSignature() const
 {
@@ -1842,6 +1943,7 @@ quint64 OvEqView::curveSignature() const
     {
         mix (quint64 (b.type));
         mix (quint64 (b.active ? 1 : 0));
+        mix (quint64 (b.on ? 1 : 0));
         mixd (std::log (std::max (1e-3, b.freq)));
         mixd (b.gain);
         mixd (b.q);
@@ -1864,19 +1966,34 @@ double OvEqView::fogDir() const
 
 double OvEqView::fogRange() const
 {
-    return 224.0 / displayScale();
+    // Design pixels, exactly like the page's `range = 224`.  The design is
+    // scaled as a whole, so the fog's reach in dB stays proportional to the
+    // dB grid at every window size.  Dividing by the display scale made the
+    // reach a fixed number of SCREEN pixels, which is why a smaller window
+    // made the overflow curve look taller than its own scale.
+    return 224.0;
 }
 
 void OvEqView::paintOverlay (QPainter* g, double w, double h,
                              double top, double bottom, const QColor& accent)
 {
 
+    // The five band curves are clipped to the plot, exactly like the total
+    // curve below and like the reference's drawCurve().  Anything outside the
+    // plot belongs to the overflow fog, which fades it; without this clip a
+    // band that left the range painted a hard stroke into the header, and that
+    // unclipped line is what read as "the curve does not match the scale".
+    g->save();
+    g->setClipRect (QRectF (0, top, w, bottom - top));
+
     for (int i = 0; i < 5; ++i)
     {
         auto& b = m_bands[i];
         if (b.active)
         {
-            QColor c = accent; c.setAlphaF (0.22f);
+            // Muted bands keep their curve — the shape that was removed — at a
+            // dimmer strength than the active bands' 0.22.
+            QColor c = accent; c.setAlphaF (b.on ? 0.22f : 0.10f);
             g->setPen (QPen (c, 1.0));
             QPainterPath path;
             for (double x = 0; x <= w; x += 3.0)
@@ -1894,6 +2011,7 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
         b.x = toX (b.freq, w);
         b.y = toY (std::clamp (nodeGain, -m_rangeDb, m_rangeDb), h, m_rangeDb, top, bottom);
     }
+    g->restore();
 
     // ---- total curve + fill (clipped to the plot)
     // 2 px sampling: the response is smooth over 0.2 % of a log decade, so a
@@ -1982,15 +2100,9 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
 // ---------------------------------------------------------------------------
 //  The glow bar.
 //
-//  A horizontal strip of light through each control pit: brightness left to
-//  right is level low frequency to high, so the bar reads as the spectrum the
-//  section above it draws, squeezed into the trapezoid and blooming through the
-//  frosted glass on top.
-//
-//  The top section's bar is the INPUT analyser and the bottom one the OUTPUT —
-//  the same distinction the two spectrum fills already carry — and both come
-//  from the single 128-bin table in OvEngine, so a bar can never show a
-//  different picture from the plot it belongs to.
+//  A single elliptical light through each control pit.  Its intensity follows
+//  the section's output (upper) or input (lower) meter, not the spectrum bins;
+//  this is the radial-gradient behaviour of 0.9.10.
 // ---------------------------------------------------------------------------
 // Build (or reuse) the glow bar's image and report where it goes.
 //
@@ -2000,6 +2112,7 @@ void OvEqView::paintOverlay (QPainter* g, double w, double h,
 bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
                               const float* spec, QRectF& dest)
 {
+    Q_UNUSED (spec);                 // the light is meter-driven, not spectral
     if (ovEnvFlag ("OVERTEON_NOGLOW")) return false;
     if (w < 8.0 || h < OvThemeBarHeight) return false;
 
@@ -2010,54 +2123,18 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
     const double barH = OvThemeBarHeight;
     const double barY = m_headerTop ? 0.0 : h - barH;
 
-    // ---- 32 bands --------------------------------------------------------
-    // The page draws ONE elliptical blob:
-    //   .controlpit.top::before{ opacity: var(--light);
-    //     background: radial-gradient(ellipse 70% 160% at 50% 0%,
-    //                   accent .36 0%, accent .13 38%, accent 0 78%) }
-    // The blob stays — it is the shape — but its brightness and its reach are
-    // modulated per band, so a loud region of the spectrum glows brighter and
-    // climbs further from the lit edge.  That keeps the page's look (a soft
-    // pool of light, not a bar chart) while still showing where the energy is.
+    // 0.9.10 的光源不是频谱灯带：整个梯形共用同一个椭圆径向渐变，
+    // 亮度只由 OUT（上）或 IN（下）左右声道较大值的平方驱动。
+    // m_glow 已完成 (dB+60)/60、L/R 取最大值和平方映射。
     constexpr int kBands = 32;
     double band[kBands];
+    const double light = std::clamp (m_glow, 0.0, 1.0);
     for (int b = 0; b < kBands; ++b)
     {
-        const int i0 = (b * 128) / kBands;
-        const int i1 = std::max (i0 + 1, ((b + 1) * 128) / kBands);
-        double sum = 0.0;
-        for (int i = i0; i < i1; ++i) sum += std::clamp (double (spec[i]), 0.0, 1.0);
-        double l = sum / double (i1 - i0);
-
-        // ---- ballistics, per band --------------------------------------
-        // The bar used to read the RAW bins (`specRaw` was passed in), so it had
-        // no smoothing at all: every new FFT moved it straight to a new shape.
-        // It gets the shared ovb::Fall now — the same curve as the spectrum fill,
-        // the pod's bars and the accent light — in dB, so "how far it reaches
-        // from the lit edge" moves over frames.
-        {
-            using clk = std::chrono::steady_clock;
-            const auto now = clk::now();
-            double dt = 1.0 / double (OvTiming::kPlotHz);
-            if (m_glowShownAt != clk::time_point())
-                dt = std::clamp (std::chrono::duration<double> (now - m_glowShownAt).count(),
-                                 0.0005, 0.20);
-            m_glowShownAt = now;
-
-            constexpr double kSpanDb    = 85.0;      // the table is 0..1 over 85 dB
-            constexpr double kDbPerSec  = 85.0 / 0.28;   // 0.35 s x 1.25
-
-            m_glowFall[b].advance (l * kSpanDb, dt, kDbPerSec, 0.030);
-            m_glowShown[b] = m_glowFall[b].shown / kSpanDb;
-            if (m_glowShown[b] > l + 1e-6) m_glowFalling = true;
-            l = m_glowShown[b];
-        }
-
-        // Display curve.  The table is (dB + 85) / 85, so a signal 20 dB down
-        // sits at 0.76 and would glow almost as brightly as a full-scale one;
-        // squaring turns that into something that reads as loudness.
-        band[b] = l * l;
+        band[b] = light;
+        m_glowShown[b] = light;
     }
+    m_glowFalling = light > 0.002;
 
     // Has the release finished?  Asked ONCE, after every band has advanced.
     //
@@ -2247,10 +2324,8 @@ bool OvEqView::ensureGlowBar (double w, double h, const QColor& accent,
                                                       rel[std::min (kBands - 1, bi + 2)],
                                                       bf);
 
-            // Per-band brightness: a loud band is near full, a quiet one a
-            // third of that.  A floor is kept so the blob still reads as one
-            // pool of light rather than breaking into separate patches.
-            const double lv = (0.30 + 0.70 * rl) * (0.35 + 0.65 * loud);
+            // 统一输入下 rl 恒为 1；保留形状插值，整体亮度直接服从电平。
+            const double lv = loud * rl;
 
             // ---- the falloff ------------------------------------------
             // The page is a RADIAL GRADIENT, not a Gaussian:
@@ -2662,6 +2737,10 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
     endDrag();
 
     refreshNodePositions();
+    m_lightPos = e->position();
+    m_lightInside = true;
+    m_lightLastMove = std::chrono::steady_clock::now();
+    m_lightBoost = 0.0;
 
     if (ovEnvFlag ("OVERTEON_HITTEST"))
     {
@@ -2721,6 +2800,10 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
 
     m_dragBand = hit;
     m_dragMovesGain = isGainType (m_bands[hit].type);
+    // A node drag keeps the editor open exactly like a field scrub does: the
+    // hover-end rule must not fire while the node is being moved, or dragging
+    // far from the box closes it under the hand.
+    m_editScrub = true;
     m_grabOffset = QPointF (m_bands[hit].x - e->position().x(),
                             m_bands[hit].y - e->position().y());
 
@@ -2739,6 +2822,10 @@ void OvEqView::mousePressEvent (QMouseEvent* e)
 void OvEqView::mouseMoveEvent (QMouseEvent* e)
 {
     m_lastMoveTime = std::chrono::steady_clock::now();
+    m_lightPos = e->position();
+    m_lightInside = true;
+    m_lightLastMove = m_lastMoveTime;
+    m_lightBoost = 0.0;
     // Only drag while the button is really down.  Without this check a single
     // lost release turned the plot into a node that follows the cursor.
     if (m_dragBand >= 0 && ! (e->buttons() & Qt::LeftButton))
@@ -2812,6 +2899,7 @@ void OvEqView::endDrag()
 
     m_dragBand = -1;
     m_dragMovesGain = false;
+    m_editScrub = false;
     emit hoverEnded();
     m_dirty = true;
     update();        // the release frame shows the settled node, not the last drag frame
@@ -2821,16 +2909,27 @@ void OvEqView::mouseDoubleClickEvent (QMouseEvent* e)
 {
     refreshNodePositions();
 
-    // A double-click on a node opens its numeric editor.
-    //
-    // It used to reset the band's gain here.  That is not what the reference
-    // page does — there a double-click binds the editor to the band and keeps
-    // it glued to it — and doing both would wipe the value the editor was
-    // about to display.
+    // A double-click on a node toggles its band mute; empty canvas still
+    // creates a pooled node.  The numeric editor is opened by HOVER, so this
+    // gesture is free to be the on/off switch.
     const int hit = nodeAt (e->position());
-    if (hit >= 0)
+    if (hit >= 0 && m_bands[hit].active)
     {
-        emit nodeEditRequested (hit);
+        // Double-click on a node toggles that band's mute.  The numeric editor
+        // does not need this gesture any more: hovering a node already opens
+        // it (OvEqView::hoverMoveEvent), so the double-click is free to be the
+        // band's on/off switch.  Position, gain, Q and type stay untouched, and
+        // the DSP crossfades through identity coefficients, so a muted band is
+        // silent but ready to come back exactly as it was.
+        const QString base = m_prefix + QString::number (hit + 1);
+        if (auto* p = m_engine ? m_engine->typedParam (base + "On") : nullptr)
+        {
+            p->beginGesture();
+            p->setNorm (p->norm() > 0.5 ? 0.0 : 1.0);
+            p->endGesture();
+        }
+        m_dirty = true;
+        update();
         e->accept();
         return;
     }
@@ -2940,24 +3039,40 @@ void OvEqView::hoverMoveEvent (QHoverEvent* e)
 {
     refreshNodePositions();
 
-    // web_fx: while the numeric editor is open, walking more than 30 px away
-    // from the node it is bound to dismisses it.  Hover events are the
-    // no-button path — the same branch the page tests with `if (drag) … else
-    // { … if (editBd) { distance > 30 → closeEdit() } }`.
-    //
-    // The editor's own rect is exempt.  The page gets that for free: its
-    // pointerleave on the editor closes it, and its pointermove runs on the
-    // canvas, which the editor covers — so a pointer over the box never
-    // triggers the 30 px test at all.  Here the box is a QML sibling, so hover
-    // events still arrive while the pointer is on it, and a 30 px radius around
-    // the node is smaller than the box: the fields sit 40-60 px away, and
-    // merely moving towards one dismissed the very editor being reached for.
+    // Grid lines near the pointer brighten a little (ensureCursorLight).  The
+    // position is always current; the repaint request is throttled to one per
+    // 16 ms so a fast mouse cannot drive the whole plot above display rate.
+    m_lightPos = e->position();
+    m_lightInside = true;
+    const auto now = std::chrono::steady_clock::now();
+    m_lightLastMove = now;
+    m_lightBoost = 0.0;
+    if (std::chrono::duration<double, std::milli> (now - m_lightUpdateAt).count() >= 16.0)
+    {
+        m_lightUpdateAt = now;
+        update();
+    }
+
+    // FabFilter-style dismissal: walking away from the editor's node starts a
+    // short close DELAY in QML rather than closing in this frame.  The delay is
+    // cancelled by hovering a node again or by entering the editor box, so the
+    // hand can travel from the node to one of the fields without the box
+    // vanishing under it.  A press on empty canvas still closes immediately.
     if (m_editBand >= 0 && m_editBand < 5 && ! m_editScrub && ! m_editPointerInside)
     {
         const double dx = e->position().x() - m_bands[m_editBand].x;
         const double dy = e->position().y() - m_bands[m_editBand].y;
-        if (std::hypot (dx, dy) > 30.0)
-            emit nodeEditClosed();
+
+        // The EDITOR is a reference too, not just the node.  Without this the
+        // walk from a node to the box passed through dead space: the 30 px
+        // radius ended before the box began, the delay expired, and the box
+        // vanished as the hand arrived.  A small outward margin covers the gap.
+        const bool overEditor = m_editRect.isValid()
+                                && m_editRect.adjusted (-8, -8, 8, 8)
+                                             .contains (e->position());
+
+        if (! overEditor && std::hypot (dx, dy) > 30.0)
+            emit nodeEditHoverEnded();
     }
 
     const int hit = nodeAt (e->position());
@@ -2965,6 +3080,11 @@ void OvEqView::hoverMoveEvent (QHoverEvent* e)
 
     if (hit >= 0)
     {
+        // Hovering a node opens its numeric editor (no double-click needed).
+        // QML treats a repeat for the same band as a no-op that only cancels
+        // the pending close; hovering a different node re-binds the box.
+        emit nodeEditRequested (hit);
+
         const QString base = m_prefix + QString::number (hit + 1);
         QString tip = QStringLiteral ("#%1 %2 · %3 Hz").arg (hit + 1)
                         .arg (textOf (base + "Type"))
@@ -2988,6 +3108,15 @@ void OvEqView::mouseUngrabEvent()
 
 void OvEqView::hoverLeaveEvent (QHoverEvent*)
 {
+    if (m_lightInside)
+    {
+        m_lightInside = false;
+        m_lightBoost = 0.0;
+        update();
+    }
     if (m_hoverBand != -1) { m_hoverBand = -1; emit hoverBandChanged (-1); }
     emit hoverEnded();
+    // Leaving the plot only STARTS the close delay: if the pointer went onto
+    // the editor box, its own hover handler cancels the timer.
+    emit nodeEditHoverEnded();
 }

@@ -23,6 +23,52 @@ Item {
     // the blur comes from the same pixels as the plot and cannot fall out of
     // sync.  Nothing is drawn here.
 
+    // ---- one header control ---------------------------------------------
+    //
+    // Text, a hairline that marks the live state, and a hit area larger than
+    // the glyphs.  Declared once so every label in the right-hand strip shares
+    // exactly the same face, size, tracking and baseline.
+    component Ctrl: Item {
+        id: ctrl
+
+        property alias text: ctrlText.text
+        property bool active: false
+        property color activeBar: OvTheme.pq
+        signal clicked()
+
+        width: ctrlText.implicitWidth + 4
+        height: 22
+
+        Text {
+            id: ctrlText
+            anchors.centerIn: parent
+            color: ctrl.active ? OvTheme.ink
+                 : (ctrlMa.containsMouse ? OvTheme.ink : OvTheme.dim)
+            font.family: OvTheme.displayFont
+            font.pixelSize: 13
+            font.letterSpacing: 0.6
+        }
+
+        Rectangle {
+            anchors.left: ctrlText.left
+            anchors.right: ctrlText.right
+            anchors.top: ctrlText.bottom
+            anchors.topMargin: 2
+            height: 1
+            color: ctrl.activeBar
+            visible: ctrl.active
+        }
+
+        MouseArea {
+            id: ctrlMa
+            anchors.fill: parent
+            anchors.margins: -5
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: ctrl.clicked()
+        }
+    }
+
     // ---- wordmark ------------------------------------------------------
     Item {
         id: logo
@@ -75,8 +121,6 @@ Item {
             border.color: OvTheme.line
             border.width: 1
 
-            Behavior on opacity { NumberAnimation { duration: 110 } }
-
             Text {
                 id: tipText
                 anchors.centerIn: parent
@@ -128,196 +172,121 @@ Item {
 
         MouseArea {
             id: podMa
-            anchors.fill: parent
+            // 只让中央谐波环成为 Settings 入口。此前热区覆盖整个
+            // 550x121 仪表（含光晕留白），上下 EQ 边缘的节点经常被它抢走。
+            width: 96
+            height: 60
+            anchors.centerIn: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: root.settingsRequested()
         }
     }
 
-    // ---- INIT ----------------------------------------------------------
-    Text {
-        id: initBtn
-        anchors.right: parent.right
-        anchors.rightMargin: 16
-        anchors.verticalCenter: parent.verticalCenter
-        text: "INIT"
-        color: initMa.containsMouse ? OvTheme.ink : OvTheme.dim
-        font.family: OvTheme.uiFont
-        font.pixelSize: 10
-        font.letterSpacing: 1.5
-
-        MouseArea {
-            id: initMa
-            anchors.fill: parent
-            anchors.margins: -4
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: if (root.engine) root.engine.initAll()
-        }
-    }
-
     // ---- global controls -------------------------------------------------
-    //
-    // Bypass, the A/B slot, and the copy button.  Parked on the header's right
-    // edge beside INIT rather than in the deck: the deck's eight knobs already
-    // divide its width exactly, and these three are switches, not parameters —
-    // they belong with the other whole-plug-in controls.
-    //
-    // Laid out right-to-left so INIT stays at the same margin whatever these
-    // come to; a Row anchored right would push INIT around as labels change
-    // width, and the copy button's label does change width ("A → B" / "B → A").
+    // One right-aligned strip in the same display face (EDIX) at the same
+    // size and tracking throughout.  Anchored to the right edge rather than a
+    // fixed x, so INIT always sits against the frame however the labels grow.
     Row {
         id: globals
-        // Explicit x, not anchored to INIT's left edge.  The Row's width depends
-        // on the copy button's label ("A → B" and "B → A" are different widths),
-        // so anchoring its right edge made BYP drift left and right as the slot
-        // changed — far enough to land under the pod.  The header is a fixed
-        // 1040-wide design scaled uniformly, so a fixed left edge is the stable
-        // choice, and it keeps the whole row clear of the pod's 245..795 span.
-        x: 800
+        anchors.right: parent.right
+        anchors.rightMargin: 10
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 12
-
-        // Above the pod, not merely after it in the file.  The pod's MouseArea
-        // fills its whole 550 px width, which reaches to x = 795, and the Row's
-        // leftmost control used to sit inside that — so a click meant for the
-        // control opened the settings panel instead.  Drawing order alone did
-        // not settle it: the pod is a sibling declared earlier, so its MouseArea
-        // took the press first.  z decides hit-testing between siblings.
+        spacing: 9
         z: 5
 
-        // ---- bypass ------------------------------------------------------
-        // A toggle, not a momentary: the state is what matters, and it is the
-        // same switch the host sees through getBypassParameter().
-        Text {
-            id: bypBtn
-            anchors.verticalCenter: parent.verticalCenter
+        Ctrl {
             text: "BYP"
-            color: (root.engine && root.engine.bypassed) ? OvTheme.amber
-                   : (bypMa.containsMouse ? OvTheme.ink : OvTheme.dim)
-            font.family: OvTheme.uiFont
-            font.pixelSize: 10
-            font.letterSpacing: 1.5
-
-            Rectangle {
-                // A hairline under the word while bypass is engaged: colour alone
-                // is not enough at this size, and the underline survives a
-                // monochrome screenshot.
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.bottom
-                anchors.topMargin: 2
-                height: 1
-                color: OvTheme.amber
-                visible: root.engine ? root.engine.bypassed : false
-            }
-
-            MouseArea {
-                id: bypMa
-                anchors.fill: parent
-                anchors.margins: -6
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: if (root.engine) root.engine.bypassed = ! root.engine.bypassed
-            }
+            active: root.engine ? root.engine.bypassed : false
+            activeBar: OvTheme.amber
+            onClicked: if (root.engine) root.engine.bypassed = ! root.engine.bypassed
         }
 
-        // ---- A / B -------------------------------------------------------
-        //
-        // Two buttons, both always on screen; you pick one.  A single letter
-        // that toggles on click is a different control -- it hides the fact that
-        // two slots exist.
-        //
-        //   left click   select that slot
-        //   right click  copy THAT slot onto the other one
-        //
-        // Right-click carries the copy because it destroys what the other slot
-        // holds, so it must not be a stray left click away.  The copy source is
-        // the chip that was right-clicked, not "whatever is live".
-        Row {
-            id: abGroup
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 5
+        // A|B — one control for two slots instead of two chips and a gap.
+        // The live slot carries the hairline under its letter: teal for A,
+        // pink for B.  Clicking switches to the other slot.
+        Item {
+            id: abCtl
+            width: abRow.width + 6
+            height: 22
 
-            Repeater {
-                model: ["A", "B"]
+            readonly property bool bLive: root.engine ? root.engine.abSlot === 1 : false
+
+            Row {
+                id: abRow
+                anchors.centerIn: parent
+                spacing: 7
 
                 Text {
-                    id: abChip
-                    required property int index
-                    required property string modelData
-
-                    readonly property bool live: root.engine
-                                                 ? root.engine.abSlot === abChip.index
-                                                 : abChip.index === 0
-
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: abChip.modelData
-                    color: abChip.live ? OvTheme.ink
-                         : (abMa.containsMouse ? OvTheme.dim : OvTheme.faint)
+                    id: abA
+                    text: "A"
+                    color: abCtl.bLive ? (abMa.containsMouse ? OvTheme.dim : OvTheme.faint)
+                                       : OvTheme.ink
                     font.family: OvTheme.displayFont
-                    font.pixelSize: 14
-                    font.letterSpacing: 1
+                    font.pixelSize: 13
+                    font.letterSpacing: 0.6
 
-                    // The live slot is the one with a line under it.  Both
-                    // letters keep their position, so picking the other reads as
-                    // a selection rather than a relabelling.
                     Rectangle {
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.top: parent.bottom
-                        anchors.topMargin: 1
+                        anchors.topMargin: 2
                         height: 1
                         color: OvTheme.pq
-                        visible: abChip.live
+                        visible: ! abCtl.bLive
                     }
+                }
 
-                    MouseArea {
-                        id: abMa
-                        anchors.fill: parent
-                        anchors.margins: -5
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        onClicked: function (m) {
-                            if (! root.engine) return
-                            if (m.button === Qt.RightButton) {
-                                root.engine.abCopyFrom (abChip.index)
-                                flashTimer.chipX = abChip.x
-                                abFlash.opacity = 1
-                                flashTimer.restart()
-                            } else {
-                                root.engine.abSlot = abChip.index
-                            }
-                        }
+                Rectangle {
+                    width: 1
+                    height: 11
+                    y: 3
+                    color: OvTheme.line
+                }
+
+                Text {
+                    id: abB
+                    text: "B"
+                    color: abCtl.bLive ? OvTheme.ink
+                         : (abMa.containsMouse ? OvTheme.dim : OvTheme.faint)
+                    font.family: OvTheme.displayFont
+                    font.pixelSize: 13
+                    font.letterSpacing: 0.6
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.bottom
+                        anchors.topMargin: 2
+                        height: 1
+                        color: OvTheme.sc
+                        visible: abCtl.bLive
                     }
                 }
             }
 
-            // A frame around the chip that was copied FROM.  The copy writes to
-            // the slot that is NOT on screen, so without this the right-click
-            // looks like it did nothing at all.
-            Rectangle {
-                id: abFlash
-                width: 16
-                height: 20
-                y: 0
-                x: flashTimer.chipX - 3
-                radius: 3
-                color: "transparent"
-                border.color: OvTheme.amber
-                border.width: 1
-                opacity: 0
-                Behavior on opacity { NumberAnimation { duration: 180 } }
+            MouseArea {
+                id: abMa
+                anchors.fill: parent
+                anchors.margins: -5
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: if (root.engine) root.engine.abSlot = abCtl.bLive ? 0 : 1
             }
+        }
 
-            Timer {
-                id: flashTimer
-                property real chipX: 0
-                interval: 520
-                onTriggered: abFlash.opacity = 0
-            }
+        // Copy the live slot into the other one.  Written "A>B" rather than a
+        // drawn arrow: one ASCII glyph the display face already has is narrower
+        // than any line-and-chevron construction, and it leaves the strip room
+        // to carry a larger size.
+        Ctrl {
+            text: root.engine && root.engine.abSlot === 1 ? "B>A" : "A>B"
+            onClicked: if (root.engine) root.engine.abCopyFrom (root.engine.abSlot)
+        }
+
+        Ctrl {
+            text: "INIT"
+            onClicked: if (root.engine) root.engine.initAll()
         }
     }
 }

@@ -16,6 +16,7 @@
 // ============================================================
 #include "OvEnv.h"
 #include "OvEngine.h"
+#include "OvPointer.h"
 #if OVERTEON_PREVIEW_HAS_DSP
  #include "OvJackJuce.h"
  #include "OverteonProcessor.h"
@@ -607,6 +608,11 @@ int main (int argc, char** argv)
         widget->setResizeMode (QQuickWidget::SizeRootObjectToView);
         widget->setClearColor (QColor (0x16, 0x18, 0x1d));
         widget->rootContext()->setContextProperty ("engine", engine.get());
+        // Same scene-wide pointer service the plug-in editor installs; the
+        // QML popups reference it unconditionally.  Owned by the application
+        // so it outlives the widget.
+        auto* widgetPointer = new OvPointer (widget.get(), qApp);
+        widget->rootContext()->setContextProperty ("OvPointer", widgetPointer);
         widget->rootContext()->setContextProperty ("ovUiScale", uiScale());
         widget->rootContext()->setContextProperty (
             "ovVersion", QStringLiteral (OVERTEON_VERSION));
@@ -691,6 +697,10 @@ int main (int argc, char** argv)
     view.setColor (QColor (0x16, 0x18, 0x1d));
     view.setResizeMode (QQuickView::SizeRootObjectToView);
     view.rootContext()->setContextProperty ("engine", engine.get());
+    // Scene-wide pointer service (see OvPointer.h).  Owned by the application
+    // so it outlives the QML scene.
+    auto* viewPointer = new OvPointer (&view, qApp);
+    view.rootContext()->setContextProperty ("OvPointer", viewPointer);
     // logicalDpi / 96: OvTheme.pt() divides by this so font sizes stay in
     // logical pixels on a scaled display (see OvTheme.qml).
     view.rootContext()->setContextProperty ("ovUiScale", uiScale());

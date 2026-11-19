@@ -248,8 +248,17 @@ alone.
 
 Licence
 -------
-Qt6 is used as a dynamically linked LGPL library; the plug-in itself is BSD.
-See the project repository for the full text.
+Overteon is released under AGPL-3.0; the full text is in LICENSE in the project
+repository. It builds on JUCE 8.0.13 and Qt 6.9.3, both under their open-source
+licence options. Every third-party component and the exact combination terms are
+declared in NOTICE, with the verbatim licence texts in LICENSES/. Read both.
+
+The Overteon and OVER|TEON names and marks are not licensed by the AGPL-3.0;
+modified versions distributed to others must be renamed.
+
+If this archive carries a qt/ folder, that Qt is dynamically linked and shipped
+as the licence permits. A single-file VST3 built statically is a different
+artifact and is described in NOTICE.
 TXT
 } > "$STAGE/README.txt"
 

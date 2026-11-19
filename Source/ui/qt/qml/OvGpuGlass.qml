@@ -45,6 +45,8 @@ Item {
     property bool   trapTop: true
     property color  accent: "transparent"
     property real   glow: 0.0               // 0..1, already level^2
+    // 与 0.9.10 的 .controlpit::before transition: opacity .1s linear 一致。
+    Behavior on glow { NumberAnimation { duration: 100; easing.type: Easing.Linear } }
     property real   saturation: 0.85
     /// OVERTEON_NOFROST=1 turns every glass surface off, so a reference capture
     /// really has none.  Without this the "no frost" image still carried the GPU

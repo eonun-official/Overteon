@@ -7,17 +7,18 @@
 //  global actions (INIT, load/save).
 // ============================================================
 #include <QObject>
-#include <chrono>
+#include <QPointF>
 #include <QVariantMap>
 #include <QVariantList>
 #include <QStringList>
 #include <QTimer>
+#include <chrono>
+#include <functional>
 #include <memory>
 #include <vector>
 
 #include "OvSource.h"
 #include "OvParam.h"
-#include "OvBallistics.h"   // ovb::Fall — the light's ballistics
 
 class OvEngine : public QObject
 {
@@ -35,14 +36,8 @@ class OvEngine : public QObject
     /// display reads it; everything else wants `harm`.
     Q_PROPERTY(double harmPeak READ harmPeak NOTIFY metersChanged)
 
-    /// SMOOTHED level, 0..1, for anything that lights up rather than measures:
-    /// the accent glow in the control pits and the meter pod's accent.
-    ///
-    /// These cannot come from `outL`/`inL` directly, and that is what was wrong:
-    /// a QML binding on the raw dB value re-evaluates only when a new
-    /// measurement arrives, so the glow jumped straight from one brightness to
-    /// the next — it never appeared to move.  A light needs its own ballistics,
-    /// the same ones the bars have, on a clock of its own.
+    /// Direct 0..1 light level from the louder L/R meter.  The glass squares
+    /// this value and applies the reference's 100 ms linear opacity transition.
     Q_PROPERTY(double outLight READ outLight NOTIFY lightChanged)
     Q_PROPERTY(double inLight  READ inLight  NOTIFY lightChanged)
 
@@ -56,29 +51,48 @@ class OvEngine : public QObject
 
     /// ---- display settings (the Settings panel) -------------------------
     //
-    // Detection and interpolation are DISPLAY choices, not DSP ones: nothing
-    // here changes a sample.  They are persisted so the panel does not reset
-    // every time it is opened, but they are deliberately not parameters — a
-    // parameter would claim they are part of the sound.
+    // MODE is a DISPLAY choice, not a DSP one: nothing here changes a sample.
+    // It is persisted so the panel does not reset every time it is opened, but
+    // it is deliberately not a parameter — a parameter would claim it is part
+    // of the sound.
     //
-    // detector: 0 = RMS (power mean), 1 = Peak (loudest bin, max-hold).
-    // One per meter: the harmonic ring and the two spectrum sections measure
-    // different things, and there is no reason to force them to agree.
-    Q_PROPERTY(int harmDetector  READ harmDetector  WRITE setHarmDetector  NOTIFY settingsChanged)
-    Q_PROPERTY(int upperDetector READ upperDetector WRITE setUpperDetector NOTIFY settingsChanged)
-    Q_PROPERTY(int lowerDetector READ lowerDetector WRITE setLowerDetector NOTIFY settingsChanged)
+    // mode: 0 = RMS, 1 = TRANSIENT.  These are the only two choices now.
+    //
+    //   spectra  RMS uses the power-domain mean AND the eased display
+    //            (interpolated); TRANSIENT uses the loudest bin AND the raw
+    //            display (no time smoothing, straight polyline).  The two were
+    //            independent switches; they are now one, because "mean + raw"
+    //            and "peak + eased" were combinations nobody asked for.
+    //
+    //   ring     the display no longer smooths at all, so the mode only picks
+    //            the MEASUREMENT: RMS = the DSP's 131 ms ratio, TRANSIENT =
+    //            this block's own ratio.
+    //
+    // One per meter: the ring and the two spectrum sections measure different
+    // things, and there is no reason to force them to agree.
+    Q_PROPERTY(int harmMode  READ harmMode  WRITE setHarmMode  NOTIFY settingsChanged)
+    Q_PROPERTY(int upperMode READ upperMode WRITE setUpperMode NOTIFY settingsChanged)
+    Q_PROPERTY(int lowerMode READ lowerMode WRITE setLowerMode NOTIFY settingsChanged)
 
-    /// Interpolation, per meter: 0 = interpolated (instant attack, eased fall),
-    /// 1 = raw (the last measurement verbatim, no ramp).
-    //
-    // Per meter and not global, because "raw" is a choice about a METER, in the
-    // same category as its detector — a user comparing the DSP wants one meter
-    // unvarnished while the others stay readable.  One switch for all four was
-    // the wrong shape: it forced the same answer on meters measuring different
-    // things.
-    Q_PROPERTY(int harmInterp  READ harmInterp  WRITE setHarmInterp  NOTIFY settingsChanged)
-    Q_PROPERTY(int upperInterp READ upperInterp WRITE setUpperInterp NOTIFY settingsChanged)
-    Q_PROPERTY(int lowerInterp READ lowerInterp WRITE setLowerInterp NOTIFY settingsChanged)
+    /// Full-circle range of the limiter GR arc, in dB: 6 / 12 / 24 / 48.
+    /// Display only; the ring's scale labels follow it.
+    Q_PROPERTY(int grRange READ grRange WRITE setGrRange NOTIFY settingsChanged)
+
+    /// 复合仪表亮条的回落方式：0 = INSTANT（直接跟随块采样峰值，停止播放立即归零），
+    /// 1 = VU（按 VU 表标准 300 ms 响应，99 % 在 300 ms 内到达）。
+    Q_PROPERTY(int meterRelease READ meterRelease WRITE setMeterRelease NOTIFY settingsChanged)
+
+    /// True when the editor is allowed to resize its window.  The QML corner
+    /// grip is only shown when this is set, so a fixed-size build cannot offer
+    /// a handle that does nothing.
+    Q_PROPERTY(bool windowResizable READ windowResizable NOTIFY windowResizableChanged)
+
+    /// The DEFAULT window-size preset, for the Settings panel's lit state.
+    /// `windowDefaultSaved` is false until SAVE AS DEFAULT has been used; the
+    /// DEFAULT button then behaves exactly like ORIGINAL.
+    Q_PROPERTY(int  defaultWindowW READ defaultWindowW NOTIFY windowSettingsChanged)
+    Q_PROPERTY(int  defaultWindowH READ defaultWindowH NOTIFY windowSettingsChanged)
+    Q_PROPERTY(bool windowDefaultSaved READ windowDefaultSaved NOTIFY windowSettingsChanged)
 
     // ---- global controls (the deck) ------------------------------------
     //
@@ -91,10 +105,9 @@ class OvEngine : public QObject
     /// Which snapshot is live: 0 = A, 1 = B.
     Q_PROPERTY(int abSlot READ abSlot WRITE setAbSlot NOTIFY abChanged)
 
-    /// True when the OTHER slot holds something worth recalling.  A/B starts
-    /// with only A recorded, and a switch to an empty slot would silently
-    /// replace the sound with the default — so the switch is disabled until the
-    /// other slot has been written.
+    /// True when the OTHER slot holds a recording.  Both slots are seeded from
+    /// the initial parameter state when the engine is constructed, so this is
+    /// true from the first frame; kept for QML bindings.
     Q_PROPERTY(bool abOtherReady READ abOtherReady NOTIFY abChanged)
 
 
@@ -111,8 +124,7 @@ public:
     double harm() const { return m_meters.harm; }
     double harmPeak() const { return m_meters.harmPeak; }
 
-    /// 0..1, already ballistic-filtered.  Same mapping the design uses:
-    /// (dB + 60) / 60 clamped, with a rate-derived release.
+    /// 0..1, using the design's (dB + 60) / 60 mapping without extra smoothing.
     double outLight() const { return m_outLight; }
     double inLight()  const { return m_inLight; }
     QVariantList spectrum() const { return m_spectrum; }
@@ -132,19 +144,66 @@ public:
     int driveMode() const { return m_driveMode; }
     int limiterMode() const { return m_limiterMode; }
 
-    int  harmDetector()  const { return m_harmDetector; }
-    int  upperDetector() const { return m_upperDetector; }
-    int  lowerDetector() const { return m_lowerDetector; }
-    int  harmInterp()  const { return m_harmInterp; }
-    int  upperInterp() const { return m_upperInterp; }
-    int  lowerInterp() const { return m_lowerInterp; }
+    int  harmMode()  const { return m_harmMode; }
+    int  upperMode() const { return m_upperMode; }
+    int  lowerMode() const { return m_lowerMode; }
+    int  grRange() const { return m_grRange; }
+    int  meterRelease() const { return m_meterRelease; }
 
-    void setHarmDetector (int);
-    void setUpperDetector (int);
-    void setLowerDetector (int);
-    void setHarmInterp (int);
-    void setUpperInterp (int);
-    void setLowerInterp (int);
+    void setHarmMode (int);
+    void setUpperMode (int);
+    void setLowerMode (int);
+    void setGrRange (int);
+    void setMeterRelease (int);
+
+    bool windowResizable() const { return m_windowResizable; }
+    void setWindowResizable (bool on)
+    {
+        if (on == m_windowResizable) return;
+        m_windowResizable = on;
+        emit windowResizableChanged();
+    }
+
+    /// The cursor position in screen (logical) pixels.
+    ///
+    /// The QML resize grip uses this instead of MouseArea coordinates because
+    /// the window is moving under the pointer while it drags: local
+    /// coordinates would feed the resize back into the delta and jitter.
+    Q_INVOKABLE QPointF cursorGlobalPos() const;
+
+    /// Ask the editor to resize the WINDOW (not the scene inside it).  The
+    /// editor forwards it to the host's own resize path.
+    Q_INVOKABLE void requestWindowResize (int w, int h);
+
+    /// The three WINDOW SIZE actions in the Settings panel.
+    ///
+    /// ORIGINAL is the fixed 1040x772 design.  DEFAULT is the preset written
+    /// by SAVE AS DEFAULT; until one exists it behaves exactly like ORIGINAL.
+    /// SAVE AS DEFAULT only records the CURRENT size — it does not become a
+    /// "always open at this size" rule, because the last-used size already is
+    /// what the window opens at.
+    Q_INVOKABLE void windowSizeOriginal();
+    Q_INVOKABLE void windowSizeDefault();
+    Q_INVOKABLE void windowSizeSaveDefault();
+
+    int  defaultWindowW() const { return m_defaultWindowW; }
+    int  defaultWindowH() const { return m_defaultWindowH; }
+    bool windowDefaultSaved() const { return m_defaultWindowW > 0 && m_defaultWindowH > 0; }
+    void setWindowDefaultSize (int w, int h)
+    {
+        if (w == m_defaultWindowW && h == m_defaultWindowH) return;
+        m_defaultWindowW = w;
+        m_defaultWindowH = h;
+        emit windowSettingsChanged();
+    }
+
+    /// Installed by the editor.  Empty in a fixed-size build.  The size
+    /// functions are separate from the grip's resize because ORIGINAL and
+    /// DEFAULT need the editor's DPI/screen clamping, not QML pixels.
+    std::function<void (int, int)> windowResizeRequest;
+    std::function<void()> windowSizeOriginalRequest;
+    std::function<void()> windowSizeDefaultRequest;
+    std::function<void()> windowSizeSaveDefaultRequest;
 
     bool bypassed() const { return m_bypassed; }
     void setBypassed (bool);
@@ -190,6 +249,8 @@ signals:
     void settingsChanged();
     void bypassChanged();
     void abChanged();
+    void windowResizableChanged();
+    void windowSettingsChanged();
 
 private slots:
     void tick();
@@ -211,12 +272,21 @@ private:
 
     // Display settings.  Saved under the display-settings key, not as
     // parameters — see the Q_PROPERTY block at the top of the class.
-    int  m_harmDetector  = 0;      // 0 RMS, 1 Peak
-    int  m_upperDetector = 0;
-    int  m_lowerDetector = 0;
-    int  m_harmInterp  = 0;        // 0 interpolated, 1 raw
-    int  m_upperInterp = 0;
-    int  m_lowerInterp = 0;
+    int  m_harmMode  = 1;          // 0 RMS, 1 TRANSIENT
+    int  m_upperMode = 1;
+    int  m_lowerMode = 1;
+    int  m_grRange   = 12;         // dB for a full limiter ring
+    int  m_meterRelease = 0;      // 0 instant, 1 VU 300 ms
+    bool m_windowResizable = false;
+    int  m_defaultWindowW = 0, m_defaultWindowH = 0;
+
+    /// When each analyser last delivered a block.  A stale table is silence,
+    /// not the previous picture — see the note in tick().
+    std::chrono::steady_clock::time_point m_inSpecAt {}, m_outSpecAt {};
+    /// When the analyser tables were last re-read.  A member, not a static:
+    /// several editor instances exist in one host process and a shared clock
+    /// would let one instance starve the others.
+    std::chrono::steady_clock::time_point m_lastSpecScan {};
 
     // Global controls.  The two snapshots live beside the live parameter state:
     // "A" is not the currently-live slot's copy, it is a recording, so the user
@@ -224,19 +294,11 @@ private:
     bool     m_bypassed = false;
     int      m_abSlot = 0;
     OvSource::Snapshot m_ab[2];
-    int          m_tickCount = 0;
     QTimer       m_timer;
 
-    // ---- the light's own clock ------------------------------------------
-    // A separate timer at a fixed display rate, not the data poll: a light has
-    // to keep moving between measurements, and its ballistics must be derived
-    // from the rate they actually run at (see OvEngine::lightTick).
+    // Display-rate sampling for the glass light; QML supplies its transition.
     QTimer       m_lightTimer;
     double       m_outLight = 0.0;
     double       m_inLight  = 0.0;
-    // The ballistic state behind those two, in dB (ui/qt/OvBallistics.h).
-    ovb::Fall    m_outFall;
-    ovb::Fall    m_inFall;
-    std::chrono::steady_clock::time_point m_lightAt {};
     void lightTick();
 };

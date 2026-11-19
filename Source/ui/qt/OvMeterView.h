@@ -96,22 +96,20 @@ private:
         double level = 0.0;
         double peak = 0.0;
         double holdUntil = 0.0;   // seconds
-
-        /// The ballistic state behind `level` and behind `peak`, in dB.
-        /// Both go through the same ovb::Fall as the ring, the light and the
-        /// analyser, so the four meters on this UI cannot drift apart again.
-        ovb::Fall levelFall;
-        ovb::Fall peakFall;
     };
 
     Channel m_outL, m_outR, m_inL, m_inR;
-    ovb::Fall m_harmFall;
     double  m_harmFrac = 0.0;
+    /// Limiter ring: 0..1 of a full counter-clockwise turn, and the dB that
+    /// full turn represents (6/12/24/48/96, from Settings).
+    double  m_limitFrac = 0.0;
+    int     m_grRange = 12;
 
-    // Display settings, mirrored from the engine each advance so this view does
-    // not have to hold a second connection to the settings signal.
-    bool    m_harmPeakMode = false;   // engine.harmDetector == 1
-    bool    m_noInterp      = false;  // engine.meterInterpolation == false
+    // MODE mirrored from the engine each advance so this view does not have to
+    // hold a second connection to the settings signal.  0 = RMS, 1 = TRANSIENT.
+    // The ring has no display smoothing of its own any more: the mode picks
+    // which measurement is drawn.
+    int     m_harmMode = 1;
     double  m_clock = 0.0;
     std::chrono::steady_clock::time_point m_last {};
     QTimer  m_timer;
@@ -122,5 +120,11 @@ private:
     // re-running a separable Gaussian over the whole pod every frame cost
     // ~15 fps.
     quint64 m_glowKey = 0;
+    /// The same key restricted to what APPEARS or DISAPPEARS — bars, cap dots,
+    /// ring arcs, the settings hover.  Those changes bypass the 30 Hz throttle,
+    /// because the frame that removes them is the last one that will be asked
+    /// for: without an immediate rebuild the cached halo kept a blurred dot at
+    /// the bottom of the meter until an unrelated repaint.
+    quint64 m_glowStructKey = ~quint64 (0);
     std::chrono::steady_clock::time_point m_glowBuiltAt {};
 };

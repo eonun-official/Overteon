@@ -189,6 +189,12 @@ OvMeters OvJuceSource::meters() const
     m.inR  = juce::Decibels::gainToDecibels (proc.meterInR.load(),  -90.0f);
     m.outL = juce::Decibels::gainToDecibels (proc.meterOutL.load(), -90.0f);
     m.outR = juce::Decibels::gainToDecibels (proc.meterOutR.load(), -90.0f);
+    m.inPkL  = juce::Decibels::gainToDecibels (proc.meterInPkL.load(),  -90.0f);
+    m.inPkR  = juce::Decibels::gainToDecibels (proc.meterInPkR.load(),  -90.0f);
+    m.outPkL = juce::Decibels::gainToDecibels (proc.meterOutPkL.load(), -90.0f);
+    m.outPkR = juce::Decibels::gainToDecibels (proc.meterOutPkR.load(), -90.0f);
+    m.gr     = proc.meterGr.load();
+    m.grPeak = proc.meterGrPk.load();
     m.harm = proc.meterHarm.load();
     m.harmPeak = proc.meterHarmPk.load();
     return m;
@@ -206,17 +212,29 @@ bool OvJuceSource::spectrumIn (float* dest, int count)
 
 bool OvJuceSource::analyse (float* dest, int count, bool inTap)
 {
-    auto& ready = inTap ? proc.fftInReady : proc.fftReady;
-    // No new block: leave `dest` alone so the caller keeps its last picture.
-    if (! ready.load()) return false;
+    // ---- continuous analysis -------------------------------------------
+    //
+    // The audio thread appends every sample to a ring, so there is always a
+    // fresh window available.  Taking the last fftSize samples here (on the UI
+    // thread, at the display's rate) is what makes the curve move every frame:
+    // the old tap published one block per fftSize samples and the display had
+    // nothing new in between, which read as stepping.
+    auto& written = inTap ? proc.specInWritten : proc.specOutWritten;
+    const uint32_t w = written.load (std::memory_order_acquire);
+    uint32_t& last = inTap ? lastInWritten : lastOutWritten;
+    if (w == last) return false;                    // no new samples: keep last picture
+    last = w;
+    if (w < (uint32_t) OverteonProcessor::fftSize) return false;   // not enough history yet
 
-    auto&  buf = inTap ? fftInBuf : fftBuf;
-    auto&  tap = inTap ? proc.fftInData : proc.fftData;
-    auto&  f   = inTap ? fftIn : fft;
+    auto&  buf  = inTap ? fftInBuf : fftBuf;
+    auto&  ring = inTap ? proc.specRingIn : proc.specRingOut;
+    auto&  f    = inTap ? fftIn : fft;
 
     std::fill (buf.begin(), buf.end(), 0.0f);
-    std::copy (tap.begin(), tap.begin() + OverteonProcessor::fftSize, buf.begin());
-    ready = false;
+    const uint32_t start = w - (uint32_t) OverteonProcessor::fftSize;
+    const uint32_t mask  = (uint32_t) (OverteonProcessor::specRingSize - 1);
+    for (int i = 0; i < OverteonProcessor::fftSize; ++i)
+        buf[(size_t) i] = ring[(size_t) ((start + (uint32_t) i) & mask)];
 
     window.multiplyWithWindowingTable (buf.data(), OverteonProcessor::fftSize);
     f.performFrequencyOnlyForwardTransform (buf.data());
@@ -224,41 +242,89 @@ bool OvJuceSource::analyse (float* dest, int count, bool inTap)
     const float fsr = juce::jmax (1.0f, (float) proc.getSampleRate());
     const int   maxBin = OverteonProcessor::fftSize / 2 - 1;
 
+    // One pow instead of one per bin: 1024 bins at 60 Hz per tap adds up, and
+    // a running product produces the same log spacing.
+    const float ratio = std::pow (1000.0f, 1.0f / (float) juce::jmax (1, count - 1));
+    float fr = 20.0f;
+
+    // ---- display tilt, dB per octave -------------------------------------
+    //
+    // White-ish material falls about 4.5 dB per octave, so an untilted
+    // analyser draws a long downhill and the top octaves look empty even when
+    // there is plenty there.  Every mainstream analyser compensates on the
+    // DISPLAY (SPAN's default slope, Pro-Q's Slope control); this is that
+    // compensation and it touches only the plotted value, never the audio.
+    // 4.5 dB/oct is SPAN's default; 1 kHz is the pivot so the overall level
+    // stays where it was.  Override with OVERTEON_SPECTILT (0 restores the
+    // old untilted display).
+    static const double tiltDbPerOct = [] {
+        const auto s = juce::SystemStats::getEnvironmentVariable ("OVERTEON_SPECTILT", {});
+        return s.isEmpty() ? 4.5 : s.getDoubleValue();
+    }();
+
     for (int i = 0; i < count; ++i)
     {
-        const float frac = (float) i / (float) juce::jmax (1, count - 1);
-        const float fr   = 20.0f * std::pow (1000.0f, frac);
 
-        // INTERPOLATE between FFT bins, do not truncate to the nearest one.
+        // ---- one display bin = one log-frequency column -----------------
         //
-        // The 128 display bins are log-spaced from 20 Hz to 20 kHz while the FFT
-        // has 1024 LINEAR bins — 23.4 Hz apart at 48 kHz.  Truncating meant the
-        // first ten display bins all read bin 0 and the next ones read bin 1, so
-        // the lowest decade came out as a few FLAT PLATEAUS: a rectangle at the
-        // left of the fill that stepped down instead of descending, which is the
-        // "it tears down like a rectangle below 20 Hz" report.  The same effect
-        // put a stair tread on every other log bin whose spacing was finer than
-        // one FFT bin.
+        // Below ~1 kHz a display bin is narrower than an FFT bin, so the value
+        // is interpolated between the two neighbours: that is what turns the
+        // left end from a staircase of plateaus into a ramp.
         //
-        // Above ~1 kHz the spacing is coarser than a bin so this changes nothing;
-        // at the bottom it turns the plateaus into the ramp the spectrum actually
-        // has.
+        // Above that the column spans several FFT bins, and the column takes
+        // the LOUDEST one rather than a point sample.  Point sampling there was
+        // wrong in a way that showed: a narrow 10 kHz tone is 5.9 Hz wide while
+        // a display bin is ~135 Hz, so whether the tone appeared at all
+        // depended on where the sample happened to fall — a steady sine could
+        // vanish.  The max is also what gives the reference's dense, spiky
+        // high end: neighbouring columns pick different FFT bins, so the
+        // outline follows the analyser bin by bin instead of an averaged
+        // envelope.
         //
         // Below the FIRST usable bin there is no data — bin 0 is DC and, with a
         // Hann window, holds the window sum, which twitches as the waveform
-        // slides through the buffer.  Hold the lowest real bin instead of
-        // interpolating towards DC, or the fill drops at the left edge.
-        const float raw  = fr / fsr * (float) OverteonProcessor::fftSize;
-        const float pos  = juce::jlimit (1.0f, (float) maxBin, raw);
-        const int   b0   = (int) pos;
-        const int   b1   = juce::jmin (maxBin, b0 + 1);
-        const float t    = pos - (float) b0;
-        const float mag0 = buf[(size_t) b0];
-        const float mag1 = buf[(size_t) b1];
-        const float mag  = (mag0 + (mag1 - mag0) * t)
-                         / (float) OverteonProcessor::fftSize * 8.0f;
-        const float db   = juce::Decibels::gainToDecibels (mag, -90.0f);
-        dest[i] = juce::jlimit (0.0f, 1.0f, juce::jmap (db, -85.0f, 0.0f, 0.0f, 1.0f));
+        // slides through the buffer.  Clamp to bin 1 instead, or the fill drops
+        // at the left edge.
+        const float raw0 = fr / fsr * (float) OverteonProcessor::fftSize;
+        const double tiltDb = tiltDbPerOct * std::log2 ((double) fr / 1000.0);
+        fr *= ratio;
+        const float raw1 = fr / fsr * (float) OverteonProcessor::fftSize;
+
+        float mag;
+        if (raw1 - raw0 <= 1.0f)
+        {
+            const float pos  = juce::jlimit (1.0f, (float) maxBin, raw0);
+            const int   b0   = (int) pos;
+            const int   b1   = juce::jmin (maxBin, b0 + 1);
+            const float t    = pos - (float) b0;
+            mag = (buf[(size_t) b0] + (buf[(size_t) b1] - buf[(size_t) b0]) * t)
+                / (float) OverteonProcessor::fftSize * 4.0f;
+        }
+        else
+        {
+            const int b0 = juce::jlimit (1, maxBin, (int) std::floor (raw0));
+            const int b1 = juce::jlimit (b0, maxBin, (int) std::ceil (raw1));
+            float mx = 0.0f;
+            for (int b = b0; b <= b1; ++b) mx = juce::jmax (mx, buf[(size_t) b]);
+            // Hann coherent gain is 0.5, so a full-scale sine at bin centre
+            // gives N/4, not N/2: 4/N is the calibration that makes 0 dBFS
+            // really 0 dBFS.
+            mag = mx / (float) OverteonProcessor::fftSize * 4.0f;
+        }
+
+        // The floor is the analyser's "nothing here", not a measurement: keep
+        // it at the bottom instead of tilting it up into a rising line, or
+        // digital silence would draw a slope on the right half.
+        const float measDb = juce::Decibels::gainToDecibels (mag, -90.0f);
+        if (measDb <= -89.5f)
+        {
+            dest[i] = 0.0f;
+        }
+        else
+        {
+            const float db = measDb + (float) tiltDb;
+            dest[i] = juce::jlimit (0.0f, 1.0f, juce::jmap (db, -90.0f, 6.0f, 0.0f, 1.0f));
+        }
     }
     return true;
 }
@@ -314,27 +380,55 @@ void OvJuceSource::ensureDefaultPreset (const juce::File& root) const
         xml->writeTo (def);
 }
 
+namespace
+{
+    // One folder of the preset tree:
+    //
+    //   { "name": "Factory",
+    //     "folders": [ <folder>, ... ],
+    //     "presets": [ "Air Lift", ... ] }
+    //
+    // The scan is RECURSIVE and does not know any folder names: Factory and
+    // User are created by presetRoot() but every other directory is reported
+    // exactly the same way, and a folder inside a folder becomes another node.
+    // The QML menu walks this tree, so depth is not limited anywhere.
+    juce::var presetFolderToVar (const juce::File& dir)
+    {
+        juce::Array<juce::File> dirs, files;
+
+        for (auto& e : juce::RangedDirectoryIterator (dir, false, "*",
+                     juce::File::findDirectories | juce::File::ignoreHiddenFiles))
+            dirs.add (e.getFile());
+
+        for (auto& e : juce::RangedDirectoryIterator (dir, false, "*.hinj",
+                     juce::File::findFiles | juce::File::ignoreHiddenFiles))
+            files.add (e.getFile());
+
+        const auto byName = [] (const juce::File& a, const juce::File& b)
+        {
+            return a.getFileName().compareIgnoreCase (b.getFileName()) < 0;
+        };
+        std::sort (dirs.begin(), dirs.end(), byName);
+        std::sort (files.begin(), files.end(), byName);
+
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty ("name", dir.getFileName());
+
+        juce::Array<juce::var> subfolders;
+        for (auto& d : dirs) subfolders.add (presetFolderToVar (d));
+
+        juce::Array<juce::var> presets;
+        for (auto& f : files) presets.add (f.getFileNameWithoutExtension());
+
+        obj->setProperty ("folders", subfolders);
+        obj->setProperty ("presets", presets);
+        return juce::var (obj);
+    }
+}
+
 std::string OvJuceSource::presetListJson()
 {
-    auto root = new juce::DynamicObject();
-    for (auto* folder : { "Factory", "User" })
-    {
-        std::vector<juce::String> names;
-        const auto d = presetRoot().getChildFile (folder);
-        if (d.isDirectory())
-            for (auto& e : juce::RangedDirectoryIterator (d, false, "*.hinj",
-                                                          juce::File::findFiles))
-                names.push_back (e.getFile().getFileNameWithoutExtension());
-
-        std::sort (names.begin(), names.end(),
-                   [] (const juce::String& a, const juce::String& b)
-                   { return a.compareIgnoreCase (b) < 0; });
-
-        juce::Array<juce::var> items;
-        for (auto& n : names) items.add (n);
-        root->setProperty (folder, items);
-    }
-    return st (juce::JSON::toString (juce::var (root)));
+    return st (juce::JSON::toString (presetFolderToVar (presetRoot())));
 }
 
 void OvJuceSource::applyPresetFile (const juce::File& f)
@@ -352,8 +446,18 @@ void OvJuceSource::applyPresetFile (const juce::File& f)
 
 bool OvJuceSource::loadPresetNamed (const std::string& folder, const std::string& name)
 {
+    // `folder` is now the RELATIVE PATH of the folder inside presets/, e.g.
+    // "Factory" or "Factory/Drums/Kicks" — the menu can nest without limit.
     const auto base = presetRoot();
-    auto f = base.getChildFile (qs (folder)).getChildFile (qs (name) + ".hinj");
+    auto dir = base;
+    for (auto& part : juce::StringArray::fromTokens (qs (folder), "/\\", ""))
+    {
+        if (part.isEmpty() || part == ".") continue;
+        if (part == "..") return false;
+        dir = dir.getChildFile (part);
+    }
+
+    auto f = dir.getChildFile (qs (name) + ".hinj");
     if (! f.isAChildOf (base) || ! f.existsAsFile()) return false;
     applyPresetFile (f);
     if (presetNameChanged) presetNameChanged (qs (name));

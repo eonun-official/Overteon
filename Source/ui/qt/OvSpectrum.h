@@ -17,10 +17,10 @@
 //       of a Rayleigh variable's dB is not the dB of its mean: the outline sits
 //       low and still twitches.
 //
-//    2. Along FREQUENCY: a 1/3-octave Gaussian.  The 128 bins are log-spaced
-//       at 12.8 per octave, so 1/3 octave is 4.27 bins wide (sigma 1.7).  This
-//       is what a fractional-octave analyser does and it is the only step that
-//       removes the bin-to-bin sawtooth.
+//    2. Along FREQUENCY: a half-octave Gaussian.  The 1024 bins are log-spaced
+//       at 25.6 per octave, so half an octave is sigma 5 bins.  This is what a
+//       fractional-octave analyser does and it is the only step that removes
+//       the bin-to-bin sawtooth.
 //
 //    3. Along TIME: a one-pole mean in the power domain, with separate attack
 //       and release constants.  A one-pole in power IS the exponential mean
@@ -59,14 +59,16 @@
 namespace ovspec
 {
 
-constexpr int    kBins     = 128;
-constexpr double kSpanDb   = 85.0;      // the table's 0..1 covers 85 dB
-constexpr double kFloorDb  = -85.0;     // table value 0
+constexpr int    kBins     = 1024;
+constexpr double kSpanDb   = 96.0;      // -90 .. +6 dBFS
+constexpr double kFloorDb  = -90.0;     // table value 0
 
-/// Half-width of the frequency kernel, in bins.  7 covers the sigma 2.5 used
+/// Half-width of the frequency kernel, in bins.  14 covers the sigma 5 used
 /// below out to 2.8 sigma, where the tail is ~2 % of the peak — beyond that the
-/// truncation would start to show as a flat floor at both ends.
-constexpr int kFreqHalf = 7;
+/// truncation would start to show as a flat floor at both ends.  At 1024 log
+/// bins (25.6 per octave) this is the same half-octave, peak band as the
+/// 7-bin / sigma-2.5 kernel was at 256 bins.
+constexpr int kFreqHalf = 14;
 
 inline double normToDb (double v)  { return std::clamp (v, 0.0, 1.0) * kSpanDb + kFloorDb; }
 inline double dbToNorm (double db) { return std::clamp ((db - kFloorDb) / kSpanDb, 0.0, 1.0); }
@@ -102,22 +104,56 @@ struct SpectrumBallistics
     double attackTau  = 0.096;      // 120 ms x 1.25
     double releaseTau = 0.208;      // 260 ms x 1.25  ->  4.343/0.208 = 20.9 dB/s
 
-    /// Half an octave.  sigma in bins: 12.8 bins/octave * (1/2) / 2.5 = 2.56,
-    /// rounded to 2.5.  Chosen from a sweep of (attack, release, sigma) against
+    /// Half an octave.  sigma in bins: 25.6 bins/octave / 2 / 2.5 = 5.12,
+    /// rounded to 5.0.  Chosen from a sweep of (attack, release, sigma) against
     /// a steady signal — the combination that gets the frame-to-frame change
     /// under 1 dB while still moving 20 dB in a quarter of a second.
-    double freqSigma  = 2.5;
+    double freqSigma  = 5.0;        // half an octave at 1024 bins
 
     void reset()
     {
         for (int i = 0; i < kBins; ++i) { m_pow[i] = 0.0; m_out[i] = 0.0f; }
     }
 
-    /// raw01: the engine's table, 0..1 over 85 dB.  out01 receives the same
-    /// scale.  dt in seconds; a caller that runs at 30 Hz passes 0.033.
+    /// raw01: the engine's table, 0..1 over the plot's dB span.  out01 receives
+    /// the same scale.  dt in seconds; a caller that runs at 60 Hz passes 0.0167.
     void advance (const float* raw01, float* out01, double dt)
     {
-        if (! (dt > 0.0)) dt = 1.0 / 30.0;
+        if (! (dt > 0.0)) dt = 1.0 / 60.0;
+
+        // ---- RAW: no averaging at all ------------------------------------
+        //
+        // This is the MiniMeters-style outline: one point per log bin, taken
+        // straight from the FFT.  Smoothing along frequency would flatten the
+        // narrow peaks that carry the detail, and smoothing along time would
+        // hold them for frames.  With the analyser now running on every frame
+        // the raw data is already continuous, so bypassing both is what makes
+        // the curve look fine AND move smoothly.
+        //
+        // The filter state is re-seeded from the current measurement when the
+        // eased display comes back, so it resumes from what is on screen
+        // instead of from wherever it was left.
+        if (! interp)
+        {
+            m_lastInterp = false;
+            for (int i = 0; i < kBins; ++i)
+            {
+                m_out[i] = raw01[i];
+                out01[i] = raw01[i];
+            }
+            return;
+        }
+
+        // Coming back from RAW: seed the time filter with the current
+        // measurement, or the eased display would ease from wherever the
+        // filter state was left instead of from what is on screen now.
+        if (! m_lastInterp)
+        {
+            for (int i = 0; i < kBins; ++i)
+                m_pow[i] = powerOfDb (normToDb (raw01[i]));
+            m_lastInterp = true;
+        }
+
         buildKernel();
 
         // ---- 1+2. dB -> power, then the 1/3-octave mean -------------------
@@ -196,6 +232,7 @@ private:
     float  m_out[kBins] {};
     double m_kernel[2 * kFreqHalf + 1] {};
     double m_kernelSigma = -1.0;
+    bool   m_lastInterp = true;      // was the previous frame smoothed?
 
     void buildKernel()
     {

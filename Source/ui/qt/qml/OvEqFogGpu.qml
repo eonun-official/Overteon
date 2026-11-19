@@ -25,13 +25,11 @@ Item {
 
     property OvEqView topView: null
     property OvEqView bottomView: null
-    /// fitScale of the design box (main.qml): design px -> window px.
-    property real   fitScale: 1.0
     /// Device pixel ratio the texture is built at.
     property real   dpr: (typeof ovDpr !== "undefined" && ovDpr > 0) ? ovDpr : 1.0
-    /// The fog's reach, in design px / on SCREEN.  Passed in because it is
-    /// divided by fitScale, i.e. it is a fixed size on screen rather than a
-    /// length in the design (see main.qml).
+    /// The fog's reach, in DESIGN px (the page's 224).  It scales with the
+    /// design, exactly like the curve, so the overflow covers the same number
+    /// of dB at every window size.
     property real   range: 224
     /// Half the gap between the two plot edges, in ITEM pixels.  Comes from the
     /// views because the padding rule (min(24, h*0.2)) is theirs.
@@ -123,12 +121,22 @@ Item {
         // centred on the seam and spans a reach each way.
         fogRange: root.height > 0
                   ? ((root.height / 2 - root.edgeGap) / root.height) : 1.0
-        sigma: 0.4
-        sigmaSlope: 6.05
-        // false: the fade is already in the stroke alphas (fogSegments applies
-        // it before the blur, like the painter version did).  Applying it again
-        // here would square the ramp.
-        fade: false
+        // The blur is in DESIGN pixels and grows with the distance from the
+        // plot edge, exactly like 0.9.10's twelve bands:
+        //   band 0 (first ~19 px past the edge) -> filter: none
+        //   ...
+        //   band 11 (at the 224 px reach)      -> blur(6.45 px)
+        // Because the whole design scales, a smaller window has fewer screen
+        // pixels of overflow, hence a smaller blur: the excess gets clearer,
+        // not softer.  A screen-constant sigma was the opposite of that.
+        sigma: 0.0
+        sigmaSlope: 6.45
+        // true: the fade is applied to the BLURRED result, exactly like the
+        // reference's per-band `globalAlpha` after its blur filter.  That keeps
+        // the solid core of the stroke; pre-fading the segments and blurring
+        // afterwards (the old `false` here) made the fog look dimmer and softer
+        // than 0.9.10.
+        fade: true
 
         // LIVE ONLY WHILE THE STROKES CHANGE.
         //
@@ -165,7 +173,6 @@ Item {
     onWidthChanged:   settle.restart()
     onHeightChanged:  settle.restart()
     onYChanged:       settle.restart()
-    onFitScaleChanged: settle.restart()
 
     // OVERTEON_FOGRAW: the unblurred strokes, to check the source on its own.
 

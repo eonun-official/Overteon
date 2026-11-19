@@ -1,0 +1,41 @@
+Subject: [PATCH] forward the toolchain to the nested vst3_helper configure
+
+JUCE builds juce_vst3_helper as a separate CMake project and configures it at
+build time.  That nested configure only received the compiler paths, so under a
+cross-compile it saw the host platform and probed clang-cl as if it were native
+("posix_spawn failed"), and the VST3 target died before linking.
+
+Three more settings have to be forwarded: the toolchain file (so it is a Windows
+configure at all), the cross-compiling emulator (so its try_run probes go through
+wine), and the build type (otherwise it defaults to Debug, and the xwin splat
+ships the release CRT only).
+
+Upstream 8.0.13 does not do this.  Applied by Config/CMakeLists.txt when
+cross-compiling for Windows, and only then -- a host build leaves the submodule
+pristine.
+---
+--- a/extras/Build/CMake/JUCEUtils.cmake
++++ b/extras/Build/CMake/JUCEUtils.cmake
+@@ -1106,6 +1106,22 @@
+         list(APPEND PASSTHROUGH_ARGS "-DCMAKE_RC_COMPILER=${CMAKE_RC_COMPILER}")
+     endif()
+ 
++    # Cross-compiling needs more than the compiler paths: the nested project
++    # configures from scratch, so without the toolchain file it sees the host
++    # platform and fails probing clang-cl ("posix_spawn failed").  The emulator
++    # lets the helper's try_run tests execute a target binary through wine.
++    if(CMAKE_TOOLCHAIN_FILE)
++        list(APPEND PASSTHROUGH_ARGS "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
++    endif()
++
++    if(CMAKE_CROSSCOMPILING_EMULATOR)
++        list(APPEND PASSTHROUGH_ARGS "-DCMAKE_CROSSCOMPILING_EMULATOR=${CMAKE_CROSSCOMPILING_EMULATOR}")
++    endif()
++
++    if(CMAKE_BUILD_TYPE)
++        list(APPEND PASSTHROUGH_ARGS "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
++    endif()
++
+     add_custom_target(${helper_target}
+         COMMAND "${CMAKE_COMMAND}"
+             "-G${CMAKE_GENERATOR}"

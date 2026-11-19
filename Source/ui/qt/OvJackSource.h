@@ -161,7 +161,10 @@ public:
 
     std::string presetListJson() override
     {
-        return R"({"Factory":["default","Air Lift","Drum Glue","Vocal Sheen"],"User":[]})";
+        return R"({"name":"presets","folders":[)"
+               R"({"name":"Factory","folders":[],"presets":["default","Air Lift","Drum Glue","Vocal Sheen"]},)"
+               R"({"name":"User","folders":[],"presets":[]})"
+               R"(],"presets":[]})";
     }
     bool loadPresetNamed (const std::string&, const std::string&) override { return true; }
     void openLoadDialog() override {}
@@ -203,8 +206,8 @@ public:
         for (int i = 0; i < n; ++i)
         {
             const double f  = 20.0 * std::pow (1000.0, (double) i / std::max (1, n - 1));
-            const double db = -85.0 + 85.0 * (double) dst[i] + eqGainDb (f);
-            dst[i] = (float) std::clamp ((db + 85.0) / 85.0, 0.0, 1.0);
+            const double db = -90.0 + 96.0 * (double) dst[i] + eqGainDb (f);
+            dst[i] = (float) std::clamp ((db + 90.0) / 96.0, 0.0, 1.0);
         }
         return true;
     }

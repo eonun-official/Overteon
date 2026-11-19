@@ -195,14 +195,15 @@ Item {
         // label's ink on row 733 and this was on 730.
         y: 54
         anchors.horizontalCenter: parent.horizontalCenter
-        width: root.width
         text: root.label
         color: OvTheme.faint
         font.family: OvTheme.uiFont
         font.pointSize: OvTheme.pt (10.5)
         font.letterSpacing: 0.6
-        horizontalAlignment: Text.AlignHCenter
-        elide: Text.ElideRight
+        // No width and no elide: the slot is 58 px, but "AIR PROTECT" and
+        // "HARMONICS" are wider than that and were being cut to "AIR PRO…".
+        // The deck's slots are at least ~59 px apart even at the narrowest
+        // design width, so a centred label can safely run past its slot.
     }
 
     Text {

@@ -60,11 +60,13 @@ Item {
     readonly property real fitScale: Math.max (1e-6,
         Math.min (width / OvTheme.designW, height / OvTheme.designH))
 
-    // How far the EQ overflow fog reaches past the plot edge, in design-box
-    // pixels.  224 is the page's `range`; dividing by the fit scale keeps it
-    // 224 screen px at every window size — the reach and the blur profile are
-    // a treatment, not layout, the same reasoning as the seam band below.
-    readonly property real fogRange: 224 / fitScale
+    // How far the EQ overflow fog reaches past the plot edge, in DESIGN pixels.
+    // 224 is the page's `range`, and the page is a fixed 1040x772 canvas, so
+    // the fog scales with the design.  Keeping it at a fixed SCREEN size was
+    // the bug: at a smaller window the same 224 px covered twice as many dB,
+    // so the curve's overflow dwarfed the dB grid; at a larger window the grid
+    // outgrew the curve.  The reach must follow the design, not the window.
+    readonly property real fogRange: 224
 
     // Snap a length in the design box's pixels to whole SCREEN pixels.
     //
@@ -242,7 +244,12 @@ Item {
                     // Detector for this half's analyser, from the Settings
                     // panel.  Per view on purpose: the two halves measure the
                     // input and the output and are independent metres.
-                    specPeak: root.engine ? root.engine.upperDetector === 1 : false
+                    // MODE: 0 = RMS (power mean + eased display), 1 = TRANSIENT
+                    // (loudest bin + raw display).  One property drives both;
+                    // the detector and the interpolation are no longer
+                    // independent choices.
+                    specPeak: root.engine ? root.engine.upperMode === 1 : false
+                    specNoInterp: root.engine ? root.engine.upperMode === 1 : false
                     // The CPU seam glass reads this half's pixels back; the
                     // GPU one samples the texture and needs no readback.
                     wantImage: root.cpuFrost
@@ -259,7 +266,8 @@ Item {
                     accent: OvTheme.pq
                     headerTop: false
                     glow: root.inLight * root.inLight
-                    specPeak: root.engine ? root.engine.lowerDetector === 1 : false
+                    specPeak: root.engine ? root.engine.lowerMode === 1 : false
+                    specNoInterp: root.engine ? root.engine.lowerMode === 1 : false
                     wantImage: root.cpuFrost
                 }
 
@@ -286,7 +294,6 @@ Item {
                     opacity: root.soloAlpha ("fog")
                     topView: scView
                     bottomView: pqView
-                    fitScale: root.fitScale
                     range: root.fogRange
                     // Half the distance between the two plot edges.  Both
                     // halves use the same padding rule, so it is that padding.
@@ -430,6 +437,89 @@ Item {
         }
     }
 
+    // ---- window resize grip (bottom-right) ------------------------------
+    //
+    // A plug-in cannot draw the host's window frame, so the grip lives inside
+    // the editor.  Dragging it asks the EDITOR to resize the window
+    // (setSize → the host's ui:resize / IPlugFrame::resizeView), not to
+    // stretch the scene inside a fixed frame.
+    //
+    // The delta comes from the global cursor, not from MouseArea coordinates:
+    // the moment the window starts growing, this item moves under the pointer,
+    // and local coordinates would feed the resize back into the delta (visible
+    // as jitter).  Hidden in a fixed-size build, where it would do nothing.
+    Item {
+        id: resizeGrip
+        visible: root.engine !== null && root.engine.windowResizable
+        width: 20
+        height: 20
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        z: 8000
+
+        property real startCursorX: 0
+        property real startCursorY: 0
+        property real startW: 0
+        property real startH: 0
+        property bool active: false
+
+        readonly property real minW: OvTheme.designW / 2
+        readonly property real minH: OvTheme.designH / 2
+
+        Canvas {
+            id: gripInk
+            anchors.fill: parent
+            onPaint: {
+                const ctx = getContext ("2d")
+                ctx.reset()
+                ctx.strokeStyle = Qt.rgba (OvTheme.faint.r, OvTheme.faint.g,
+                                           OvTheme.faint.b,
+                                           gripArea.containsMouse ? 0.85 : 0.40)
+                ctx.lineWidth = 1
+                for (const off of [ 5, 9, 13 ]) {
+                    ctx.beginPath()
+                    ctx.moveTo (width - off, height - 1)
+                    ctx.lineTo (width - 1, height - off)
+                    ctx.stroke()
+                }
+            }
+            Connections {
+                target: gripArea
+                function onContainsMouseChanged() { gripInk.requestPaint() }
+            }
+        }
+
+        MouseArea {
+            id: gripArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.SizeFDiagCursor
+
+            onPressed: (m) => {
+                if (! root.engine) return
+                const g = root.engine.cursorGlobalPos()
+                resizeGrip.startCursorX = g.x
+                resizeGrip.startCursorY = g.y
+                resizeGrip.startW = root.width
+                resizeGrip.startH = root.height
+                resizeGrip.active = true
+            }
+            onPositionChanged: (m) => {
+                if (! resizeGrip.active || ! root.engine) return
+                const g = root.engine.cursorGlobalPos()
+                // Free resize: the two axes are independent.  ORIGINAL and
+                // DEFAULT in Settings are the way back to a known size.
+                const w = Math.max (resizeGrip.minW,
+                           Math.min (4096, resizeGrip.startW + g.x - resizeGrip.startCursorX))
+                const h = Math.max (resizeGrip.minH,
+                           Math.min (4096, resizeGrip.startH + g.y - resizeGrip.startCursorY))
+                root.engine.requestWindowResize (Math.round (w), Math.round (h))
+            }
+            onReleased: resizeGrip.active = false
+            onCanceled: resizeGrip.active = false
+        }
+    }
+
     OvAbout { id: about; engine: root.engine }
     OvSettings { id: settings; engine: root.engine }
 
@@ -439,13 +529,8 @@ Item {
         return p ? Math.round (p.norm * 2) : 1
     }
 
-    // SM OOTHED in OvEngine, not mapped here.
-    //
-    // These used to be a binding on the raw dB values, which meant they were
-    // re-evaluated only when a new measurement arrived: the accent glow jumped
-    // from one brightness to the next and never appeared to move.  A light
-    // needs ballistics on its own clock; OvEngine::lightTick provides them and
-    // emits lightChanged at 60 Hz.
+    // OvEngine maps the louder L/R meter to 0..1 at display rate.  The glass
+    // squares this value and applies the same 100 ms linear transition as 0.9.10.
     readonly property real outLight: engine ? engine.outLight : 0
     readonly property real inLight:  engine ? engine.inLight  : 0
 

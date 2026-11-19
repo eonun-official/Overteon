@@ -6,7 +6,7 @@ normal browser, so it can be rendered and compared with any engine — Gecko,
 Blink, WebKit — without starting a DAW.
 
 ```
-cd tools/preview-server
+cd Tools/preview-server
 dub build --compiler=ldc2 --build=release     # first build fetches vibe.d
 ./keep-alive.sh start                          # serve on 0.0.0.0:8888
 ./keep-alive.sh status
@@ -18,7 +18,7 @@ dub build --compiler=ldc2 --build=release     # first build fetches vibe.d
 | route | what |
 |---|---|
 | `/` | landing page |
-| `/original` | the **original** HTML+CSS — `web_fx/index.html` from the original Overteon source tree, in `Assets/Assets/reference/original/web_fx` |
+| `/original` | the **original** HTML+CSS — `web_fx/index.html` from the original Overteon source tree, in `Assets/reference/original/web_fx` |
 | `/current` | the current UI (FrostEngine dual-Kawase blur, OVER\|TEON) |
 | `/compare` | both side by side in iframes |
 | `/raw/original`, `/raw/current` | the untouched `index.html` files |

@@ -1,0 +1,198 @@
+Overteon
+Copyright (C) 2026 EONUN
+
+This product is licensed under the GNU Affero General Public License, version 3
+(AGPL-3.0).  The full licence text is in LICENSE.  The complete corresponding
+source for every released binary is this repository, including the CMake build
+scripts under Config/; release binaries are tagged with the version they were
+built from.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU Affero General Public License for more details.
+
+
+================================================================================
+THIRD-PARTY COMPONENTS
+================================================================================
+
+Overteon is built on the following third-party components.  Their licences apply
+to those components; nothing in this project's licence grants you rights beyond
+what those licences allow.
+
+1. JUCE Framework 8.0.13
+   Copyright (c) Raw Material Software Limited and JUCE contributors.
+   Licensed under the GNU Affero General Public License v3, or under a
+   commercial JUCE licence.  This project uses the AGPLv3 option.
+   Upstream source: https://github.com/juce-framework/JUCE/tree/8.0.13
+   The build fetches this pinned tag.  A local, untracked checkout may exist
+   at Source/third_party/JUCE and is used when present; it is not part of this
+   repository, and the upstream tag above is the authoritative corresponding
+   source.
+   Licence text and the full list of JUCE's own bundled dependencies:
+   LICENSES/JUCE-8-LICENSE.md
+
+2. Qt 6.9.3 — the released single-file VST3 statically links Qt Core, Gui,
+   Qml, Quick, OpenGL and Network (Network is a transitive dependency of
+   Qml), plus the QML modules used by the editor.  The Qt Widgets,
+   QuickWidgets and ShaderTools modules are used only by the development
+   preview/build tools.  The development runtime under Build/dist-win (not a
+   release artifact) uses shared Qt DLLs and additional Qt modules/plugins;
+   all of them are covered by the Qt licences below.
+   Copyright (C) The Qt Company Ltd. and Qt contributors.
+   Qt is dual/triple licensed: commercial, GPLv3, LGPLv3.  This project uses
+   the open-source Qt build under the GPLv3 option.  The project as a whole is
+   distributed under AGPL-3.0, which AGPLv3 section 13 permits to be combined
+   with GPLv3 works, so the combined work is conveyed consistently.
+   The released single-file VST3 statically links Qt.  Because the complete
+   corresponding source of this project — including the build scripts and the
+   exact Qt version used — is published in this repository, the source and
+   relinking requirements of the GPLv3/LGPLv3 are satisfied.  Build/dist-win
+   is a development runtime and is not a release artifact.
+   Licence texts: LICENSES/GPL-3.0.txt, LICENSES/LGPL-3.0.txt
+   Qt's bundled third-party notices (FreeType, HarfBuzz, libjpeg-turbo,
+   libpng, PCRE2, zlib, glslang, SPIRV-Cross, double-conversion, md4c,
+   tinycbor and the other Qt 3rdparty components) are in LICENSES/Qt-6.9.3/.
+   The Qt GPL exception text is
+   LICENSES/Qt-6.9.3/Qt-GPL-exception-1.0.txt.
+   Exact Qt source and the written source offer: SOURCE_OFFER.md
+   Qt source: https://code.qt.io/cgit/qt/ , https://download.qt.io/
+
+3. Inter font — Inter-Regular.ttf, Inter-Medium.ttf, Inter-SemiBold.ttf,
+   Inter-Bold.ttf
+   Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter).
+   SIL Open Font License, Version 1.1.  Text: LICENSES/OFL-1.1-Inter.txt
+
+4. EDIX font — Source/ui/qt/res/edix.otf and Source/web_fx/edix.otf
+   Author: Dumpatom
+   Source: https://www.zcool.com.cn/work/ZNDc0MjMzOTI=.html
+   The author states on the source page that EDIX is free for personal and
+   commercial use, and that the font file itself may not be sold.  The page's
+   default article-reproduction notice is not the author's font-usage
+   statement.  Full attribution and terms: LICENSES/EDIX.txt.
+
+5. Steinberg VST3 SDK (bundled with JUCE)
+   MIT licence; see LICENSES/JUCE-8-LICENSE.md and
+   LICENSES/JUCE-8.0.13/VST3-SDK-LICENSE.txt.  The SDK headers are inside the
+   fetched JUCE tree (modules/juce_audio_processors_headless/format_types/VST3_SDK).
+
+6. eonun_logo.png and the OVER|TEON wordmark
+   Original artwork of this project, licensed under AGPL-3.0.
+
+7. Assets/reference/original/web_fx/ contains the original WebView editor that
+   this Qt editor is a port of.  It is part of this project and licensed under
+   AGPL-3.0.
+
+8. JUCE 8.0.13 bundled dependencies
+   The compiled JUCE modules include FLAC (BSD), Ogg Vorbis (BSD), libjpeg
+   (IJG), CHOC (ISC), QuickJS (MIT), VST3 SDK (MIT), pnglib (zlib), zlib
+   (zlib), HarfBuzz (Old MIT), SheenBidi (Apache-2.0) and the
+   OpenGL/Mesa/Khronos notices.  The JUCE headless-processor module also
+   contains the LV2 SDK and its lilv/serd/sord/sratom support libraries
+   (ISC, Copyright 2011-2021 David Robillard); these are compiled only into
+   LV2 builds, not into the distributed VST3.  The JUCE tree also carries
+   source-only components that are not compiled into the Windows VST3:
+   ASIO (Steinberg ASIO License or GPLv3), the AAX SDK (Avid AAX License or
+   GPLv3), AudioUnitSDK (Apache-2.0), Oboe (Apache-2.0), Box2D (zlib),
+   pslextensions (public domain), the reaper-sdk (zlib) and the Projucer
+   icons (MIT).  Verbatim licence texts: LICENSES/JUCE-8.0.13/.  The JUCE
+   licence itself is LICENSES/JUCE-8-LICENSE.md.
+
+9. Steinberg VST3 SDK — MIT
+   Verbatim licence: LICENSES/JUCE-8.0.13/VST3-SDK-LICENSE.txt
+
+10. VST2 clean-room headers
+    The build uses the project-authored clean-room headers at
+    Source/third_party/vst2sdk/pluginterfaces/vst2.x/aeffect.h and
+    aeffectx.h (AGPL-3.0, like the rest of the project).
+    The Xaymar clean-room SDK at Source/third_party/vst2sdk-xaymar
+    (BSD-3-Clause, Copyright 2020 Michael Fabian 'Xaymar' Dirks) is kept as a
+    reference/alternative and is not on the build's include path.  Its licence
+    is LICENSES/VST2-SDK-BSD-3-Clause.txt.  No VST2 binary is distributed.
+
+11. jucexqt — BSD-3-Clause
+    Source/ui/qt/OvQtComponent.{h,cpp} is a port of
+    https://github.com/torarnv/jucexqt
+    Copyright (C) 2023 The Qt Company Ltd.
+    Licence: LICENSES/jucexqt-BSD-3-Clause.txt
+
+
+================================================================================
+VERSION SCOPE
+================================================================================
+
+This NOTICE and LICENSES/ are the authoritative third-party declaration for the
+current release.  The current declaration is on main and on the
+v0.9.20-licences tag.  Older tags and development snapshots are retained as
+project history; they may predate this notice and are superseded by it.  Do not
+redistribute an older binary without applying the current NOTICE and LICENSES/.
+
+================================================================================
+DISTRIBUTION SCOPE
+================================================================================
+
+The release artifact is the single-file VST3 plug-in (Windows; AU is optional
+on macOS).  No VST2 or LV2 binaries are shipped.  The VST2 clean-room headers
+are source-only and are covered by LICENSES/VST2-SDK-BSD-3-Clause.txt.
+Build/dist-win is a development runtime (preview app and shared Qt DLLs) and
+is not a release artifact; its Qt DLLs and QML modules are covered by the Qt
+licences above.  A development VST3 zip is not part of the release.
+
+If a shared-Qt development bundle is distributed, it must additionally carry
+the notices for its Mesa/LLVM software OpenGL (opengl32sw.dll), Microsoft DXC
+(dxcompiler.dll, dxil.dll), D3Dcompiler_47.dll and the MSVC runtime DLLs.
+None of those are part of the single-file static VST3.
+
+================================================================================
+SOURCE OFFER
+================================================================================
+
+The complete corresponding source for the released binary is this repository
+at the release tag (v0.9.20 for this release).  The exact Qt 6.9.3 and JUCE
+8.0.13 source locations, the build configuration, and the written offer to
+provide the Qt source on request are in SOURCE_OFFER.md.
+
+
+
+================================================================================
+TRADEMARK
+================================================================================
+
+The names "Overteon", "OVER|TEON" and the associated logo are marks of the
+project author.  The AGPL-3.0 grants copyright and patent rights only; it does
+not grant permission to use these names or the logo.  Modified versions
+distributed to others must be renamed and must not use the marks, except as
+required to describe the origin of the code (for example "based on Overteon").
+
+
+================================================================================
+NO WARRANTY / LIMITATION
+================================================================================
+
+The components above are provided "as is", without warranty of any kind.  The
+authors of Overteon are not affiliated with The Qt Company or Raw Material
+Software Limited, and their names and trademarks are used only to identify the
+components in use.
+
+
+================================================================================
+中文说明（非正式，仅供阅读；以英文正文与许可证原文为准）
+================================================================================
+
+- 本项目 Overteon 0.9.20 以 AGPLv3 授权发布，全文见 LICENSE。
+- 对应的完整源码即本仓库，含 Config/ 下的构建脚本；每个发布版本都打了 tag。
+  JUCE 8.0.13 由构建脚本按 tag 拉取；本地未跟踪的 Source/third_party/JUCE
+  只是可选的离线副本。
+- 发布的单文件 VST3 静态链接 Qt 6.9.3（GPLv3 开源选项）；Build/dist-win
+  是开发运行时，不是发布产物。
+- Inter 字体为 SIL OFL 1.1；edix.otf 按原作者的免费商用声明使用。
+- jucexqt（BSD-3-Clause，Qt Company）用于 Qt 组件嵌入；通知见
+  LICENSES/jucexqt-BSD-3-Clause.txt。
+- VST2 构建使用项目自写的 clean-room 头；Xaymar SDK 仅作参考，不在构建
+  的 include 路径上。
+- 以上第三方组件按各自授权提供，不提供任何担保。

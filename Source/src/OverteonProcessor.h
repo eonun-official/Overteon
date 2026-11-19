@@ -7,6 +7,7 @@
 // ============================================================
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
+#include <cstdint>
 #include "DSP.h"
 #include "Limiter.h"
 #include "OvBallistics.h"   // ovb::Rms — the level meters' detector
@@ -68,8 +69,35 @@ public:
 
     void applyInit();
 
+    /// Editor window size, persisted per USER (not per project) in the same
+    /// settings file as the oversampling choice.  Closing the editor, removing
+    /// the plug-in and adding a new instance must all reopen at the size the
+    /// user left it at.
+    juce::Point<int> loadEditorSize() const;
+    void saveEditorSize (int w, int h) const;
+
+    /// The DEFAULT preset written by the Settings panel's SAVE AS DEFAULT.
+    /// Separate from the last-used size: the window always opens at the
+    /// last-used size, and DEFAULT is only a one-click preset.
+    juce::Point<int> loadDefaultEditorSize() const;
+    void saveDefaultEditorSize (int w, int h) const;
+
+    /// Meter MODE, per meter (0 = RMS, 1 = TRANSIENT), stored per user beside
+    /// the window size.  Display settings — never parameters.
+    int  loadMeterMode (const juce::String& key, int fallback) const;
+    void saveMeterMode (const juce::String& key, int value) const;
+
+    /// Any other integer display preference (the limiter ring's range).
+    int  loadIntSetting (const juce::String& key, int fallback) const;
+    void saveIntSetting (const juce::String& key, int value) const;
+
     // ---- editor taps ----
-    static constexpr int fftOrder = 11;
+    //
+    // 8192 samples is 170 ms at 48 kHz: the frequency bins are 5.9 Hz apart,
+    // which is what turns the low end from a handful of plateaus into a curve
+    // and lets the high end show the analyser's own per-bin structure instead
+    // of a smoothed envelope.
+    static constexpr int fftOrder = 13;
     static constexpr int fftSize  = 1 << fftOrder;
     std::array<float, fftSize> fftData {};
     std::atomic<bool>  fftReady  { false };
@@ -81,8 +109,43 @@ public:
     /// needs both pictures in the same frame.
     std::array<float, fftSize> fftInData {};
     std::atomic<bool>  fftInReady { false };
+
+    /// Continuous analyser history, as a single-producer ring.
+    ///
+    /// The old taps published one fftSize block and then went quiet until the
+    /// next block had filled (85 ms at 48 kHz, 170 ms at 8192).  The editor
+    /// could only redraw on those boundaries, so the curve was a slideshow no
+    /// matter how fast the UI painted.  Here the audio thread only appends
+    /// samples; the editor takes the last fftSize samples on every frame and
+    /// runs its own FFT, so the picture advances at the display rate.  The
+    /// extra audio-thread work is one store per sample.
+    static constexpr int specRingSize = 2 * fftSize;   // power of two
+    std::array<float, specRingSize> specRingIn  {};
+    std::array<float, specRingSize> specRingOut {};
+    std::atomic<uint32_t> specInWritten  { 0 };        // free-running count
+    std::atomic<uint32_t> specOutWritten { 0 };
+    uint32_t specInW = 0, specOutW = 0;                // audio thread only
+
     std::atomic<float> meterInL  { 0.0f }, meterInR  { 0.0f };
     std::atomic<float> meterOutL { 0.0f }, meterOutR { 0.0f };
+    /// Sample peak of the same blocks, linear gain.
+    ///
+    /// The RMS atomics above are what a level meter normally shows, but they
+    /// integrate over 300 ms and therefore cannot drop the instant the signal
+    /// stops.  The display's bright bar offers a true-instant mode, and this is
+    /// the measurement that mode needs: max |x| over the block, no smoothing
+    /// anywhere.  The peak is of the block, so it is still frame-rate
+    /// independent — it is a measurement of the audio, not of the display.
+    std::atomic<float> meterInPkL { 0.0f }, meterInPkR { 0.0f };
+    std::atomic<float> meterOutPkL { 0.0f }, meterOutPkR { 0.0f };
+    /// Limiter gain reduction, dB.  `meterGrPk` is this block's deepest
+    /// reduction (the limiter's own gain, or the soft-clip delta in CLIP);
+    /// `meterGr` is the same through the 131 ms one-pole that the harmonic
+    /// ratio uses, so the ring's RMS/TRANSIENT modes have one measurement each.
+    std::atomic<float> meterGr   { 0.0f };
+    std::atomic<float> meterGrPk { 0.0f };
+    double grSmooth = 0.0;
+
     std::atomic<float> meterHarm { -100.0f };   // harmonic/dry ratio, dB (smoothed)
     /// The same ratio WITHOUT the 131 ms smoothing: this block's measurement.
     ///
@@ -146,20 +209,12 @@ private:
     std::unique_ptr<juce::dsp::Oversampling<double>> osN[5];
     std::unique_ptr<juce::dsp::Oversampling<double>> osD[5];   // idle clones for the dry path
     int osLat[5] { 0, 0, 0, 0, 0 };
-    int lastOsIdx = 0, driveLat = 0, dryPos = 0, firGuardLat = 31;
+    int lastOsIdx = 0, driveLat = 0, dryPos = 0;
     std::vector<double> dryFifoL, dryFifoR;
     juce::AudioBuffer<double> dbuf, dryBufD;
     omega::Biquad scEq[5][2], scEq2[5][2], scInv[5][2];
     omega::Biquad postEq[5][2], postEq2[5][2];
     omega::Biquad airLP[2];   // wet-signal high cut (AIR PROTECT)
-    // shared linear-phase FIR guard (manual convolution, fully controlled),
-    // applied to BOTH harmonics and dry paths so any residual leakage meets
-    // the dry with identical phase everywhere.
-    static constexpr int kGuardTaps = 63;
-    std::array<double, kGuardTaps> guardCoef {};
-    std::array<double, kGuardTaps> guardZH[2] {};   // harmonics-path delay lines
-    std::array<double, kGuardTaps> guardZD[2] {};   // dry-path delay lines
-    int guardZHpos[2] { 0, 0 }, guardZDpos[2] { 0, 0 };
     double gSmooth = 1.0;   // adaptive linear-null gain (Bussgang tracker)
     double scMultS = 1.0;   // smoothed SC EQ range multiplier (click-free switching)
     double pqMultS = 1.0;   // smoothed Post EQ range multiplier

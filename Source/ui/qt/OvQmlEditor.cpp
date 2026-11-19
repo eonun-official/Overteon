@@ -6,6 +6,7 @@
 #include "OverteonProcessor.h"
 #include "OvEngine.h"
 #include "OvJuceSource.h"
+#include "OvPointer.h"
 #include "OvQmlTypes.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -13,17 +14,43 @@
 #include <QGuiApplication>
 #include <QQuickView>
 #include <QQmlContext>
+#include <QQmlEngine>
 #include <QQuickWindow>
 #include <QScreen>
 #include <QTimer>
 #include <QWindow>
 #include <QAbstractEventDispatcher>
+#include <QAbstractNativeEventFilter>
 #include <QFontDatabase>
 #include <QFont>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QKeyEvent>
+#include <QQuickItem>
 #include <QPointingDevice>
 #include <QFileInfo>
+
+#include <functional>
+
+#ifdef QT_STATIC
+#include <QQmlExtensionPlugin>
+Q_IMPORT_QML_PLUGIN(QtQuick2Plugin)
+Q_IMPORT_QML_PLUGIN(QtQmlPlugin)
+Q_IMPORT_QML_PLUGIN(QtQmlModelsPlugin)
+Q_IMPORT_QML_PLUGIN(QtQmlWorkerScriptPlugin)
+#if JUCE_WINDOWS
+#include <QtCore/qplugin.h>
+Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
+#endif
+#endif
+
+#if JUCE_WINDOWS
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -31,6 +58,20 @@
 
 namespace
 {
+#if JUCE_WINDOWS
+    juce::File bundledQtDirectory()
+    {
+        return juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
+    }
+
+    void configureBundledQtPaths()
+    {
+        const auto dir = bundledQtDirectory();
+        if (dir.getChildFile ("platforms").isDirectory())
+            QCoreApplication::addLibraryPath (QString::fromWCharArray (dir.getFullPathName().toWideCharPointer()));
+    }
+#endif
+
     // One QGuiApplication per process, created on first editor use. It has to
     // outlive every editor, hence the intentional leak.
     bool ensureQtApp()
@@ -39,6 +80,10 @@ namespace
         static bool ok = false;
         if (attempted) return ok;
         attempted = true;
+
+#if JUCE_WINDOWS
+        configureBundledQtPaths();
+#endif
 
         if (qobject_cast<QGuiApplication*> (QCoreApplication::instance()) != nullptr)
         {
@@ -95,16 +140,86 @@ namespace
         ok = true;
         return ok;
     }
-}   // anonymous namespace
+    /// QWindow::installEventFilter wants a QObject; OvQmlEditor is a JUCE
+    /// object, so this thin adapter holds a callback into the editor.
+    class KeyFilter : public QObject
+    {
+    public:
+        explicit KeyFilter (std::function<bool (QEvent*)> fn) : handler (std::move (fn)) {}
 
+        bool eventFilter (QObject*, QEvent* e) override
+        {
+            return handler != nullptr && handler (e);
+        }
+
+    private:
+        std::function<bool (QEvent*)> handler;
+    };
+
+#if JUCE_WINDOWS
+    /// Records which window owned keyboard focus immediately before the
+    /// embedded QWindow took it.
+    ///
+    /// WM_SETFOCUS carries that window in lParam — the same value SetFocus()
+    /// returns, and exactly what the VSTGUI host-forwarding fix records.  Keys
+    /// the editor does not consume are posted to that window (via its root
+    /// owner), which is how mature plug-ins keep Space/transport working in
+    /// hosts whose shortcuts do not run before the plug-in window sees the key.
+    ///
+    /// This filter is READ-ONLY: it never changes focus and never consumes a
+    /// message, so it cannot interfere with mouse handling.
+    class FocusTracker : public QAbstractNativeEventFilter
+    {
+    public:
+        FocusTracker (QQuickView* v, std::function<void (WId)> fn)
+            : view (v), handler (std::move (fn)) {}
+
+        bool nativeEventFilter (const QByteArray&, void* message, qintptr*) override
+        {
+            auto* msg = static_cast<MSG*> (message);
+            if (msg == nullptr || msg->message != WM_SETFOCUS)
+                return false;
+            if (view == nullptr || msg->hwnd != (HWND) view->winId())
+                return false;
+
+            if (handler != nullptr)
+                handler ((WId) msg->lParam);
+
+            return false;                 // observe only
+        }
+
+    private:
+        QQuickView* view = nullptr;
+        std::function<void (WId)> handler;
+    };
+#endif
+}   // anonymous namespace
 
 struct OvQmlEditor::Impl
 {
     std::unique_ptr<OvJuceSource> source;
     std::unique_ptr<OvEngine>     engine;
+
+    /// Scene-wide pointer state, exposed to QML as `OvPointer`.  It filters
+    /// the view's mouse events, so it must outlive the QML scene: declaring it
+    /// before the view (which is owned by qtComponent) achieves that.
+    std::unique_ptr<OvPointer>    pointer;
+
     QQuickView*   view = nullptr;      // owned by qtComponent
     bool          qtOk = false;
     bool          failed = false;
+
+    /// Installed on the QWindow: routes keys QML did not consume to the HOST
+    /// window (not back into this plug-in's peer).
+    std::unique_ptr<QObject> keyFilter;
+
+#if JUCE_WINDOWS
+    /// Watches WM_SETFOCUS so we know which host window to post to.
+    std::unique_ptr<FocusTracker> focusTracker;
+
+    /// The window that had focus immediately before the QWindow took it.
+    HWND lastHostFocus = nullptr;
+#endif
 };
 
 OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
@@ -194,6 +309,77 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
         impl->source = std::make_unique<OvJuceSource> (proc);
         impl->engine = std::make_unique<OvEngine> (std::move (impl->source));
 
+        // The QML corner grip asks for a WINDOW resize.  setSize is the host's
+        // own path: JUCE's wrappers turn an editor size change into LV2
+        // ui:resize / IPlugFrame::resizeView, so the host resizes the window
+        // instead of the scene being stretched inside a fixed frame.  In a
+        // fixed-size build the grip stays hidden (windowResizable=false) and
+        // this lambda would refuse anyway.
+        impl->engine->windowResizeRequest = [this] (int w, int h)
+        {
+            if (! isResizable()) return;
+            w = juce::jlimit (OvThemeWidth / 2, 4096, w);
+            h = juce::jlimit (OvThemeHeight / 2, 4096, h);
+            if (w == getWidth() && h == getHeight()) return;
+            setSize (w, h);
+        };
+        impl->engine->setWindowResizable (isResizable());
+
+        // ---- WINDOW SIZE presets (the Settings row) ---------------------
+        //
+        // ORIGINAL always means the fixed design, never "whatever is on disk".
+        // DEFAULT is the preset written by SAVE AS DEFAULT, and until one
+        // exists it behaves exactly like ORIGINAL.  SAVE AS DEFAULT records the
+        // current size only; the window still opens at the LAST-USED size,
+        // which the resize debounce above keeps up to date.
+        impl->engine->windowSizeOriginalRequest = [this]
+        {
+            if (! isResizable()) return;
+            const auto s = designSize();
+            if (s.x != getWidth() || s.y != getHeight()) setSize (s.x, s.y);
+        };
+        impl->engine->windowSizeDefaultRequest = [this]
+        {
+            if (! isResizable()) return;
+            auto s = proc.loadDefaultEditorSize();
+            s = (s.x > 0 && s.y > 0) ? clampSize (s) : designSize();
+            if (s.x != getWidth() || s.y != getHeight()) setSize (s.x, s.y);
+        };
+        impl->engine->windowSizeSaveDefaultRequest = [this]
+        {
+            if (! isResizable()) return;
+            proc.saveDefaultEditorSize (getWidth(), getHeight());
+            if (impl && impl->engine)
+                impl->engine->setWindowDefaultSize (getWidth(), getHeight());
+        };
+        if (const auto d = proc.loadDefaultEditorSize(); d.x > 0 && d.y > 0)
+            impl->engine->setWindowDefaultSize (d.x, d.y);
+
+        // ---- meter MODE persistence --------------------------------------
+        //
+        // One MODE per meter (0 = RMS, 1 = TRANSIENT), stored per user beside
+        // the window size.  Loaded before the first frame so the plots come up
+        // in the user's mode, then written back whenever the panel changes a
+        // display setting.
+        impl->engine->setHarmMode  (proc.loadMeterMode ("harmMode",  1));
+        impl->engine->setUpperMode (proc.loadMeterMode ("upperMode", 1));
+        impl->engine->setLowerMode (proc.loadMeterMode ("lowerMode", 1));
+
+        {
+            int r = proc.loadIntSetting ("grRange", 12);
+            if (r != 6 && r != 12 && r != 24 && r != 48) r = 12;
+            impl->engine->setGrRange (r);
+        }
+
+        QObject::connect (impl->engine.get(), &OvEngine::settingsChanged,
+                          impl->engine.get(), [this] {
+            if (! impl || ! impl->engine) return;
+            proc.saveMeterMode ("harmMode",  impl->engine->harmMode());
+            proc.saveMeterMode ("upperMode", impl->engine->upperMode());
+            proc.saveMeterMode ("lowerMode", impl->engine->lowerMode());
+            proc.saveIntSetting ("grRange",  impl->engine->grRange());
+        });
+
         // keep the QML preset name in sync with dialogs opened from the UI
         if (auto* juceSource = dynamic_cast<OvJuceSource*> (&impl->engine->source()))
             juceSource->presetNameChanged = [this] (const juce::String& n)
@@ -202,6 +388,41 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
             };
 
         impl->view = new QQuickView();
+
+        // One pointer service for the whole scene.  QML popups ask it whether
+        // the cursor is still on them instead of relying on hover event order.
+        impl->pointer = std::make_unique<OvPointer> (impl->view);
+        impl->view->rootContext()->setContextProperty ("OvPointer", impl->pointer.get());
+
+#if JUCE_WINDOWS
+        // Remember the host window that had focus just before this QWindow.
+        // The filter only observes WM_SETFOCUS; it never calls SetFocus or
+        // changes the focus chain in any way.
+        impl->focusTracker = std::make_unique<FocusTracker> (
+            impl->view, [this] (WId w)
+            {
+                if (impl == nullptr || impl->view == nullptr) return;
+                auto* prev = reinterpret_cast<HWND> (w);
+                if (prev == nullptr
+                    || prev == reinterpret_cast<HWND> (impl->view->winId()))
+                    return;
+                if (IsWindow (prev))
+                    impl->lastHostFocus = prev;
+            });
+        if (auto* app = QCoreApplication::instance())
+            app->installNativeEventFilter (impl->focusTracker.get());
+#endif
+
+        // Keys the QML scene does not consume must continue to the host.
+        impl->keyFilter = std::make_unique<KeyFilter> (
+            [this] (QEvent* e) { return forwardKeyToHost (e); });
+        impl->view->installEventFilter (impl->keyFilter.get());
+
+#if JUCE_WINDOWS
+        const auto qmlDir = bundledQtDirectory().getChildFile ("qml");
+        if (qmlDir.isDirectory())
+            impl->view->engine()->addImportPath (QString::fromWCharArray (qmlDir.getFullPathName().toWideCharPointer()));
+#endif
 
         // A QQuickView is a top-level window by default.  It must NOT be
         // translucent: once it is reparented into the host's window, any region
@@ -302,10 +523,30 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
     // window, so anything read in this constructor is the size the host picked,
     // not the size that was asked for.
     sizeCheckIn = 45;
+
+    // What is already on disk.  resized() compares against it, so simply
+    // opening and closing the editor at the stored size writes nothing.
+    lastSavedSize = proc.loadEditorSize();
 }
 
 OvQmlEditor::~OvQmlEditor()
 {
+    // One last chance to persist the size: the debounce may not have fired yet
+    // if the editor was closed right after a drag.
+    if (getWidth() > 0 && getHeight() > 0)
+    {
+        const juce::Point<int> s (getWidth(), getHeight());
+        if (s != lastSavedSize) proc.saveEditorSize (s.x, s.y);
+    }
+
+#if JUCE_WINDOWS
+    // Remove the focus observer BEFORE the QWindow it dereferences is
+    // destroyed.  The tracker is read-only, but it must not outlive the view.
+    if (impl != nullptr && impl->focusTracker != nullptr)
+        if (auto* app = QCoreApplication::instance())
+            app->removeNativeEventFilter (impl->focusTracker.get());
+#endif
+
     // Order matters.  The component owns the QWindow and its foreign-window
     // wrapper; destroying it detaches the window from the host first (see the
     // note in OvQtComponent.h about the double destroy).  Only then is it safe
@@ -342,37 +583,59 @@ void OvQmlEditor::resized()
 {
     if (qtComponent != nullptr)
         qtComponent->setBounds (getLocalBounds());
+
+    // Schedule the size save.  A drag calls this on every frame; the timer
+    // writes once, half a second after the last change.
+    if (impl != nullptr && impl->qtOk && getWidth() > 0 && getHeight() > 0
+        && juce::Point<int> (getWidth(), getHeight()) != lastSavedSize)
+        saveSizeIn = 30;
 }
 
 // ---------------------------------------------------------------------------
-//  The editor's size in DEVICE pixels — what the host is asked for.
+//  The editor size to request from the host.
 // ---------------------------------------------------------------------------
 juce::Point<int> OvQmlEditor::targetSize() const
 {
-    // ---- the design size, AFTER the desktop scale --------------------------
-    //
-    // The editor must occupy the same PHYSICAL area the design was drawn for,
-    // so the number the host is asked for is design x devicePixelRatio: 1040x772
-    // becomes 1354x1005 on a 1.302 desktop.
-    //
-    // This used to return the plain design size, on the theory that "the host
-    // multiplies by the desktop scale itself".  Measured on jalv.gtk3 it does
-    // not: asking for 1040 produced a 1040x772 host window, and the QQuickView
-    // inside it -- which Qt had already scaled up by the same ratio -- came out
-    // 1354x1005, larger than its own parent.  So the scaling happened exactly
-    // once, on the wrong side.
-    //
-    // The ratio is the one Qt itself will use for the embedded window, taken
-    // from the same screen Qt picks the window up on.  Rounding to whole pixels
-    // keeps the host canvas and the child window on the same integer.
+    // The size the user left the editor at wins over the design size.  It is
+    // stored per user, so closing the editor, removing the plug-in or adding a
+    // second instance all reopen at that size instead of making the user drag
+    // the corner again.
+    if (const auto saved = proc.loadEditorSize(); saved.x > 0 && saved.y > 0)
+        return clampSize (saved);
+
+    return designSize();
+}
+
+juce::Point<int> OvQmlEditor::designSize() const
+{
+    // JUCE editor sizes are logical pixels on Windows; its peer applies the
+    // display scale. Multiplying by DPR here makes the host frame larger than
+    // the Qt content. The existing Linux host path is measured in device pixels.
     const qreal dpr = [] {
+       #if JUCE_WINDOWS
+        return qreal (1.0);
+       #else
         if (auto* scr = QGuiApplication::primaryScreen())
             return scr->devicePixelRatio();
         return qreal (1.0);
+       #endif
     }();
 
-    int w = (int) std::lround (OvThemeWidth  * dpr);
-    int h = (int) std::lround (OvThemeHeight * dpr);
+    return clampSize ({ (int) std::lround (OvThemeWidth  * dpr),
+                        (int) std::lround (OvThemeHeight * dpr) });
+}
+
+juce::Point<int> OvQmlEditor::clampSize (juce::Point<int> s) const
+{
+    const qreal dpr = [] {
+       #if JUCE_WINDOWS
+        return qreal (1.0);
+       #else
+        if (auto* scr = QGuiApplication::primaryScreen())
+            return scr->devicePixelRatio();
+        return qreal (1.0);
+       #endif
+    }();
 
     // The design also has to FIT: a scaled editor must not ask for more than the
     // screen it will open on, or the host clamps it and the panels are cut off.
@@ -384,16 +647,16 @@ juce::Point<int> OvQmlEditor::targetSize() const
                            scr->availableGeometry().height() * dpr);
         if (avail.width() > 200 && avail.height() > 200)
         {
-            const double k = std::min (1.0, std::min ((double) avail.width()  / w,
-                                                      (double) avail.height() / h));
-            w = (int) std::lround (w * k);
-            h = (int) std::lround (h * k);
+            const double k = std::min (1.0, std::min ((double) avail.width()  / s.x,
+                                                      (double) avail.height() / s.y));
+            s.x = (int) std::lround (s.x * k);
+            s.y = (int) std::lround (s.y * k);
         }
     }
 
-    w = juce::jlimit (460, 8192, w);
-    h = juce::jlimit (341, 8192, h);
-    return { w, h };
+    s.x = juce::jlimit (460, 8192, s.x);
+    s.y = juce::jlimit (341, 8192, s.y);
+    return s;
 }
 
 
@@ -432,6 +695,21 @@ void OvQmlEditor::timerCallback()
         sizeReported = true;
     }
 
+    // ---- persist the editor size ----------------------------------------
+    //
+    // resized() only arms the countdown; this is where it fires.  Half a second
+    // (30 ticks at 60 Hz) after the last resize, one tiny XML write.  A drag
+    // therefore costs exactly one write, not one per frame.
+    if (saveSizeIn > 0 && --saveSizeIn == 0)
+    {
+        const juce::Point<int> s (getWidth(), getHeight());
+        if (s.x > 0 && s.y > 0 && s != lastSavedSize)
+        {
+            proc.saveEditorSize (s.x, s.y);
+            lastSavedSize = s;
+        }
+    }
+
     // ---- the one thing JUCE still has to do for Qt ----------------------
     // Qt has no event loop of its own inside a plug-in: the host pumps this
     // timer through the LV2/VST3 idle path, and this is where Qt's queued
@@ -446,4 +724,130 @@ void OvQmlEditor::timerCallback()
     // second in jalv, which is the "the fps is random" report.
     if (QCoreApplication::instance() != nullptr)
         QCoreApplication::processEvents (QEventLoop::AllEvents, 5);
+}
+
+// ---------------------------------------------------------------------------
+//  Keys the QML scene does not consume go to the HOST.
+// ---------------------------------------------------------------------------
+//
+//  The editor is a QQuickView embedded as a child of the JUCE peer.  Once that
+//  child owns native focus, Windows delivers every key to Qt and neither the
+//  JUCE peer nor the host sees a WM_KEYDOWN by the normal route — Space and
+//  transport keys then appear dead.
+//
+//  Mature plug-ins (FabFilter; the VSTGUI host-forwarding fix) keep focus on
+//  the plug-in window — the mouse wheel needs it on Windows — consume only the
+//  keys the UI actually uses, and hand the rest to the HOST window.  Focus is
+//  never changed here.  Posting to our own peer was the old bug: the message
+//  re-entered this editor instead of reaching the host.
+bool OvQmlEditor::forwardKeyToHost (QEvent* event)
+{
+   #if JUCE_WINDOWS
+    if (impl == nullptr || impl->view == nullptr || event == nullptr)
+        return false;
+
+    const auto type = event->type();
+    if (type != QEvent::KeyPress && type != QEvent::KeyRelease)
+        return false;
+
+    auto* ke = static_cast<QKeyEvent*> (event);
+
+    // Escape closes the QML modals (About, Settings, the node editor).
+    if (ke->key() == Qt::Key_Escape)
+        return false;
+
+    // An IME composition belongs to Qt even when no field has focus.
+    if (ke->nativeVirtualKey() == VK_PROCESSKEY)
+        return false;
+
+    // Typing into a value field must stay in Qt.  The input-method query is
+    // true exactly for TextInput/TextEdit and false for every other item.
+    if (auto* focusItem = impl->view->activeFocusItem())
+        if (focusItem->inputMethodQuery (Qt::ImEnabled).toBool())
+            return false;
+
+    auto* peer = getPeer();
+    if (peer == nullptr)
+        return false;
+
+    auto* pluginHwnd = static_cast<HWND> (peer->getNativeHandle());
+    if (pluginHwnd == nullptr || ! IsWindow (pluginHwnd))
+        return false;
+
+    // The plug-in's own peer is the WRONG target: posting there re-enters this
+    // editor (and JUCE may consume the key), which is why the old version
+    // looked like it did nothing.  Hand the key to the host window:
+    //   1. the window that had focus just before the QWindow (WM_SETFOCUS
+    //      lParam, recorded by FocusTracker), reduced to its root owner;
+    //   2. otherwise the plug-in window's root owner.
+    HWND target = nullptr;
+
+    if (impl->lastHostFocus != nullptr && IsWindow (impl->lastHostFocus))
+    {
+        // Only a window in THIS process can be the DAW.  Focusing another
+        // application and then clicking the plug-in would otherwise post the
+        // key into that application.
+        DWORD pid = 0;
+        GetWindowThreadProcessId (impl->lastHostFocus, &pid);
+        if (pid == GetCurrentProcessId())
+            target = GetAncestor (impl->lastHostFocus, GA_ROOTOWNER);
+    }
+
+    if (target == nullptr || target == pluginHwnd)
+        target = GetAncestor (pluginHwnd, GA_ROOTOWNER);
+
+    if (target == nullptr || target == pluginHwnd)
+        target = GetParent (pluginHwnd);
+
+    if (target == nullptr || target == pluginHwnd)
+        return false;
+
+    const int vk = ke->nativeVirtualKey();
+    if (vk == 0)
+        return false;
+
+    const bool isUp  = type == QEvent::KeyRelease;
+    const bool isSys = (ke->modifiers() & Qt::AltModifier) != 0;
+
+    // lParam layout (WM_KEYDOWN): repeat 1, scan code, extended flag;
+    // WM_KEYUP additionally sets the previous-state and transition bits.
+    LPARAM lp = 1 | ((LPARAM) ke->nativeScanCode() << 16);
+
+    if (ke->isAutoRepeat())
+        lp |= (1L << 30);              // previous key state: still down
+
+    switch (vk)
+    {
+        case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN:
+        case VK_PRIOR: case VK_NEXT: case VK_HOME: case VK_END:
+        case VK_INSERT: case VK_DELETE: case VK_DIVIDE:
+        case VK_NUMLOCK: case VK_RCONTROL: case VK_RMENU:
+            lp |= (1L << 24);   // extended key
+            break;
+        default:
+            break;
+    }
+
+    if (isUp)
+        lp |= (1L << 30) | (1L << 31);
+    if (isSys)
+        lp |= (1L << 29);              // context code: Alt is down
+
+    const BOOL posted = PostMessageW (target,
+                                      isSys ? (isUp ? WM_SYSKEYUP   : WM_SYSKEYDOWN)
+                                            : (isUp ? WM_KEYUP      : WM_KEYDOWN),
+                                      (WPARAM) vk, lp);
+
+    if (ovEnvFlag ("OVERTEON_KEYDBG"))
+        std::fprintf (stderr,
+                      "[key] vk %d %s  lastHost %p  target %p  plugin %p  posted %d\n",
+                      vk, isUp ? "up" : "down",
+                      (void*) impl->lastHostFocus, (void*) target,
+                      (void*) pluginHwnd, (int) posted);
+
+    return true;
+   #else
+    juce::ignoreUnused (event);
+    return false;
+   #endif
 }

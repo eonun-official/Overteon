@@ -40,12 +40,6 @@ Item {
         return p ? p.norm > 0.5 : true
     }
 
-    function toggleBand (band) {
-        if (band < 0 || band > 4) return
-        const p = bandOnParam (band)
-        if (p) p.setNorm (p.norm > 0.5 ? 0.0 : 1.0)
-    }
-
     // limiter mode: 0 Off, 1 Clip, 2 Modern, 3 True Peak
     readonly property int limiterIndex: {
         const p = engine ? engine.param ("protectMode") : null
@@ -87,40 +81,13 @@ Item {
             OvMenu.show (bandMenu, x, y)
         }
 
-        // ---- hover shows the editable field, not a summary --------------
-        //
-        // The old behaviour was a one-line tip ("#2 Bell · 1.2k Hz · +3.0 dB").
-        // That told the user what the band IS and then made them double-click to
-        // change it.  The field can be shown directly: hovering a node opens the
-        // same editor a double-click used to, and leaving closes it.
-        //
-        // Which frees the double-click for something it could never do before —
-        // switching the band off.  See onNodeEditRequested below.
-        function onHoverBandChanged (band) {
-            if (band >= 0) {
-                // Re-place on every band so moving from node to node keeps the
-                // box on the node the pointer is actually over.
-                if (! nodeEdit.visible || nodeEdit.band !== band) nodeEdit.open (band)
-                else nodeEdit.place ()
-            } else if (nodeEdit.visible && nodeEdit.autoOpened) {
-                nodeEdit.close ()
-            }
-        }
-
         function onHoverEnded () { tip.visible = false; tipTimer.stop() }
 
-        // ---- node numeric editor (double-click a node) -------------------
-        //
-        // The widget is nodeEdit, below.  These three handlers are the same
-        // contract the page has with its own canvas: a double-click on a node
-        // opens it, a double-click on empty canvas that needs a new node says
-        // so when the pool is full, and a plot gesture can take it away.
-        // Double-click toggles the band off and on.  It used to open the editor,
-        // but hovering does that now — and the editor is already open when a
-        // double-click lands on a node, so re-opening it would be a no-op and
-        // the gesture would be wasted.
-        function onNodeEditRequested (band) { root.toggleBand (band) }
+        // 悬停节点即打开数值编辑窗（FabFilter 风格），双击节点不再必需；
+        // 双击空白仍用于创建节点。离开节点/弹窗只启动关闭延迟。
+        function onNodeEditRequested (band) { nodeEdit.open (band) }
         function onNodeEditClosed () { nodeEdit.close () }
+        function onNodeEditHoverEnded () { nodeEdit.requestClose () }
 
         function onPoolExhausted () {
             tipText.text = "ALL 5 NODES IN USE — REMOVE ONE FIRST"
@@ -128,6 +95,20 @@ Item {
             tip.y = 8
             tip.visible = true
             tipTimer.restart()          // 1400 ms, as flashFull() does
+        }
+    }
+
+    // Keep the node editor's three numbers live while the NODE itself is
+    // dragged in the plot or its value is changed with the wheel.  Those edits
+    // go through OvParam::setNorm in C++ and never pass through the field's
+    // scrub handler, so without this the box stayed on the values it had when
+    // it opened.
+    Connections {
+        target: root.engine
+        enabled: root.engine !== null
+
+        function onParamRevisionChanged (sc, pq) {
+            if (nodeEdit.visible) nodeEdit.refresh (false)
         }
     }
 
@@ -476,11 +457,12 @@ Item {
     // ======================================================================
     //  Node numeric editor — 1:1 with .nodeedit in web_fx/index.html
     //
-    //  Double-click a node and three bare values appear above it, each with
-    //  its unit appended.  The editor is bound to the BAND, not to a screen
-    //  position: it follows its node wherever the node goes and stays open
-    //  until dismissed — ✕, Esc, a press on empty canvas, or walking more than
-    //  30 px away.  The last two arrive as nodeEditClosed from the plot.
+    //  Hovering a node opens three bare values above it, each with its unit
+    //  appended.  The editor is bound to the BAND, not to a screen position:
+    //  it follows its node wherever the node goes and stays open until
+    //  dismissed — ✕, Esc, a press on empty canvas, or a 400 ms grace timer
+    //  that starts when the pointer leaves both the node and the box and is
+    //  cancelled by entering either one (FabFilter-style).
     //
     //  Geometry, colours and type sizes are the page's:
     //      width 80   padding 6 8 7   radius 4
@@ -517,25 +499,57 @@ Item {
         property int  band: -1
         property bool below: false
         property real arrowX: width / 2
-        /// True once the pointer has been inside the box, so that leaving it
-        /// later is what closes the editor — and merely appearing under a
-        /// pointer that is nowhere near it does not.
-        property bool wasHovered: false
+        /// 400 ms 关闭冗余：离开节点或弹窗后启动，回到节点或进入弹窗即取消。
+        /// 不再使用"离开立即关闭"，避免鼠标在节点与输入框之间移动时弹窗消失。
+        Timer {
+            id: neCloseTimer
+            interval: 400
+            onTriggered: nodeEdit.close ()
+        }
 
-        /// True when the box was opened by hovering rather than by a gesture,
-        /// so that only a hover-opened box closes on hover-out.  A box the user
-        /// clicked into must survive the pointer wandering to a field.
-        property bool autoOpened: false
+        /// 指针是否在框内（包括三个数值字段、scrub 区、✕ 和边框）。
+        property bool pointerInside: false
 
-        /// True while a field is being scrubbed.  Scrubbing freq or gain moves
-        /// the node, the box follows it, and the pointer stays where the hand
-        /// is — so without this the 30 px rule (and the pointer-leave rule)
-        /// would close the editor in the middle of the gesture.
+        /// 事件驱动，不轮询。
+        ///
+        /// OvPointer 在视图的每一次鼠标移动/离开时发出 moved()，这里只做
+        /// 一次矩形判定。它不依赖 hover 事件：hover 只给最上层 item，且
+        /// 指针从频点移到框上时，视图的 leave 和框的 enter 谁先谁后没有
+        /// 保证；一旦 leave 排在后面，400 ms 计时器会在已经进入框之后才
+        /// 启动，框就在手底下消失。
+        function evaluatePointer () {
+            if (! visible) return
+            const inside = OvPointer.inside (nodeEdit, 8)
+            if (inside !== nodeEdit.pointerInside) {
+                nodeEdit.pointerInside = inside
+                if (root.view) root.view.setEditingPointerInside (inside)
+            }
+            if (inside) neCloseTimer.stop ()
+        }
+
+        Connections {
+            target: OvPointer
+            function onMoved () { nodeEdit.evaluatePointer () }
+        }
+
+        onVisibleChanged: if (visible) evaluatePointer ()
+
+        /// True while a field is being scrubbed.  The box keeps following the
+        /// node (see place()); this flag only suppresses the hover/leave
+        /// close rules, so the editor cannot close in the middle of the
+        /// gesture while the hand is away from the box.
         property bool scrubbing: false
 
         function beginScrub () {
             scrubbing = true
+            neCloseTimer.stop ()
             if (root.view) root.view.setEditingScrub (true)
+        }
+
+        /// 只启动一次延迟：持续移动不会无限延长弹窗寿命；scrubbing 时忽略。
+        function requestClose () {
+            if (! visible || scrubbing) return
+            if (! neCloseTimer.running) neCloseTimer.start ()
         }
 
         /// Ask the plot to repaint now, the way one of its own drags does.
@@ -567,10 +581,10 @@ Item {
 
         function open (b) {
             if (b < 0 || b > 4) return
-            // Called from a hover when the box is not already up on this band.
-            autoOpened = ! visible
+            neCloseTimer.stop ()
+            // 同一节点的重复悬停只取消关闭，不重置字段（避免打断输入）。
+            if (visible && band === b) { place (); return }
             band = b
-            wasHovered = false
             visible = true
             if (root.view) root.view.setEditingBand (b)
             refresh (true)
@@ -578,9 +592,13 @@ Item {
         }
 
         function close () {
+            neCloseTimer.stop ()
             if (! visible) return
+            // Never leave the plot believing a scrub is still running: a box
+            // dismissed mid-gesture would otherwise suppress hover-close for
+            // the rest of the session.
+            if (scrubbing) endScrub ()
             visible = false
-            autoOpened = false
             band = -1
             if (root.view) root.view.setEditingBand (-1)
         }
@@ -620,16 +638,13 @@ Item {
         /// aims at the node.  updateEdit() in the page.
         function place () {
             if (band < 0 || ! root.view) return
-            // It DOES follow the node while a field is being scrubbed.
-            //
-            // An earlier version pinned the box during a scrub, to stop it
-            // moving under the hand.  That treated a symptom: the drag ran away
-            // because it measured its delta in this MouseArea's own coordinates,
-            // and the box moving was merely what exposed it.  With the delta
-            // measured in WINDOW coordinates (OvNeField's winY) a moving box
-            // cannot affect the value at all, so there is nothing left to
-            // stabilise — and a readout that stays behind while its node slides
-            // away is strictly worse than one that follows.
+
+            // The box follows the node during a scrub, just as it does during
+            // a node drag.  Freezing it here stranded the box at the position
+            // where the drag started while the node travelled away, which is
+            // the "the box stays there" report.  Closing mid-gesture is
+            // prevented by the scrub flag and OvEqView::setEditingScrub, not
+            // by pinning the box.
             const p = root.view.nodePosition (band)
             const ew = width, eh = height
 
@@ -646,6 +661,13 @@ Item {
             nodeEdit.x = x
             nodeEdit.y = y
             arrowX = Math.max (11, Math.min (ew - 11, px - x))
+
+            // The plot needs the box's rectangle as well as the node's: the walk
+            // from one to the other passes through space inside neither, and
+            // that gap is what used to close the editor mid-reach.  Mapped into
+            // the view because the box is a sibling of it, not a child.
+            const vp = nodeEdit.mapToItem (root.view, 0, 0)
+            root.view.setEditingRect (vp.x, vp.y, nodeEdit.width, nodeEdit.height)
         }
 
         // The node moves whenever a parameter moves it — a drag, a scrub, a
@@ -747,30 +769,17 @@ Item {
             y: 0
             width: nodeEdit.width
             height: nodeEdit.height
-            hoverEnabled: true
             acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
 
+            // Hover is tracked by the 60 ms cursor poll above, not here: this
+            // area is UNDER the fields, so containsMouse went false as soon as
+            // the pointer reached them.
+            //
             // The FIELDS are above this (later siblings, own z), so a press on
             // one of them reaches them first.  Everything else lands here and
             // is swallowed, which is what keeps the plot from reading it as a
             // click on empty canvas.
             onClicked: (m) => { m.accepted = true }
-            // pointerleave closes it, as the page's listener does
-            onContainsMouseChanged: {
-                // Tell the plot the pointer is on the box, so its 30 px
-                // "walked away from the node" rule stands down.  The page gets
-                // this for free — its editor covers the canvas — but here the
-                // box is a sibling, so the plot keeps receiving hover events
-                // while the pointer is on it, and the fields sit 40-60 px from
-                // the node: without this, moving towards a field closed the
-                // editor.
-                if (root.view) root.view.setEditingPointerInside (containsMouse)
-
-                if (! containsMouse && nodeEdit.visible && nodeEdit.wasHovered
-                        && ! nodeEdit.scrubbing)
-                    nodeEdit.close ()
-                if (containsMouse) nodeEdit.wasHovered = true
-            }
         }
 
         Column {
@@ -799,7 +808,7 @@ Item {
                 // .nex — transparent until the box is hovered, then faint
                 Text {
                     text: "✕"
-                    color: neBlock.containsMouse ? OvTheme.faint : "transparent"
+                    color: nodeEdit.pointerInside ? OvTheme.faint : "transparent"
                     font.family: OvTheme.uiFont
                     font.pixelSize: 9
                     anchors.right: parent.right

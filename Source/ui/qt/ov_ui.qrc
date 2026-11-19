@@ -10,6 +10,7 @@
         <file alias="OvToggle.qml">qml/OvToggle.qml</file>
         <file alias="OvRangeBadge.qml">qml/OvRangeBadge.qml</file>
         <file alias="OvPresetButton.qml">qml/OvPresetButton.qml</file>
+        <file alias="OvPresetFolderMenu.qml">qml/OvPresetFolderMenu.qml</file>
         <file alias="OvBandMenu.qml">qml/OvBandMenu.qml</file>
         <file alias="OvNeField.qml">qml/OvNeField.qml</file>
         <file alias="OvEqSection.qml">qml/OvEqSection.qml</file>

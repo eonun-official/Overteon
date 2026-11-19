@@ -146,9 +146,13 @@ side-by-side comparison with the original).
 
 ## What ends up in the binary
 
-Qt is linked as a shared library, as its licence requires, so the plug-in
+The development builds made here link Qt as a shared library, so the plug-in
 contains no Qt code — the modules appear in its `DT_NEEDED` / import table and
-are loaded by the host at run time. What the binary *does* carry for no good
+are loaded by the host at run time. The released single-file VST3 is a different
+proposition: it statically links Qt Core, Gui, Qml, Quick, Network and OpenGL, so
+that one is a single file with no runtime beside it. Both are licence-compatible
+with AGPL-3.0 + Qt's GPLv3 option, and NOTICE states which is which; see
+[README.md](README.md) section 15. What the binary *does* carry for no good
 reason is a symbol table: `.symtab` and its 868 KB string table exist for a
 debugger and are dead weight in a plug-in that ships. Release builds now link
 with `-s`:

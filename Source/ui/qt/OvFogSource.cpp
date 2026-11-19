@@ -88,8 +88,21 @@ quint64 OvFogSource::signature() const
     if (m_bottom != nullptr) mix (m_bottom->curveSignature());
     mix (quint64 (std::llround (width()  * 16.0)));
     mix (quint64 (std::llround (height() * 16.0)));
+    // The strokes are laid out in the VIEWS' coordinates, so their slope
+    // depends on each view's plot geometry.  A free resize can change the
+    // design height without changing this surface's own size, and without
+    // these the fog would keep a stale slope while the plot redrew at the new
+    // one.  The width matters for the same reason (the x mapping).
     if (m_top != nullptr)
-        mix (quint64 (std::llround (m_top->displayScale() * 4096.0)));
+    {
+        mix (quint64 (std::llround (m_top->width()  * 16.0)));
+        mix (quint64 (std::llround (m_top->height() * 16.0)));
+    }
+    if (m_bottom != nullptr)
+    {
+        mix (quint64 (std::llround (m_bottom->width()  * 16.0)));
+        mix (quint64 (std::llround (m_bottom->height() * 16.0)));
+    }
     return h;
 }
 

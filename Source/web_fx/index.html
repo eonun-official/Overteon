@@ -392,9 +392,10 @@ canvas{display:block}
     <img alt="Eonun">
     <div class="abtitle">OVER<b>TEON</b></div>
     <div class="abver">v0.9.14 · EONUN</div>
-    <p>The moment saturation occurs, the topology engine wakes. It extracts <b>only the harmonics the saturator has just created</b> — sample-accurate, inside the oversampled domain — while your dry signal passes completely untouched.</p>
-    <p>This additive-only design solves phase interference and pre-ringing at the same time: the original signal is never subtracted from or re-phased, so there is no phase conflict to fix. You keep the support and translucency of the source and gain pure harmonic density — with effectively zero cost to your dynamics.</p>
-    <p>The sidechain EQ decides what the saturator hears; a mathematically exact inverse (de-emphasis) cancels the linear component, so what remains is distortion harmonics only — nothing added but the harmonics themselves, nothing taken away at all.</p>
+    <p>OVERTEON is inspired by passive equalisers, taken one step further: colour that never costs dynamics. The harmonics created by saturation are separated from the dry signal and merged back only at the output, so the dry keeps its own transients and support while the Post EQ tunes the combined result.</p>
+    <p><b>HARMONIC</b> — the full design. The sidechain EQ shapes what the saturator hears; only the newly generated harmonics are extracted, and the dry passes through an identical idle oversampler so the merge is phase-exact. The Post EQ then tunes the result.</p>
+    <p><b>SCHRANZ</b> — the sidechain EQ is the output. Hard, dramatic shaping goes straight into the limiter; the saturator and Post EQ are bypassed, and punch, compression and overload colour come from the limiter itself.</p>
+    <p><b>CLASSIC</b> — the conventional route. The whole signal is saturated, blended with the dry by MIX, then tuned by the Post EQ.</p>
     <div class="abcr">Produced by <b>Eur9ka</b> &amp; <b>Eonun</b> &nbsp;·&nbsp; Designed by <b>Eonun</b></div>
     <div class="abhome"><span id="abSite">eonun-official.github.io</span></div>
     <button class="hbtn" id="abClose">CLOSE</button>

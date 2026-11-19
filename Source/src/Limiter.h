@@ -9,6 +9,7 @@
 //  The limiter's 2x / 4x / 8x oversampling is independent from
 //  the saturation path's global 2x..32x setting.
 // ============================================================
+#include "Oversampling.h"
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
 #include <cmath>
@@ -28,14 +29,11 @@ public:
         maxBlock = juce::jmax (1, maxBlockSize);
         work.setSize (2, maxBlock, false, false, true);
 
+        // Same high-quality half-band recipe as the saturation chain (one copy
+        // in Oversampling.h); the limiter's own 2x/4x/8x/16x objects are still
+        // independent of the main chain's.
         for (int i = 0; i < 4; ++i)
-        {
-            os[i] = std::make_unique<juce::dsp::Oversampling<double>> (
-                2, i + 1,
-                juce::dsp::Oversampling<double>::filterHalfBandFIREquiripple,
-                true, true);
-            os[i]->initProcessing ((size_t) maxBlock);
-        }
+            omega::initHighQualityOversampling (os[i], i + 1, maxBlock);
 
         // 2.5 ms at 16x is the longest lookahead this limiter ever needs.
         maxLook = (int) std::ceil (0.0025 * sr * 16.0) + 2;
@@ -74,6 +72,15 @@ public:
     Mode getMode() const noexcept { return mode; }
     int  getOversampling() const noexcept { return osIndex; }
 
+    /// Deepest gain reduction applied in the last process() call, in dB.
+    ///
+    /// This is the limiter's OWN gain (or the soft-clip delta in CLIP mode),
+    /// not a difference between input and output peaks: lookahead means the
+    /// peak that caused a reduction is not in the same output sample, so a
+    /// peak-to-peak measurement under-reads exactly the transients the ring is
+    /// meant to show.  Zero in OFF mode, and reset on every block.
+    double getLastGainReductionDb() const noexcept { return lastGainReductionDb; }
+
     int getLatencySamples() const
     {
         if (mode == Mode::off || mode == Mode::clip) return 0;
@@ -83,15 +90,30 @@ public:
 
     void process (double* L, double* R, int n)
     {
+        lastGainReductionDb = 0.0;
         if (n <= 0 || mode == Mode::off) return;
 
         if (mode == Mode::clip)
         {
+            // CLIP has no lookahead gain: the reduction is the per-sample
+            // difference between the input and the soft-knee output.  The
+            // below-knee region is untouched, so it contributes 0 dB.
+            constexpr double knee = 0.8912509381;
+            double maxGr = 0.0;
             for (int i = 0; i < n; ++i)
             {
+                for (double* ch : { &L[i], &R[i] })
+                {
+                    const double a = std::abs (*ch);
+                    if (a <= knee) continue;
+                    const double y = std::abs (softClip (*ch));
+                    if (y > 1.0e-12)
+                        maxGr = juce::jmax (maxGr, 20.0 * std::log10 (a / y));
+                }
                 L[i] = softClip (L[i]);
                 R[i] = softClip (R[i]);
             }
+            lastGainReductionDb = maxGr;
             return;
         }
 
@@ -108,6 +130,7 @@ public:
         g = 1.0;
         lookCount = 0;
         delayLen = 1;
+        lastGainReductionDb = 0.0;
     }
 
 private:
@@ -167,6 +190,7 @@ private:
         auto* ur = up.getChannelPointer (1);
 
         const int windowLen = lookCount + 1;
+        double minG = 1.0;
 
         for (int i = 0; i < m; ++i)
         {
@@ -208,6 +232,8 @@ private:
                 g += (target - g) * rel;
             }
 
+            minG = juce::jmin (minG, g);
+
             const int di = delayPos;
             const double dl = delayL[(size_t) di];
             const double dr = delayR[(size_t) di];
@@ -229,6 +255,10 @@ private:
             L[i] = juce::jlimit (-ceiling, ceiling, work.getSample (0, i));
             R[i] = juce::jlimit (-ceiling, ceiling, work.getSample (1, i));
         }
+
+        lastGainReductionDb = (minG < 0.9999)
+                            ? -20.0 * std::log10 (juce::jmax (1.0e-9, minG))
+                            : 0.0;
     }
 
     double sr = 48000.0;
@@ -240,6 +270,7 @@ private:
     int dqCap = 0, dqHead = 0, dqCount = 0;
     std::int64_t pos = 0;
     double g = 1.0;
+    double lastGainReductionDb = 0.0;
     double attackCoef = 0.0, relFastCoef = 0.0, relSlowCoef = 0.0;
 
     Mode mode = Mode::modern;
