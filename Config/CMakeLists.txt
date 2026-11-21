@@ -89,6 +89,8 @@ function(ov_maybe_strip _tgt)
     # symbols in a separate .pdb, which the packaging step already leaves out.
 endfunction()
 
+include(cmake/OverteonShaders.cmake)
+
 
 # ---------------------------------------------------------------------------
 #  Where products land
@@ -192,6 +194,7 @@ if(OVERTEON_PREVIEW_ONLY)
     set(CMAKE_AUTOMOC ON)
     set(CMAKE_AUTORCC ON)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets ShaderTools)
+    ov_configure_qt_shaders()
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
     add_executable(overteon-qml-preview
@@ -204,19 +207,16 @@ if(OVERTEON_PREVIEW_ONLY)
         ../Source/ui/qt/OvMeterView.cpp
         ../Source/ui/qt/OvSeamFrost.cpp ../Source/ui/qt/OvBlurTest.cpp
         ../Source/ui/qt/OvFrost.cpp
-        ../Source/ui/qt/ov_ui.qrc)
+        ../Source/ui/qt/OvCryptoShim.cpp
+        ../Source/ui/qt/ov_ui.qrc
+        ${OVERTEON_SHADER_QRC})
+    add_dependencies(overteon-qml-preview overteon_shaders)
+    target_compile_definitions(overteon-qml-preview PRIVATE OVERTEON_VERSION="${PROJECT_VERSION}")
     target_include_directories(overteon-qml-preview PRIVATE ../Source/ui/qt)
     target_link_libraries(overteon-qml-preview PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets
-        # OvEqView is a QQuickFramebufferObject and paints with a
-        # QOpenGLPaintDevice: GL tessellates the paths instead of the CPU
-        # rasterising them into an image.
-        Qt6::OpenGL)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets)
 
-    # the preview checks for a compositing manager before Qt starts
     if(UNIX AND NOT APPLE)
-        find_package(X11 REQUIRED)
-        target_link_libraries(overteon-qml-preview PRIVATE X11::X11)
         # --jack: the preview as a real JACK client, so the metering can be
         # driven by actual audio without a plug-in host in the way.
         find_package(PkgConfig REQUIRED)
@@ -224,12 +224,6 @@ if(OVERTEON_PREVIEW_ONLY)
         target_include_directories(overteon-qml-preview PRIVATE ${JACK_INCLUDE_DIRS})
         target_link_libraries(overteon-qml-preview PRIVATE ${JACK_LIBRARIES})
         target_link_directories(overteon-qml-preview PRIVATE ${JACK_LIBRARY_DIRS})
-        foreach(_ext X11::Xext Xext)
-            if(TARGET ${_ext})
-                target_link_libraries(overteon-qml-preview PRIVATE ${_ext})
-                break()
-            endif()
-        endforeach()
     endif()
     set_target_properties(overteon-qml-preview PROPERTIES AUTOMOC ON AUTORCC ON)
     if(CMAKE_CROSSCOMPILING AND DEFINED ENV{OVERTEON_HOST_RCC})
@@ -547,12 +541,9 @@ if(OVERTEON_QT_UI)
     target_compile_definitions(Overteon PUBLIC
         OVERTEON_RESIZABLE_WINDOW=$<BOOL:${OVERTEON_RESIZABLE_WINDOW}>)
 
-    # QQuickRenderControl renders the scene into a texture we own instead of
-    # onto a window of Qt's own.  That is what lets the editor live inside a
-    # JUCE Component on every platform: no reparenting, so no window the host
-    # can unmap behind our back.
+    # Qt Quick renders the embedded editor through the selected RHI backend.
     target_link_libraries(Overteon PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::OpenGL)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
 
     if(WIN32 AND NOT QT6_IS_SHARED_LIBS_BUILD)
         # A MODULE library does not get Qt's executable finalizers, so import
@@ -582,77 +573,8 @@ if(OVERTEON_QT_UI)
         endforeach()
     endif()
 
-    # ---- GPU frost shaders ------------------------------------------------
-    # Qt 6 cannot compile GLSL at run time, so the sources are baked to .qsb
-    # and shipped in their own resource bundle (rcc needs literal paths, so a
-    # ${VAR} entry in ov_ui.qrc would not work).
-    # The dual-Gaussian kernel lives in ONE file (blurfunc.glsl) and is spliced
-    # into the fragment shaders that call it.  qsb has no #include, so the
-    # splice happens here: the function is inserted after the #version line.
-    # One definition means the glass and the EQ fog cannot drift apart.
-    set(_ov_blurfunc "${CMAKE_CURRENT_SOURCE_DIR}/../Source/ui/qt/shaders/blurfunc.glsl")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_ov_blurfunc})
-    file(READ ${_ov_blurfunc} _ov_blurfunc_src)
-
-    # qsb is a *host* tool: it bakes .qsb files, which are platform
-    # independent, so a Linux qsb bakes the shaders for the Windows build too.
-    # Three ways to find it, in order of preference:
-    #
-    #   1. Qt6::qsb -- imported by Qt's own ShaderTools package.  Used when the
-    #      Qt in use ships it (a native Linux or MSVC build with the tools).
-    #   2. PATH.
-    #   3. The usual places a distribution installs Qt's executables.  These
-    #      are search hints for a third-party tool, not project paths: nothing
-    #      here is required for the tree to build elsewhere, and
-    #      -DOVERTEON_QSB=/path/to/qsb overrides the lot.
-    if(TARGET Qt6::qsb)
-        set(OVERTEON_QSB "$<TARGET_FILE:Qt6::qsb>")
-    else()
-        find_program(OVERTEON_QSB NAMES qsb
-            PATHS /usr/lib/qt6/bin /usr/lib64/qt6/bin /usr/local/lib/qt6/bin
-            DOC "Qt shader baker (qsb)")
-        if(NOT OVERTEON_QSB)
-            message(FATAL_ERROR
-                "qsb (Qt's shader baker) was not found.  It is needed to bake "
-                "the GLSL in Source/ui/qt/shaders, and it has to be a host tool "
-                "-- for a cross-build, the one from the build machine's Qt.  "
-                "Install Qt's shader tools, put qsb on PATH, or pass "
-                "-DOVERTEON_QSB=/path/to/qsb")
-        endif()
-    endif()
-
-    set(OVERTEON_SHADER_QSBS "")
-    foreach(_sh
-        ../Source/ui/qt/shaders/blur.vert  ../Source/ui/qt/shaders/blur.frag
-        ../Source/ui/qt/shaders/glass.vert ../Source/ui/qt/shaders/glass.frag)
-        get_filename_component(_shname ${_sh} NAME)
-        set(_qsb "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/${_shname}.qsb")
-        set(_src "${CMAKE_CURRENT_SOURCE_DIR}/${_sh}")
-
-        if(_shname STREQUAL "blur.frag")
-            # strip the shader's own #version line, prepend the function behind
-            # a single #version — GLSL requires it to be the first statement.
-            file(READ ${_src} _body)
-            string(REGEX REPLACE "^#version[^\n]*\n" "" _body "${_body}")
-            set(_src "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/${_shname}.glsl")
-            file(WRITE ${_src} "#version 440\n${_ov_blurfunc_src}\n${_body}")
-            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-                         ${CMAKE_CURRENT_SOURCE_DIR}/${_sh})
-        endif()
-
-        add_custom_command(OUTPUT ${_qsb}
-            # OVERTEON_QSB resolves to Qt6::qsb when this Qt imports it (the
-            # distro Qt does, so this is the same command as before), and falls
-            # back to find_program otherwise -- which the Windows cross-build
-            # needs, because the MSVC Qt ships ShaderTools but not the host
-            # tools.  Same banner, one indirection.
-            COMMAND "${OVERTEON_QSB}" --glsl 100,120,150,300es,310es,320,330,410,440
-                    -o ${_qsb} ${_src}
-            DEPENDS ${_src} ${_ov_blurfunc}
-            COMMENT "qsb ${_shname}")
-        list(APPEND OVERTEON_SHADER_QSBS ${_qsb})
-    endforeach()
-    add_custom_target(overteon_shaders DEPENDS ${OVERTEON_SHADER_QSBS})
+    # Slang sources compile directly to SPIR-V and a Qt RHI resource package.
+    ov_configure_qt_shaders()
 
     # ---- ovctl: drive a running preview through shared memory -------------
     # Small enough to be a plain executable with no Qt dependency, so it can be
@@ -666,15 +588,6 @@ if(OVERTEON_QT_UI)
         target_include_directories(ovctl PRIVATE ../Source/ui/qt)
         target_link_libraries(ovctl PRIVATE ${CMAKE_THREAD_LIBS_INIT})
     endif()
-
-    set(OVERTEON_SHADER_QRC "${CMAKE_CURRENT_BINARY_DIR}/ov_shaders/ov_shaders.qrc")
-    file(WRITE ${OVERTEON_SHADER_QRC}
-        "<RCC><qresource prefix=\"/shaders\">\n"
-        "  <file alias=\"blur.vert.qsb\">blur.vert.qsb</file>\n"
-        "  <file alias=\"blur.frag.qsb\">blur.frag.qsb</file>\n"
-        "  <file alias=\"glass.vert.qsb\">glass.vert.qsb</file>\n"
-        "  <file alias=\"glass.frag.qsb\">glass.frag.qsb</file>\n"
-        "</qresource></RCC>\n")
 
     # The QML + font bundle has to be compiled into every plugin binary: the
     # shared-code target is a static archive and nothing references the rcc
@@ -840,16 +753,9 @@ if(OVERTEON_QT_UI)
         juce::juce_audio_utils juce::juce_dsp
         juce::juce_recommended_config_flags)
     target_link_libraries(overteon-qml-preview PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets
-        # OvEqView is a QQuickFramebufferObject and paints with a
-        # QOpenGLPaintDevice: GL tessellates the paths instead of the CPU
-        # rasterising them into an image.
-        Qt6::OpenGL)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Widgets Qt6::QuickWidgets)
 
-    # the preview checks for a compositing manager before Qt starts
     if(UNIX AND NOT APPLE)
-        find_package(X11 REQUIRED)
-        target_link_libraries(overteon-qml-preview PRIVATE X11::X11)
         # --jack: the preview as a real JACK client, so the metering can be
         # driven by actual audio without a plug-in host in the way.
         find_package(PkgConfig REQUIRED)
@@ -857,13 +763,8 @@ if(OVERTEON_QT_UI)
         target_include_directories(overteon-qml-preview PRIVATE ${JACK_INCLUDE_DIRS})
         target_link_libraries(overteon-qml-preview PRIVATE ${JACK_LIBRARIES})
         target_link_directories(overteon-qml-preview PRIVATE ${JACK_LIBRARY_DIRS})
-        foreach(_ext X11::Xext Xext)
-            if(TARGET ${_ext})
-                target_link_libraries(overteon-qml-preview PRIVATE ${_ext})
-                break()
-            endif()
-        endforeach()
     endif()
+    add_dependencies(overteon-qml-preview overteon_shaders)
     set_target_properties(overteon-qml-preview PROPERTIES
         AUTOMOC ON AUTORCC ON)
     target_compile_definitions(overteon-qml-preview PRIVATE BUILD_UNIXLIKE=1)

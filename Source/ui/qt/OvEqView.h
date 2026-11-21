@@ -14,7 +14,7 @@
 //  the painter rather than with a ShaderEffectSource keeps it deterministic —
 //  sampling a QQuickPaintedItem through a texture gives garbage.
 // ============================================================
-#include <QQuickFramebufferObject>
+#include <QQuickItem>
 #include <QTimer>
 #include <QString>
 #include <QImage>
@@ -32,22 +32,6 @@
 
 class OvEngine;
 
-//  GPU-backed.
-//
-//  This was a QQuickPaintedItem: every frame it rasterised the whole plot into
-//  a QImage on the CPU — grid, spectrum path, five curves, two gradients — and
-//  then uploaded 2.4 MB of it as a texture.  Measured at 1.4 ms of CPU per plot
-//  per frame, 2 plots, 108 fps: about 30 % of a core purely to draw two curves.
-//
-//  A QQuickFramebufferObject fixes that without rewriting the drawing: Qt 6
-//  still ships QOpenGL2PaintEngineEx, so a QPainter on a QOpenGLPaintDevice
-//  tessellates paths, gradients and glyphs into GL commands.  The drawing code
-//  is unchanged and the picture is identical; what changes is that the
-//  rasterisation happens on the GPU and nothing is uploaded per frame.
-//
-//  (Qt's RHI path has no QPainter backend, so "the same QPainter code on the
-//  GPU" is only available through GL.  The rest of the UI — the glass, the fog
-//  — is ShaderEffect and therefore already RHI.)
 class OvEqView : public QQuickItem
 {
     Q_OBJECT
@@ -123,7 +107,7 @@ public:
     };
     /// Everything the render node needs for this frame.  Builds whichever
     /// cached layers are stale and leaves the rest null.
-    void buildLayers (Layers& out);
+    void buildLayers (Layers& out, bool uploadAll = false);
     /// Advance the analyser ballistics and write the smoothed levels.
     /// Called once per frame by whichever path is drawing.
     void advanceSpectrum (float* spec, float* specRaw);

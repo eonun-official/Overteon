@@ -16,8 +16,7 @@ import QtQuick
 //  Five things Qt 6 requires and does not report, all found by testing:
 //    * a fragment shader needs a PAIRED vertex shader that passes the texcoord
 //      through; on its own the UV is undefined and every texture() is zero
-//    * a sampler must be declared layout(binding = 0), the same binding as the
-//      uniform block; with any other binding the whole effect is skipped
+//    * the uniform block uses binding 0 and the sampler uses binding 1
 //    * ShaderEffectSource normalises the WHOLE sourceItem to 0..1, so sourceRect
 //      is required or the glass samples the wrong part of the picture
 //    * sourceRect is in the SOURCE ITEM's coordinates, not this item's
@@ -38,7 +37,7 @@ Item {
     // So the whole chain below runs at DEVICE resolution and sigma scales.
     property real   dpr: (typeof ovDpr !== "undefined" && ovDpr > 0) ? ovDpr : 1.0
     property real   sigmaCss: 3.0
-    property real   sigmaScale: (typeof ovGlassSigma !== undefined) ? ovGlassSigma : 1.0
+    property real   sigmaScale: (typeof ovGlassSigma !== "undefined") ? ovGlassSigma : 1.0
     readonly property real sigmaEff: sigmaCss * dpr * sigmaScale
     property real   veil: 0.018
     property bool   ellipse: false          // #hdr::before uses the radial mask

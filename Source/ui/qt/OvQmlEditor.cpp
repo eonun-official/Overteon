@@ -2,6 +2,7 @@
 #include "OvQtComponent.h"
 #include "OvCryptoShim.h"
 #include "OvEnv.h"
+#include "OvGraphicsBackend.h"
 
 #include "OverteonProcessor.h"
 #include "OvEngine.h"
@@ -91,25 +92,12 @@ namespace
             return ok;
         }
 
-        // Render loop choice matters more than anything else here.
-        //
-        //   basic     renders ONLY inside processEvents() on this thread, so the
-        //             frame rate is whatever rate the host happens to call the
-        //             idle callback at — measured 9 to 32 Hz in jalv, i.e. the
-        //             "fps is random" report.  No amount of pacing inside the
-        //             callback can fix that: one callback can only paint once.
-        //   threaded  gives Qt its own render thread with its own vsync clock.
-        //             Rendering then proceeds independently of how often the
-        //             host pumps us, and processEvents() only has to keep the
-        //             GUI thread's properties and timers moving.
-        //
-        // The comment that used to be here said basic was "the safe pairing"
-        // because the host owns the thread.  That is true for correctness of
-        // the GUI thread, but it is exactly what makes the frame rate hostage
-        // to the host's heartbeat.  Overridable for A/B measurement.
-        qputenv ("QSG_RENDER_LOOP", qEnvironmentVariable ("OVERTEON_RENDERLOOP", "threaded").toLatin1());
-        qputenv ("QT_QUICK_BACKEND", "opengl");
-        QQuickWindow::setGraphicsApi (QSGRendererInterface::OpenGL);
+        // Keep the embedded editor's frame pacing while respecting the environment.
+        if (qEnvironmentVariableIsEmpty ("QSG_RENDER_LOOP"))
+            qputenv ("QSG_RENDER_LOOP", qEnvironmentVariable ("OVERTEON_RENDERLOOP", "threaded").toLatin1());
+        // RHI selects Metal, D3D or Vulkan for the Slang shader package.
+        // Preserve explicit Qt overrides and any existing host Qt application.
+        ovgraphics::configureDefaults (ovgraphics::runningUnderWine());
 
         // Qt must know it is a GUEST in someone else's application.  Without
         // this, Qt installs session-management and application-lifecycle hooks

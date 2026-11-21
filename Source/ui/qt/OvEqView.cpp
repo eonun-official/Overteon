@@ -17,12 +17,10 @@
 #include <QLinearGradient>
 #include <QtMath>
 #include <QQuickWindow>
-#include <QOpenGLFramebufferObject>
-#include <QOpenGLFramebufferObjectFormat>
-#include <QSGSimpleTextureNode>
 #include <QSGGeometryNode>
 #include <QSGVertexColorMaterial>
 #include <QSGTexture>
+#include <memory>
 #include <QQuickWindow>
 #include <QRadialGradient>
 #include <QLinearGradient>
@@ -637,15 +635,6 @@ struct OvPaintTimer
 };
 
 // ---------------------------------------------------------------------------
-//  The renderer: keeps one QOpenGLPaintDevice and runs the view's paint() into
-//  the item's framebuffer with it.
-//
-//  A QOpenGLPaintDevice is what makes this GPU work rather than a copy of the
-//  CPU path.  Qt 6 still provides QOpenGL2PaintEngineEx, so paths, gradients,
-//  rounded caps and glyphs are tessellated into GL commands here instead of
-//  being rasterised into a QImage and uploaded.
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 //  The render node.
 //
 //  Four layers, in the order paintContent() draws them:
@@ -661,44 +650,6 @@ struct OvPaintTimer
 //  which is the whole point of using them.
 // ---------------------------------------------------------------------------
 namespace {
-
-// Upload `img` into `node` and place it at `rect`.
-//
-// The image is copied into `keep` first: createTextureFromImage builds a
-// texture whose pixels are committed during the render pass, which happens
-// after this function has returned, so the source must still be alive.
-// Returns true when the node should be IN the tree.
-//
-// A texture node with no texture must not be: the renderer compares materials
-// across the whole opaque batch, and a node whose texture is null makes
-// QSGOpaqueTextureMaterial::compare read through it — measured as a SIGSEGV on
-// the first frame with one empty glow-bar node present.  So an empty layer is
-// detached rather than left drawn as nothing.
-bool applyTexture (QQuickWindow* win, QSGImageNode* node, const QImage& img,
-                   const QString& key, QString& haveKey, QImage& keep,
-                   const QRectF& rect, QVector<QSGTexture*>& retired)
-{
-    if (node == nullptr || win == nullptr) return false;
-    if (img.isNull() || rect.isEmpty())
-        return false;
-
-    // buildLayers() only returns pixels for a layer whose cache key moved, so
-    // a non-null image here is always a new upload.  QSGImageNode does NOT own
-    // its texture: the replaced texture must be retired or every upload leaks
-    // VRAM.  It gets one frame of grace because the previous frame's batch may
-    // still be in flight.
-    QSGTexture* old = node->texture();
-    keep = img.copy();
-    QSGTexture* tex = win->createTextureFromImage (keep);
-    if (tex == nullptr)
-        return false;
-    node->setTexture (tex);
-    if (old != nullptr)
-        retired.push_back (old);
-    haveKey = key;
-    node->setRect (rect);
-    return true;
-}
 
 // The spectrum: a triangle strip from the baseline to the outline, with the
 // gradient carried in the vertex colours (opaque at the top, transparent at the
@@ -785,6 +736,71 @@ public:
     }
 };
 
+// Keep all GPU resources with the scene graph generation that created them.
+// The empty slots preserve paint order when a layer temporarily has no data.
+struct EqRenderNode : QSGNode
+{
+    struct Layer
+    {
+        QSGNode* slot = new QSGNode;
+        std::unique_ptr<QSGTexture> texture;
+        std::unique_ptr<QSGImageNode> image;
+
+        void show (bool visible)
+        {
+            if (! image) return;
+            if (visible && ! image->parent()) slot->appendChildNode (image.get());
+            if (! visible && image->parent()) slot->removeChildNode (image.get());
+        }
+    };
+
+    explicit EqRenderNode (QQuickWindow* window)
+    {
+        for (auto* layer : { &background, &light, &glow, &overlay })
+        {
+            layer->image.reset (window->createImageNode());
+            if (! layer->image) continue;
+            layer->image->setFlag (QSGNode::OwnedByParent, false);
+            layer->image->setFiltering (QSGTexture::Linear);
+        }
+        spectrum.setFlag (QSGNode::OwnedByParent, false);
+        appendChildNode (background.slot);
+        appendChildNode (light.slot);
+        appendChildNode (spectrumSlot);
+        appendChildNode (glow.slot);
+        appendChildNode (overlay.slot);
+    }
+
+    void updateLayer (QQuickWindow* window, Layer& layer, const QImage& pixels,
+                      const QRectF& rect)
+    {
+        if (! layer.image) return;
+        if (! pixels.isNull() && ! rect.isEmpty())
+        {
+            if (auto* texture = window->createTextureFromImage (pixels))
+            {
+                layer.image->setTexture (texture);
+                if (layer.texture) retired.push_back (std::move (layer.texture));
+                layer.texture.reset (texture);
+            }
+        }
+        if (layer.texture) layer.image->setRect (rect);
+        layer.show (layer.texture && ! rect.isEmpty());
+    }
+
+    void showSpectrum (bool visible)
+    {
+        if (visible && ! spectrum.parent()) spectrumSlot->appendChildNode (&spectrum);
+        if (! visible && spectrum.parent()) spectrumSlot->removeChildNode (&spectrum);
+    }
+
+    Layer background, light, glow, overlay;
+    QSGNode* spectrumSlot = new QSGNode;
+    SpectrumNode spectrum;
+    std::vector<std::unique_ptr<QSGTexture>> retired;
+    quint64 glowKey = 0;
+};
+
 }  // namespace
 
 void OvEqView::setWantImage (bool on)
@@ -797,12 +813,6 @@ void OvEqView::setWantImage (bool on)
 
 QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 {
-    // Free what the PREVIOUS frame retired.  A texture replaced during the sync
-    // phase may still be referenced by the batch the renderer is finishing, so
-    // it gets one frame of grace.  Without this the uploads accumulated: every
-    // drag frame leaked a 1040x333 texture and the window slowed down as it ran.
-    for (QSGTexture* t : m_texRetired) delete t;
-    m_texRetired.clear();
     if (ovEnvFlag ("OVERTEON_NODERATE"))
     {
         static int n = 0;
@@ -846,135 +856,36 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
 
     if (ovEnvFlag ("OVERTEON_NONODE")) return old;
 
-    OvEqView::Layers L;
-    buildLayers (L);
-#if OV_NODE_TIMING
-    _msLayers = std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - _t0).count();
-#endif
+    auto* node = old ? static_cast<EqRenderNode*> (old) : new EqRenderNode (window());
+    node->retired.clear();
 
-    if (m_sgRoot == nullptr)
-    {
-        m_sgRoot = new QSGNode;
-        m_sgBg      = window()->createImageNode();
-        m_sgLight   = window()->createImageNode();
-        auto* spn = new SpectrumNode; m_sgSpectrum = spn;
-        m_sgGlow    = window()->createImageNode();
-        m_sgOverlay = window()->createImageNode();
-        m_sgRoot->appendChildNode (m_sgBg);
-        m_sgRoot->appendChildNode (m_sgLight);
-        m_sgRoot->appendChildNode (m_sgSpectrum);
-        m_sgRoot->appendChildNode (m_sgGlow);
-        m_sgRoot->appendChildNode (m_sgOverlay);
-        for (QSGImageNode* n : { m_sgBg, m_sgLight, m_sgGlow, m_sgOverlay })
-        {
-            n->setFiltering (QSGTexture::Linear);
-            n->setTextureCoordinatesTransform (QSGImageNode::NoTransform);
-        }
-
-        // The light node is always in the tree (fixed z-order, no dynamic
-        // re-parenting), so it must always have a valid texture: an attached
-        // image node with a null texture crashes the opaque-batch comparison.
-        QImage empty (1, 1, QImage::Format_ARGB32_Premultiplied);
-        empty.fill (Qt::transparent);
-        m_texImgLight = empty;
-        m_sgLight->setTexture (window()->createTextureFromImage (m_texImgLight));
-    }
-
+    Layers layers;
+    buildLayers (layers, old == nullptr);
     const QRectF full (0, 0, width(), height());
+    node->updateLayer (window(), node->background, layers.background, full);
+    node->updateLayer (window(), node->light, layers.light, layers.lightRect);
+    const int vertices = ovEnvFlag ("OVERTEON_ONLYBG")
+        ? node->spectrum.rebuild ({}, 0.0, 1.0, layers.accent)
+        : node->spectrum.rebuild (layers.spectrum, layers.spectrumBottom,
+                                  layers.spectrumTop, layers.accent);
+    node->showSpectrum (vertices > 0);
 
-    // Keep a node in the tree only while it has something to draw.
-    auto slot = [this] (QSGImageNode* n, bool wanted) {
-        if (n == nullptr) return;
-        const bool in = n->parent() != nullptr;
-        if (wanted && ! in) m_sgRoot->appendChildNode (n);
-        else if (! wanted && in) m_sgRoot->removeChildNode (n);
-    };
-
-    // ---- background ------------------------------------------------------
+    float spec[ovspec::kBins] = {};
+    const auto& table = m_headerTop ? m_engine->inputSpectrumTable()
+                                    : m_engine->spectrumTable();
+    for (int i = 0; i < std::min (ovspec::kBins, int (table.size())); ++i)
+        spec[i] = float (table.at (i).toDouble());
+    QRectF glowRect;
+    if (ensureGlowBar (width(), height(), QColor (m_accent), spec, glowRect)
+        && ! m_glowBar.isNull() && ! glowRect.isEmpty())
     {
-        // Only a NULL image means "unchanged"; buildLayers() hands back pixels
-        // solely for a layer whose cache key moved, so an idle frame uploads
-        // nothing at all.
-        if (! L.background.isNull())
-            slot (m_sgBg, applyTexture (window(), m_sgBg, L.background, L.bgKey,
-                                        m_texKeyBg, m_texImgBg, full, m_texRetired));
+        const bool changed = ! node->glow.texture || node->glowKey != m_glowKey;
+        node->updateLayer (window(), node->glow, changed ? m_glowBar : QImage(), glowRect);
+        node->glowKey = m_glowKey;
     }
-
-    // ---- pointer hint ----------------------------------------------------
-    {
-        if (! L.light.isNull())
-        {
-            QSGTexture* old = m_sgLight->texture();
-            m_texImgLight = L.light;
-            m_sgLight->setTexture (window()->createTextureFromImage (m_texImgLight));
-            if (old != nullptr)
-                m_texRetired.push_back (old);   // one frame of grace, as below
-        }
-        m_sgLight->setRect (L.lightRect);       // empty when outside the plot
-    }
-
-    // ---- spectrum (the only thing that changes per frame) ----------------
-    //
-    // Detached when it has nothing to draw.  An empty QSGGeometryNode keeps its
-    // material, and the renderer compares materials across the whole opaque
-    // batch: a vertex-colour material compared against a texture material reads
-    // the wrong type and segfaults — measured in
-    // QSGOpaqueTextureMaterial::compare as soon as this node was present with
-    // zero vertices.
-    {
-        auto* sp = static_cast<SpectrumNode*> (m_sgSpectrum);
-        const int n = ovEnvFlag ("OVERTEON_ONLYBG")
-                    ? sp->rebuild (QVector<QPointF>(), 0.0, 1.0, L.accent)
-                    : sp->rebuild (L.spectrum, L.spectrumBottom, L.spectrumTop, L.accent);
-        if (n > 0 && ! m_spAttached)
-        {
-            m_sgRoot->insertChildNodeBefore (sp, m_sgGlow);
-            m_spAttached = true;
-        }
-        else if (n == 0 && m_spAttached)
-        {
-            m_sgRoot->removeChildNode (sp);
-            m_spAttached = false;
-        }
-    }
-
-    // ---- glow bar --------------------------------------------------------
-    //
-    // Built HERE.  paintGlowBar() is the painter path and no longer runs on this
-    // one, so without this call the node had nothing to draw and the pit showed
-    // whatever the previous frame left in it — which is why a "fake" bar stayed
-    // on screen while dragging with no audio: nothing was ever rebuilding it.
-    //
-    // The RETURN VALUE decides visibility, not the members: ensureGlowBar clears
-    // them when there is nothing to show, so a stopped signal removes the bar
-    // instead of freezing the last frame of it.
-    {
-        float spec[ovspec::kBins] = {};
-        if (m_engine != nullptr)
-        {
-            const auto& tbl = m_headerTop ? m_engine->inputSpectrumTable()
-                                          : m_engine->spectrumTable();
-            const int n = std::min (ovspec::kBins, int (tbl.size()));
-            for (int i = 0; i < n; ++i) spec[i] = float (tbl.at (i).toDouble());
-        }
-        QRectF dest;
-        const bool ok = ensureGlowBar (width(), height(), QColor (m_accent), spec, dest);
-        const bool have = ok && ! m_glowBar.isNull() && ! dest.isEmpty();
-        slot (m_sgGlow, applyTexture (window(), m_sgGlow,
-                                      have ? m_glowBar : QImage(),
-                                      have ? QString::number (m_glowKey) : QString(),
-                                      m_texKeyGlow, m_texImgGlow,
-                                      have ? dest : QRectF(), m_texRetired));
-    }
-
-    // ---- overlay ---------------------------------------------------------
-    {
-        if (! L.overlay.isNull())
-            slot (m_sgOverlay, applyTexture (window(), m_sgOverlay, L.overlay,
-                                             L.overlayKey, m_texKeyOv, m_texImgOv, full,
-                                             m_texRetired));
-    }
+    else
+        node->glow.show (false);
+    node->updateLayer (window(), node->overlay, layers.overlay, full);
 
     // Tell the glass and the fog that this plot produced a new picture.
     //
@@ -986,8 +897,7 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     QMetaObject::invokeMethod (this, [this] { emit contentChanged(); },
                                Qt::QueuedConnection);
 
-    QSGNode* root = m_sgRoot;
-    return root;
+    return node;
 }
 
 void OvEqView::paint (QPainter* g)
@@ -1031,13 +941,6 @@ void OvEqView::paint (QPainter* g)
     const bool prof = ovEnvFlag ("OVERTEON_PROFILE");
     const auto tRender0 = std::chrono::steady_clock::now();
 
-    // ---- draw, on the GPU ------------------------------------------------
-    //
-    // This used to rasterise into an off-screen QImage and then blit it.  The
-    // painter handed in now belongs to a QOpenGLPaintDevice, so the same calls
-    // become GL commands: no image, no upload, no CPU rasterisation.  The
-    // drawing code below is untouched — that is the whole point of going
-    // through the paint engine rather than writing shaders for the plot.
     paintContent (g, w, h, m_plot.top(), m_plot.bottom(), accent);
 
     const double msRender = std::chrono::duration<double, std::milli> (
@@ -1075,7 +978,7 @@ void OvEqView::paint (QPainter* g)
         static double sumRender = 0; static int cnt = 0;
         sumRender += msRender;
         if (++cnt % 60 == 0) {
-            std::fprintf (stderr, "[split] %s render=%.2fms (GPU)\n",
+            std::fprintf (stderr, "[split] %s render=%.2fms (painter)\n",
                           m_prefix.toStdString().c_str(), sumRender / 60);
             sumRender = 0;
         }
@@ -1635,7 +1538,7 @@ void OvEqView::advanceSpectrum (float* spec, float* specRaw)
     if (specRaw != nullptr) std::memcpy (specRaw, m_specRaw, sizeof (float) * ovspec::kBins);
 }
 
-void OvEqView::buildLayers (Layers& out)
+void OvEqView::buildLayers (Layers& out, bool uploadAll)
 {
     out = Layers();
     if (m_engine == nullptr) return;
@@ -1654,7 +1557,7 @@ void OvEqView::buildLayers (Layers& out)
     // adding a second dirty flag that could disagree with the cache.
     const QString prevBg = m_bgKey;
     out.background = backgroundImage (w, h, top, bottom, accent);
-    if (m_bgKey != prevBg || out.background.isNull())
+    if (uploadAll || m_bgKey != prevBg || out.background.isNull())
     {
         out.bgKey = m_bgKey;
         out.background.detach();      // a copy: the cache keeps its own
@@ -1671,13 +1574,13 @@ void OvEqView::buildLayers (Layers& out)
         QRectF dest;
         const bool have = ensureCursorLight (w, h, top, bottom, dest);
         out.lightRect = have ? dest : QRectF();
-        if (have && m_lightKey != prevLight)
+        if (have && (uploadAll || m_lightKey != prevLight))
             out.light = m_light.copy();
     }
 
     const QString prevOv = m_overlayKey;
     out.overlay = overlayImage (w, h, top, bottom, accent);
-    if (m_overlayKey != prevOv || out.overlay.isNull())
+    if (uploadAll || m_overlayKey != prevOv || out.overlay.isNull())
     {
         out.overlayKey = m_overlayKey;
         out.overlay.detach();

@@ -29,6 +29,7 @@
 #include "OvCtl.h"
 #include "OvEqView.h"
 #include "OvCryptoShim.h"
+#include "../OvGraphicsBackend.h"
 
 #include <QApplication>
 #include <QGuiApplication>
@@ -65,12 +66,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <QLibrary>
 
-#ifdef Q_OS_LINUX
- #include <X11/Xlib.h>
- #include <GL/glx.h>
-#endif
 #include <memory>
 #include <string>
 
@@ -175,223 +171,16 @@ namespace
         return 1.0;
     }
 
-    //  Whether vsync actually paces on this display has to be MEASURED, not
-    //  inferred from the X SYNC counters.
-    //
-    //  The old rule was "no vblank/UST/MSC system counter => disable vsync".
-    //  That is wrong on this very machine: :0 has none of those counters, yet
-    //  glXSwapBuffers with swap interval 1 paces it exactly to its 120 Hz
-    //  panel, while a Xephyr screen with the same missing counters does not
-    //  pace at all.  Disabling vsync on the strength of the counter test left
-    //  the UI running at ~90 fps on a 122 Hz display — visible as judder.
-    //
-    //  So: open a throwaway GLX context, time a few swaps with the interval
-    //  set to 1 and again at 0, and let the numbers decide.
-    //      :0  interval 1 = 8.20 ms (122 fps)   interval 0 = 0.29 ms
-    //      :3  interval 1 = 0.23 ms             interval 0 = 0.23 ms
-    struct VSyncProbe
-    {
-        bool paces = true;        // does the driver block on the display?
-        double interval1Ms = 0.0;
-        double interval0Ms = 0.0;
-        double refreshHz = 0.0;   // implied by the paced interval
-    };
 
-   #ifdef Q_OS_LINUX
-    using SwapIntervalEXT = void (*) (Display*, GLXDrawable, int);
-
-    VSyncProbe probeVSync()
-    {
-        VSyncProbe r;
-        Display* dpy = XOpenDisplay (nullptr);
-        if (dpy == nullptr) return r;
-
-        int attribs[] = { GLX_RGBA, GLX_DOUBLEBUFFER, GLX_RED_SIZE, 8,
-                          GLX_GREEN_SIZE, 8, GLX_BLUE_SIZE, 8, None };
-        XVisualInfo* vi = glXChooseVisual (dpy, DefaultScreen (dpy), attribs);
-        if (vi == nullptr) { XCloseDisplay (dpy); return r; }
-
-        XSetWindowAttributes swa {};
-        swa.colormap = XCreateColormap (dpy, RootWindow (dpy, vi->screen),
-                                       vi->visual, AllocNone);
-        swa.override_redirect = True;
-        Window w = XCreateWindow (dpy, RootWindow (dpy, vi->screen),
-                                  0, 0, 64, 64, 0, vi->depth, InputOutput,
-                                  vi->visual, CWColormap | CWOverrideRedirect, &swa);
-        XMapWindow (dpy, w);
-        // The window must be MAPPED before it is swapped, or the driver's
-        // swap has nothing to wait for and the first glXSwapBuffers can block
-        // until the server decides otherwise.  Measured: without this sync the
-        // probe occasionally never returned, and the application then never
-        // started at all — the whole UI "hanging on launch" with no message.
-        XSync (dpy, False);
-        GLXContext ctx = glXCreateContext (dpy, vi, nullptr, True);
-        if (ctx == nullptr) { XCloseDisplay (dpy); return r; }
-        glXMakeCurrent (dpy, w, ctx);
-
-        auto* setInterval = reinterpret_cast<SwapIntervalEXT> (
-            glXGetProcAddressARB (reinterpret_cast<const GLubyte*> ("glXSwapIntervalEXT")));
-
-        // Per-swap times, then the MEDIAN.  A mean is useless here: a single
-        // 900 ms stall (which this X server does produce) moves the average
-        // from 8 ms to 98 ms and flips the whole decision.  Measured three
-        // runs of the naive mean on the same machine: 8.00, 7.79, 98.47 ms.
-        auto timeSwaps = [&] (int interval, int n)
-        {
-            if (setInterval != nullptr) setInterval (dpy, w, interval);
-            XSync (dpy, False);
-            std::vector<double> per;
-            per.reserve ((size_t) n);
-            for (int i = 0; i < n; ++i)
-            {
-                const auto t0 = std::chrono::steady_clock::now();
-                glClearColor (0.05f, 0.05f, 0.10f, 1.0f);
-                glClear (GL_COLOR_BUFFER_BIT);
-                glXSwapBuffers (dpy, w);
-                per.push_back (std::chrono::duration<double, std::milli> (
-                                   std::chrono::steady_clock::now() - t0).count());
-            }
-            std::sort (per.begin(), per.end());
-            return per[per.size() / 2];
-        };
-
-        // Warm up: the first swaps map the window and allocate back buffers.
-        timeSwaps (1, 4);
-        r.interval0Ms = timeSwaps (0, 15);
-        r.interval1Ms = timeSwaps (1, 30);
-
-        glXMakeCurrent (dpy, None, nullptr);
-        glXDestroyContext (dpy, ctx);
-        XDestroyWindow (dpy, w);
-        XCloseDisplay (dpy);
-
-        // "Paces" means interval 1 waits noticeably longer than interval 0.
-        // A 120 Hz panel gives ~8 ms; a 60 Hz one ~16 ms.  If the two are
-        // within 1.5x of each other the driver is ignoring the interval.
-        r.paces = r.interval1Ms > std::max (2.0, r.interval0Ms * 1.5);
-        if (r.paces && r.interval1Ms > 0.1)
-            r.refreshHz = 1000.0 / r.interval1Ms;
-        return r;
-    }
-   #endif
-
-    /// True when running under wine.
-    ///
-    /// Wine exposes `wine_get_version` from ntdll; nothing else does.  This is
-    /// needed because Qt Quick does not work there out of the box, and the two
-    /// fixes have to be applied before QApplication is constructed.
-    bool runningUnderWine()
-    {
-       #ifdef Q_OS_WIN
-        QLibrary ntdll (QStringLiteral ("ntdll"));
-        return ntdll.resolve ("wine_get_version") != nullptr;
-       #else
-        return false;
-       #endif
-    }
 }
 
 int main (int argc, char** argv)
 {
-    // Under wine, Qt 6 picks the D3D11 RHI by default and wine's DXGI cannot
-    // create an output for the window ("dxgi_device_init Failed to get
-    // output"), so everything renders black.  The OpenGL RHI works.  This must
-    // be set before QApplication exists, hence the pre-scan.
-    const bool wine = runningUnderWine()
+    const bool wine = ovgraphics::runningUnderWine()
                    || qEnvironmentVariableIsSet ("WINEPREFIX");
-    if (wine && qEnvironmentVariableIsEmpty ("QSG_RHI_BACKEND")
-             && qEnvironmentVariableIsEmpty ("QT_QUICK_BACKEND"))
-        qputenv ("QSG_RHI_BACKEND", "opengl");
+    ovgraphics::configureDefaults (wine);
 
-    // No compositor on this X display => no vsync frame callback => Qt Quick's
-    // render loop waits forever and the window advances one frame per second.
-    // Measured on a bare X session (no _NET_WM_CM_S0): 1.0 fps; the same build
-    // with QSG_NO_VSYNC=1 runs at ~104 fps.  Set it here so the preview works
-    // out of the box, and let a caller override.
-   #ifdef Q_OS_LINUX
-    if (qEnvironmentVariableIsEmpty ("QSG_NO_VSYNC"))
-    {
-        // The probe must never be able to stop the application from starting.
-        // glXSwapBuffers on a display with no compositor can block
-        // indefinitely — observed: the process sat inside probeVSync() and
-        // printed nothing at all, so "the UI hangs on launch" had no diagnostic
-        // path whatsoever.  It runs on its own thread with a deadline now; if it
-        // is not done in time we assume the display does not pace, which is the
-        // safe branch (QSG_NO_VSYNC=1 plus the driver's own swap interval).
-        VSyncProbe vs;
-        {
-            std::packaged_task<VSyncProbe()> task (probeVSync);
-            auto fut = task.get_future();
-            std::thread th (std::move (task));
-            th.detach();                     // it may never return; let it leak
-            if (fut.wait_for (std::chrono::milliseconds (1500)) ==
-                std::future_status::ready)
-            {
-                vs = fut.get();
-            }
-            else
-            {
-                std::fprintf (stderr, "[preview] the vsync probe did not answer in "
-                                      "1.5 s; assuming the display does not pace\n");
-                vs.paces = false;
-            }
-        }
-        if (vs.paces)
-        {
-            // The driver blocks in glXSwapBuffers until the display's next
-            // refresh, so set the swap interval inside the driver (measured:
-            // 8.00 ms/frame = 125 Hz on this 120 Hz panel) and take Qt's own
-            // vsync wait out of the picture.
-            //
-            // Qt's wait is the part that breaks here: it waits for a vblank
-            // notification this X server cannot deliver and lands on 1 fps.
-            // With the wait gone, the driver's swap still paces the frames —
-            // measured 93-113 fps on a 120 Hz panel at 1 % CPU, against 75 fps
-            // at 58 % CPU when Qt rasterises on the CPU instead.
-            std::fprintf (stderr, "[preview] vsync paces this display: "
-                                  "%.2f ms/frame = %.1f Hz; using it "
-                                  "(driver-paced, not Qt-paced)\n",
-                          vs.interval1Ms, vs.refreshHz);
-            qputenv ("QSG_NO_VSYNC", "1");
-
-            // Software rasterisation throws the frame away: it redraws the
-            // whole window on the CPU.  On a display that really paces there
-            // is a GPU to use, so ask for it.
-            if (qEnvironmentVariableIsEmpty ("QSG_RHI_BACKEND")
-                && qEnvironmentVariableIsEmpty ("QT_QUICK_BACKEND"))
-                qputenv ("QSG_RHI_BACKEND", "opengl");
-        }
-        else
-        {
-            // Nothing paces here.  Waiting for a vblank that never arrives
-            // pins Qt Quick to 1 fps, so let the render loop free-run.
-            std::fprintf (stderr, "[preview] vsync does not pace this display "
-                                  "(%.2f ms at interval 1, %.2f ms at 0); "
-                                  "letting the render loop free-run\n",
-                          vs.interval1Ms, vs.interval0Ms);
-            qputenv ("QSG_NO_VSYNC", "1");
-        }
-    }
-   #endif
-
-    // Defaults only: a caller must be able to override these, e.g.
-    //   QT_QUICK_BACKEND=software  (wine without working GL)
-    //   QT_OPENGL=angle            (Windows)
-    // Forcing OpenGL unconditionally is what made the window hang under wine
-    // with no fallback.
-    //
-    // RENDER LOOP: basic, and this is NOT a preference.
-    //
-    // I switched this to `threaded` after measuring that it spread the work over
-    // two cores — and it broke the preview outright on this display: with
-    // `threaded` the window is never mapped at all, leaving only the 1x1 helper
-    // and the 10x10 stub (verified: same binary, QSG_RENDER_LOOP=basic maps a
-    // 1354x1005 window, =threaded maps nothing).  A frame rate is worth nothing
-    // if there is no window to show it in.
-    //
-    // `basic` renders inside processEvents() on the GUI thread, which is what
-    // this preview has always done.  Threaded rendering stays available for the
-    // plug-in, where the host owns the loop and it does work.
+    // Keep the preview's tested GUI-thread render loop; RHI selects the API.
     if (qEnvironmentVariableIsEmpty ("QSG_RENDER_LOOP"))
         qputenv ("QSG_RENDER_LOOP", "basic");
 

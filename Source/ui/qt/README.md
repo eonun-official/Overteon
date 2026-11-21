@@ -49,10 +49,39 @@ ignore it, so both front ends compute the blur themselves:
   `body.frostjs` switches off the CSS `backdrop-filter` so nothing is blurred
   twice.  It re-renders whenever the EQ canvases or the spectrum change.
 
-* **QML** — `OvGlass.qml` uses Qt's built-in `MultiEffect` (pre-compiled
-  multi-pass gaussian; Qt 6 does not accept runtime GLSL).  Opaque side fills
-  painted on top cut it back to the trapezoid, exactly like `.eqhdr::before`
-  and `::after` do in the CSS.
+* **QML** — `OvBlur.qml` runs two Gaussian passes through Qt Quick
+  `ShaderEffect`. The shader sources are Slang: `blur.slang`, `glass.slang`,
+  the shared interface `effect.slang`, and `gaussian.slang`. The build compiles
+  Slang directly to SPIR-V; a host-only Qt adapter packages reflection and
+  SPIR-V/MSL/HLSL variants into QSB. No GLSL sources, intermediate files, or
+  package variants are used.
+
+## Graphics backend
+
+The editor and preview select Vulkan on Linux and Wine. Native macOS uses
+Qt's Metal default, and native Windows uses D3D. Explicit Qt environment
+choices are preserved. OpenGL is not supported by these effects: there is no
+GLSL variant. A host that already initialized its own Qt renderer must use
+Vulkan, Metal or D3D for these effects as well.
+
+Install the [Slang compiler](https://github.com/shader-slang/slang/releases)
+and set `-DOVERTEON_SLANGC=/path/to/slangc` if it is not on PATH. For local
+development, the build also searches `Build/tools/slang/bin`. The adapter
+requires matching Qt Gui/ShaderTools private development headers on the build
+host; this private API is isolated from the plug-in runtime. See
+`Tools/slang-qsb/README.md` for its standalone build.
+
+For cross-compilation, set `OVERTEON_SLANG_QSB` to a prebuilt native adapter,
+or set `OVERTEON_SHADER_HOST_QT` to a native Qt kit so CMake builds the adapter
+in a separate host project. The Slang compiler must also run on the build host.
+
+Check the baked stages and backend variants with the Qt kit's `qsb` tool
+(used only to inspect packages, never to compile GLSL):
+
+```sh
+ninja -C Build/host overteon_shaders
+ruby Tools/units/check-shaders.rb /path/to/qsb Build/host/ov_shaders
+```
 
 ## Menus
 

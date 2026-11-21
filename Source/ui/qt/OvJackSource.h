@@ -159,6 +159,15 @@ public:
         for (size_t i = 0; i < rows.size(); ++i) norms[i] = rows[i].defNorm;
     }
 
+    Snapshot snapshotParams() override { return { norms, true }; }
+
+    void restoreParams (const Snapshot& state) override
+    {
+        if (state.valid && state.norm.size() == norms.size())
+            for (size_t i = 0; i < norms.size(); ++i)
+                setNorm (int (i), state.norm[i]);
+    }
+
     std::string presetListJson() override
     {
         return R"({"name":"presets","folders":[)"
