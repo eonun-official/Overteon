@@ -177,6 +177,25 @@ suppresses opening a browser, and `OVERTEON_REPORT_API_BASE` /
 `OVERTEON_REPORT_REPO` point the uploader at a test server or a fork. The
 whole reporter is absent from an OFF build: no row, no code, no network.
 
+##### A build with the token compiled in
+
+For an automation-report build the token can be embedded, so that a user never
+has to configure anything:
+
+```sh
+OVERTEON_REPORT_TOKEN=github_pat_xxx Scripts/log-report-build.sh
+```
+
+The script puts the token in the CMake environment only; CMake writes it to
+`ov_report_token.h` inside the build tree instead of a compiler command line.
+The result is a release build whose REPORT ISSUE button (and the automatic
+report on a failed editor start) creates issues directly. `strings` on the
+binary will reveal the token: keep such builds on a channel you control, use a
+fine-grained token with only `Issues: write` on this repository, and rotate it
+when an artifact leaks. A run-time `OVERTEON_GITHUB_TOKEN` overrides the
+compiled-in value, which makes rotating a test build possible without
+rebuilding.
+
 ### Windows x64 cross-compile
 
 ```sh

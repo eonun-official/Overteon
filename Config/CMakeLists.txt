@@ -56,6 +56,11 @@ option(OVERTEON_FILE_LOG "Write a runtime log to <user home>/Overteon/<date>.<ti
 # The supported way to enable automatic uploads is the OVERTEON_GITHUB_TOKEN
 # environment variable at run time (see Source/ui/qt/OvIssueReport.h).
 set(OVERTEON_REPORT_TOKEN "" CACHE STRING "GitHub token compiled into the log build (unsafe for public binaries)")
+# Preferred: export OVERTEON_REPORT_TOKEN before configuring, so the token never
+# appears in a command line or in the CMake cache.
+if(NOT OVERTEON_REPORT_TOKEN AND DEFINED ENV{OVERTEON_REPORT_TOKEN})
+    set(OVERTEON_REPORT_TOKEN "$ENV{OVERTEON_REPORT_TOKEN}")
+endif()
 
 # Run Scripts/make-package.sh as part of a plain `ninja`, so a build always
 # leaves a shippable archive in Build/packages/ next to the products.  OFF by
@@ -524,8 +529,17 @@ if(OVERTEON_QT_UI)
     if(OVERTEON_FILE_LOG)
         target_sources(Overteon PRIVATE ../Source/ui/qt/OvIssueReport.cpp)
         if(OVERTEON_REPORT_TOKEN)
-            target_compile_definitions(Overteon PRIVATE
-                OVERTEON_REPORT_TOKEN="${OVERTEON_REPORT_TOKEN}")
+            # Written to a generated header rather than passed with -D: the
+            # token then does not show up in compile_commands.json, build.ninja
+            # or a CI build log.  It is still inside the binary -- that is the
+            # point of an automation-report build -- so use a fine-grained,
+            # issues-only token that can be rotated.
+            string(REPLACE "\\" "\\\\" _ovreport_token "${OVERTEON_REPORT_TOKEN}")
+            string(REPLACE "\"" "\\\"" _ovreport_token "${_ovreport_token}")
+            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ov_report_token.h"
+                 "#pragma once\n#define OVERTEON_REPORT_TOKEN \"${_ovreport_token}\"\n")
+            target_include_directories(Overteon PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+            message(STATUS "Overteon: automation report token compiled in")
         endif()
     endif()
 
