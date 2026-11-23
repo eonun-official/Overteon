@@ -703,7 +703,15 @@ if(OVERTEON_QT_UI)
             # Linux only: the glib shim exists for a host that ships an old
             # glib (Ardour's bundled build), and neither the problem nor the
             # `-u` linker flag exists on Windows.
-            if(UNIX AND NOT APPLE)
+            # NOT for Standalone.  The shim exists because a HOST may ship an
+            # old glib; the standalone executable is not loaded into a host, and
+            # as the main program its exported glib symbols come first in the
+            # global lookup scope.  That interposes them on libpxbackend, whose
+            # GStrvBuilder then comes from the system glib and whose unref comes
+            # from the shim -- different allocators, SIGSEGV inside
+            # QNetworkProxyFactory::systemProxyForQuery.  Keeping the shim out
+            # of the executable also covers the log uploader's HTTPS request.
+            if(UNIX AND NOT APPLE AND NOT "${_fmt}" STREQUAL "Standalone")
                 foreach(_shim_sym
                         g_once_init_enter_pointer g_once_init_leave_pointer
                         g_string_replace g_memdup2
