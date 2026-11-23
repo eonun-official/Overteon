@@ -47,6 +47,16 @@ option(OVERTEON_RESIZABLE_WINDOW "Let the host resize the plug-in editor" ON)
 #   cmake -S Config -B Build/log -G Ninja -DOVERTEON_FILE_LOG=ON
 option(OVERTEON_FILE_LOG "Write a runtime log to <user home>/Overteon/<date>.<time>.log" OFF)
 
+# Optional GitHub token compiled into the log build so the REPORT ISSUE action
+# can create the issue without the user configuring anything.
+#
+# WARNING: a public binary built with this set leaks the token to anyone who
+# extracts strings from it.  Use a fine-grained token limited to "Issues: write"
+# on the Overteon repository only, rotate it, and do not publish such a build.
+# The supported way to enable automatic uploads is the OVERTEON_GITHUB_TOKEN
+# environment variable at run time (see Source/ui/qt/OvIssueReport.h).
+set(OVERTEON_REPORT_TOKEN "" CACHE STRING "GitHub token compiled into the log build (unsafe for public binaries)")
+
 # Run Scripts/make-package.sh as part of a plain `ninja`, so a build always
 # leaves a shippable archive in Build/packages/ next to the products.  OFF by
 # default: packaging is a release step, and doing it on every edit slows a
@@ -482,7 +492,7 @@ endif()
 #  OVERTEON_QT_UI=OFF falls back to the WebView editor.
 # ---------------------------------------------------------------------------
 if(OVERTEON_QT_UI)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets ShaderTools)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Widgets QuickWidgets ShaderTools Network)
 
     # Overteon was created by juce_add_plugin before this point, so
     # AUTOMOC has to be enabled on the target itself (not via CMAKE_AUTOMOC).
@@ -508,6 +518,16 @@ if(OVERTEON_QT_UI)
         # without this the first QML compile jumps to a garbage address.  See
         # the file for the whole chain.
         ../Source/ui/qt/OvCryptoShim.cpp)
+
+    # The issue uploader exists only in log builds: -DOVERTEON_FILE_LOG=ON
+    # compiles it in, an OFF build has neither the file nor its call sites.
+    if(OVERTEON_FILE_LOG)
+        target_sources(Overteon PRIVATE ../Source/ui/qt/OvIssueReport.cpp)
+        if(OVERTEON_REPORT_TOKEN)
+            target_compile_definitions(Overteon PRIVATE
+                OVERTEON_REPORT_TOKEN="${OVERTEON_REPORT_TOKEN}")
+        endif()
+    endif()
 
     if(UNIX AND NOT APPLE)
         # Fills in the glib symbols a host's bundled-but-outdated glib lacks.
@@ -554,8 +574,9 @@ if(OVERTEON_QT_UI)
         OVERTEON_RESIZABLE_WINDOW=$<BOOL:${OVERTEON_RESIZABLE_WINDOW}>)
 
     # Qt Quick renders the embedded editor through the selected RHI backend.
+    # Qt Network is only used by the log build's issue uploader (below).
     target_link_libraries(Overteon PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Network)
 
     if(WIN32 AND NOT QT6_IS_SHARED_LIBS_BUILD)
         # A MODULE library does not get Qt's executable finalizers, so import

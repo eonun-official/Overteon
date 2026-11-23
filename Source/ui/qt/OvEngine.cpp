@@ -479,6 +479,20 @@ void OvEngine::windowSizeSaveDefault()
     if (windowSizeSaveDefaultRequest) windowSizeSaveDefaultRequest();
 }
 
+// ---- diagnostics ------------------------------------------------------------
+//
+// The log build installs reportIssueRequest; an OFF build leaves it empty and
+// the Settings panel never shows the row.
+void OvEngine::reportIssue()
+{
+    if (reportIssueRequest) reportIssueRequest();
+}
+
+bool OvEngine::diagnosticsAvailable() const
+{
+    return bool (reportIssueRequest);
+}
+
 // ---- global controls --------------------------------------------------------
 void OvEngine::setBypassed (bool on)
 {

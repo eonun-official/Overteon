@@ -384,6 +384,61 @@ Item {
                     }
                 }
             }
+
+            // ---- diagnostics (only in -DOVERTEON_FILE_LOG=ON builds) -----
+            //
+            // Uploads this session's runtime log to a GitHub issue, or — when
+            // no token is configured — copies the log to the clipboard and
+            // opens the prefilled new-issue page.  windowSize* hides nothing
+            // else here: an OFF build has no uploader and no row.
+            Rectangle {
+                width: parent.width; height: 1; color: OvTheme.line
+                visible: root.engine ? root.engine.diagnosticsAvailable() : false
+            }
+
+            Column {
+                width: parent.width
+                spacing: 6
+                visible: root.engine ? root.engine.diagnosticsAvailable() : false
+
+                Text {
+                    text: "DIAGNOSTICS"
+                    color: OvTheme.dim
+                    font.family: OvTheme.uiFont
+                    font.pixelSize: 10
+                    font.letterSpacing: 1.4
+                }
+
+                Row {
+                    spacing: 6
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "PROBLEM"
+                        color: OvTheme.dim
+                        font.family: OvTheme.uiFont
+                        font.pixelSize: 11
+                        font.letterSpacing: 0.6
+                        width: 150
+                    }
+
+                    WinChip {
+                        label: "REPORT ISSUE (LOG)"
+                        lit: false
+                        onClicked: if (root.engine) root.engine.reportIssue()
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    text: "Sends this session's ~/Overteon log to the GitHub issue tracker. " +
+                          "Review it first: it contains your preset names and local paths."
+                    color: OvTheme.faint
+                    font.family: OvTheme.uiFont
+                    font.pixelSize: 9
+                    wrapMode: Text.WordWrap
+                }
+            }
         }
     }
 

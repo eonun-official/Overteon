@@ -7,6 +7,9 @@
 #include "OverteonProcessor.h"
 #include "OvRuntimeLog.h"
 #include "OvQtLog.h"
+#if OVERTEON_FILE_LOG
+ #include "OvIssueReport.h"
+#endif
 #include "OvEngine.h"
 #include "OvJuceSource.h"
 #include "OvPointer.h"
@@ -313,6 +316,13 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
         ovRegisterQmlTypes();
         impl->source = std::make_unique<OvJuceSource> (proc);
         impl->engine = std::make_unique<OvEngine> (std::move (impl->source));
+       #if OVERTEON_FILE_LOG
+        // Settings panel's DIAGNOSTICS row: upload this session's log.
+        impl->engine->reportIssueRequest = [this]
+        {
+            ovreport::request (QStringLiteral ("requested from the Settings panel"));
+        };
+       #endif
 
         // The QML corner grip asks for a WINDOW resize.  setSize is the host's
         // own path: JUCE's wrappers turn an editor size change into LV2
@@ -544,6 +554,18 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
     // What is already on disk.  resized() compares against it, so simply
     // opening and closing the editor at the stored size writes nothing.
     lastSavedSize = proc.loadEditorSize();
+
+   #if OVERTEON_FILE_LOG
+    // The editor could not start (Qt or QML failed): offer the log
+    // automatically when the build is configured for it.
+    if (impl->failed)
+        ovreport::requestAutomatic (QStringLiteral ("editor could not start"));
+
+    // Deliberate fault injection for the install/CI tests: build with the log
+    // and run with OVERTEON_REPORT_TEST=1 to exercise the uploader.
+    if (qEnvironmentVariableIsSet ("OVERTEON_REPORT_TEST"))
+        ovreport::request (QStringLiteral ("test hook"));
+   #endif
 
     ovlog::info ("editor opened: " + juce::String (getWidth()) + "x" + juce::String (getHeight())
                  + (impl->failed ? ", no UI" : ", QML embedded"));

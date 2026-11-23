@@ -186,6 +186,12 @@ public:
     Q_INVOKABLE void windowSizeDefault();
     Q_INVOKABLE void windowSizeSaveDefault();
 
+    /// DIAGNOSTICS: upload this session's runtime log to a GitHub issue.
+    /// Installed by the editor only in -DOVERTEON_FILE_LOG=ON builds; the
+    /// Settings panel hides the row when diagnosticsAvailable() is false.
+    Q_INVOKABLE void reportIssue();
+    Q_INVOKABLE bool diagnosticsAvailable() const;
+
     int  defaultWindowW() const { return m_defaultWindowW; }
     int  defaultWindowH() const { return m_defaultWindowH; }
     bool windowDefaultSaved() const { return m_defaultWindowW > 0 && m_defaultWindowH > 0; }
@@ -204,6 +210,7 @@ public:
     std::function<void()> windowSizeOriginalRequest;
     std::function<void()> windowSizeDefaultRequest;
     std::function<void()> windowSizeSaveDefaultRequest;
+    std::function<void()> reportIssueRequest;
 
     bool bypassed() const { return m_bypassed; }
     void setBypassed (bool);
