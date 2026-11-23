@@ -500,6 +500,7 @@ if(OVERTEON_QT_UI)
         ../Source/ui/qt/OvFrost.cpp
         ../Source/ui/qt/OvQmlEditor.cpp
         ../Source/ui/qt/OvQtComponent.cpp
+        ../Source/ui/qt/OvQtLog.cpp
 
         # Repairs libQt6Core's OpenSSL imports when the host has let another
         # plug-in's statically-linked OpenSSL win the process symbol scope.

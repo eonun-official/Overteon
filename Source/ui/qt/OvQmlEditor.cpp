@@ -6,6 +6,7 @@
 
 #include "OverteonProcessor.h"
 #include "OvRuntimeLog.h"
+#include "OvQtLog.h"
 #include "OvEngine.h"
 #include "OvJuceSource.h"
 #include "OvPointer.h"
@@ -197,6 +198,8 @@ struct OvQmlEditor::Impl
     QQuickView*   view = nullptr;      // owned by qtComponent
     bool          qtOk = false;
     bool          failed = false;
+    bool          rendererLogged = false;   // Qt Quick backend reported once
+    bool          embeddedLogged = false;   // host peer reported once
 
     /// Installed on the QWindow: routes keys QML did not consume to the HOST
     /// window (not back into this plug-in's peer).
@@ -235,9 +238,18 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
     // every HiDPI desktop.
     impl->qtOk = ensureQtApp();
     if (impl->qtOk)
+    {
+        // Qt's own diagnostics (QML warnings, qt.qpa, qt.scenegraph) only go to
+        // stderr by default.  Route them into the runtime log before the QML
+        // engine is created, then record the environment they are running in.
+        ovqtlog::install();
+        ovqtlog::logEnvironment();
         ovlog::info (juce::String ("Qt initialised: ") + qVersion());
+    }
     else
+    {
         ovlog::error ("Qt could not be initialised; the editor starts without a UI");
+    }
     {
         // Ask the host for the size.  JUCE turns this into the format's own
         // resize request (ui:resize for LV2, IPlugView/vendor-specific for
@@ -329,6 +341,7 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
         {
             if (! isResizable()) return;
             const auto s = designSize();
+            ovqtlog::event (QStringLiteral ("window size: original %1x%2").arg (s.x).arg (s.y));
             if (s.x != getWidth() || s.y != getHeight()) setSize (s.x, s.y);
         };
         impl->engine->windowSizeDefaultRequest = [this]
@@ -336,12 +349,15 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
             if (! isResizable()) return;
             auto s = proc.loadDefaultEditorSize();
             s = (s.x > 0 && s.y > 0) ? clampSize (s) : designSize();
+            ovqtlog::event (QStringLiteral ("window size: default %1x%2").arg (s.x).arg (s.y));
             if (s.x != getWidth() || s.y != getHeight()) setSize (s.x, s.y);
         };
         impl->engine->windowSizeSaveDefaultRequest = [this]
         {
             if (! isResizable()) return;
             proc.saveDefaultEditorSize (getWidth(), getHeight());
+            ovqtlog::event (QStringLiteral ("window size: saved default %1x%2")
+                                .arg (getWidth()).arg (getHeight()));
             if (impl && impl->engine)
                 impl->engine->setWindowDefaultSize (getWidth(), getHeight());
         };
@@ -371,6 +387,9 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
             proc.saveMeterMode ("upperMode", impl->engine->upperMode());
             proc.saveMeterMode ("lowerMode", impl->engine->lowerMode());
             proc.saveIntSetting ("grRange",  impl->engine->grRange());
+            ovqtlog::event (QStringLiteral ("display settings: harm %1, upper %2, lower %3, GR range %4")
+                                .arg (impl->engine->harmMode()).arg (impl->engine->upperMode())
+                                .arg (impl->engine->lowerMode()).arg (impl->engine->grRange()));
         });
 
         // keep the QML preset name in sync with dialogs opened from the UI
@@ -378,6 +397,7 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
             juceSource->presetNameChanged = [this] (const juce::String& n)
             {
                 if (impl->engine) impl->engine->setPresetName (QString::fromStdString (n.toStdString()));
+                ovqtlog::event (QStringLiteral ("preset: %1").arg (QString::fromStdString (n.toStdString())));
             };
 
         impl->view = new QQuickView();
@@ -455,12 +475,9 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
 
         if (impl->view->status() == QQuickView::Error)
         {
+            // Every QML error (category "qml") is recorded by the Qt message
+            // handler installed above, both in the log and on stderr.
             impl->failed = true;
-            for (const auto& e : impl->view->errors())
-            {
-                std::fprintf (stderr, "[ov] qml error: %s\n", e.toString().toStdString().c_str());
-                ovlog::error (juce::String ("QML error: ") + e.toString().toStdString().c_str());
-            }
         }
         else if (auto* ro = impl->view->rootObject())
         {
@@ -477,6 +494,9 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
             qtComponent->setWindow (impl->view);
             addAndMakeVisible (*qtComponent);
             qtComponent->setBounds (getLocalBounds());
+
+            ovqtlog::event (QStringLiteral ("QML window ready, editor %1x%2")
+                                .arg (getWidth()).arg (getHeight()));
 
             // ---- trigger the resize AGAIN, now that Qt exists --------------
             //
@@ -667,6 +687,27 @@ void OvQmlEditor::timerCallback()
 {
     if (! impl) return;
 
+    // The scene graph is set up on the render thread, so the selected Qt Quick
+    // backend is only known once it has initialised; report it the first time
+    // that has happened.
+    if (! impl->rendererLogged && impl->view != nullptr && impl->view->isSceneGraphInitialized())
+    {
+        impl->rendererLogged = true;
+        ovqtlog::logQuickWindow (impl->view);
+    }
+
+    // The peer only exists once the host has created the plug-in window, which
+    // is after the constructor; report the window the editor was embedded into
+    // as soon as it is known.
+    if (! impl->embeddedLogged)
+        if (auto* peer = getPeer())
+        {
+            impl->embeddedLogged = true;
+            ovqtlog::event (QStringLiteral ("embedded into host window 0x%1, editor %2x%3")
+                                .arg (qulonglong (quintptr (peer->getNativeHandle())), 0, 16)
+                                .arg (getWidth()).arg (getHeight()));
+        }
+
     // ---- did the size actually land? ------------------------------------
     //
     // Printed from the LOG, not inferred from the source: the resize goes
@@ -709,6 +750,7 @@ void OvQmlEditor::timerCallback()
         {
             proc.saveEditorSize (s.x, s.y);
             lastSavedSize = s;
+            ovqtlog::event (QStringLiteral ("editor resized to %1x%2 (saved)").arg (s.x).arg (s.y));
         }
     }
 

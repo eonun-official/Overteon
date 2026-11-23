@@ -132,9 +132,22 @@ The file is `~/Overteon/<date>.<time>.log`, for example
 `~/Overteon/2026-11-23.19-26-25.log`. One file is created per run: a later run
 never appends to or overwrites an earlier log, so two sessions cannot
 interleave. It records the version and process id, instance creation and
-destruction, the audio format passed to `prepareToPlay`, the Qt version (or the
-reason Qt could not start), whether the QML scene loaded and any QML error text,
-and the editor open/close with its size.
+destruction, the audio format passed to `prepareToPlay`, host state restores,
+the Qt version (or the reason Qt could not start), whether the QML scene loaded
+and any QML error text, and the editor open/close with its size.
+
+Qt's own diagnostics go into the same file: `qDebug`/`qInfo`/`qWarning`/
+`qCritical`, the QML engine's warnings, and the platform and scene-graph
+categories, with the category, source file and line. Debug categories are
+switched on in this build; the per-item and per-frame internals (font database,
+emoji segmenter, dirty/clip bookkeeping, software-context renderables) are
+filtered because at 60 Hz they alone produce thousands of lines a second and
+bury the events a report needs. `OVERTEON_QTLOG_FULL=1` turns even those back on,
+and `QT_LOGGING_RULES` overrides both. The log also records the Qt and JUCE versions, the platform
+plug-in, every screen (geometry, DPR, DPI, refresh rate), the selected RHI
+backend and shader configuration, the `QSG_*`/`QT_*`/`OVERTEON_*` switches in
+effect, editor embedding and resize events, display-setting changes and preset
+loads.
 
 The option is OFF by default. A build without it creates neither the directory
 nor any file, and leaves the host's JUCE logger untouched.

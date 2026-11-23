@@ -9,6 +9,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include <cstdint>
 #include "DSP.h"
+#include "OvRuntimeLog.h"
 #include "Limiter.h"
 #include "OvBallistics.h"   // ovb::Rms — the level meters' detector
 
@@ -56,6 +57,7 @@ public:
     }
     void setStateInformation (const void* data, int size) override
     {
+        ovlog::info ("state restore: " + juce::String (size) + " bytes");
         if (auto xml = getXmlFromBinary (data, size))
             if (xml->hasTagName (apvts.state.getType()))
             {
