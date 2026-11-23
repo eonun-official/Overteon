@@ -117,6 +117,28 @@ still exist; the short names are the ones to type. A format left out of
 
 `vst2` means VST2 — that is the format, not a typo for a second VST3.
 
+### Runtime log
+
+Build with `-DOVERTEON_FILE_LOG=ON` to have every process run write a
+timestamped plain-text log into the user's home directory:
+
+```sh
+cmake -S . -B Build/log -G Ninja -DCMAKE_BUILD_TYPE=Release -DOVERTEON_FILE_LOG=ON
+ninja -C Build/log standalone
+ls -t ~/Overteon/*.log | head -1
+```
+
+The file is `~/Overteon/<date>.<time>.log`, for example
+`~/Overteon/2026-11-23.19-26-25.log`. One file is created per run: a later run
+never appends to or overwrites an earlier log, so two sessions cannot
+interleave. It records the version and process id, instance creation and
+destruction, the audio format passed to `prepareToPlay`, the Qt version (or the
+reason Qt could not start), whether the QML scene loaded and any QML error text,
+and the editor open/close with its size.
+
+The option is OFF by default. A build without it creates neither the directory
+nor any file, and leaves the host's JUCE logger untouched.
+
 ### Windows x64 cross-compile
 
 ```sh

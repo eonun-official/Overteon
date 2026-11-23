@@ -1,6 +1,7 @@
 #include "OverteonProcessor.h"
 #include "Oversampling.h"
 #include "OvBallistics.h"   // ovb::Rms / ovb::onePoleCoef — the meters' detector
+#include "OvRuntimeLog.h"   // optional -DOVERTEON_FILE_LOG=ON diagnostics
 
 namespace
 {
@@ -226,6 +227,9 @@ OverteonProcessor::OverteonProcessor()
           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "HINJ", createLayout())
 {
+    ovlog::start();
+    ovlog::info (juce::String ("instance created: Overteon ") + OVERTEON_VERSION);
+
     cacheParams();
 
     // Oversampling is a GLOBAL preference, not preset data: apply the stored
@@ -233,6 +237,12 @@ OverteonProcessor::OverteonProcessor()
     // setStateInformation() preserves it across preset/session loads too.
     if (const int stored = loadGlobalOsFactor(); stored >= 0)
         apvts.getParameterAsValue ("osFactor") = stored;
+}
+
+OverteonProcessor::~OverteonProcessor()
+{
+    ovlog::info ("instance destroyed");
+    ovlog::stop();
 }
 
 juce::File OverteonProcessor::getGlobalSettingsFile()
@@ -440,6 +450,15 @@ void OverteonProcessor::applyInit()
 void OverteonProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
+    if (sampleRate != loggedSampleRate || samplesPerBlock != loggedBlockSize)
+    {
+        loggedSampleRate = sampleRate;
+        loggedBlockSize  = samplesPerBlock;
+        ovlog::info ("audio prepared: " + juce::String (sampleRate, 1) + " Hz, "
+                     + juce::String (samplesPerBlock) + " samples/block, "
+                     + juce::String (getTotalNumInputChannels()) + " in / "
+                     + juce::String (getTotalNumOutputChannels()) + " out");
+    }
     // High-quality half-band FIRs, built explicitly so the transition width can
     // be chosen.  The recipe (transition, stopband, integer latency, init) is
     // shared with the limiter in Oversampling.h; the two oversamplers remain

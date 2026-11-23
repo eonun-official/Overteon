@@ -40,6 +40,13 @@ option(OVERTEON_PREVIEW_ONLY "Build only overteon-qml-preview (no JUCE plugin)" 
 # widened by anything, which is the point of it being a build flag.
 option(OVERTEON_RESIZABLE_WINDOW "Let the host resize the plug-in editor" ON)
 
+# Optional runtime log.  OFF by default so release builds write nothing to the
+# user's home directory.  When ON, every process run writes one timestamped
+# plain-text file to <user home>/Overteon/<date>.<time>.log (see
+# Source/src/OvRuntimeLog.h for what is recorded).  Turn it on for diagnostics:
+#   cmake -S Config -B Build/log -G Ninja -DOVERTEON_FILE_LOG=ON
+option(OVERTEON_FILE_LOG "Write a runtime log to <user home>/Overteon/<date>.<time>.log" OFF)
+
 # Run Scripts/make-package.sh as part of a plain `ninja`, so a build always
 # leaves a shippable archive in Build/packages/ next to the products.  OFF by
 # default: packaging is a release step, and doing it on every edit slows a
@@ -427,7 +434,11 @@ juce_add_plugin(Overteon
     PRODUCT_NAME "Overteon")
 
 target_sources(Overteon PRIVATE
-    ../Source/src/OverteonProcessor.cpp)
+    ../Source/src/OverteonProcessor.cpp
+    ../Source/src/OvRuntimeLog.cpp)
+if(OVERTEON_FILE_LOG)
+    target_compile_definitions(Overteon PRIVATE OVERTEON_FILE_LOG=1)
+endif()
 
 # ---------------------------------------------------------------------------
 #  Take the products out of *_artefacts/$<CONFIG>

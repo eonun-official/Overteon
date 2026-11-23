@@ -16,7 +16,7 @@ class OverteonProcessor : public juce::AudioProcessor
 {
 public:
     OverteonProcessor();
-    ~OverteonProcessor() override = default;
+    ~OverteonProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -226,6 +226,10 @@ private:
     int fftIdx = 0;
     int fftInIdx = 0;
     double sr = 48000.0;
+    // Last values written to the optional runtime log, so repeated
+    // prepareToPlay calls from a host do not flood the file.
+    double loggedSampleRate = -1.0;
+    int    loggedBlockSize  = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OverteonProcessor)
 };

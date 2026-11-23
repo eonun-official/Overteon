@@ -5,6 +5,7 @@
 #include "OvGraphicsBackend.h"
 
 #include "OverteonProcessor.h"
+#include "OvRuntimeLog.h"
 #include "OvEngine.h"
 #include "OvJuceSource.h"
 #include "OvPointer.h"
@@ -233,6 +234,10 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
     // out design-sized in device pixels: physically smaller than intended on
     // every HiDPI desktop.
     impl->qtOk = ensureQtApp();
+    if (impl->qtOk)
+        ovlog::info (juce::String ("Qt initialised: ") + qVersion());
+    else
+        ovlog::error ("Qt could not be initialised; the editor starts without a UI");
     {
         // Ask the host for the size.  JUCE turns this into the format's own
         // resize request (ui:resize for LV2, IPlugView/vendor-specific for
@@ -452,11 +457,15 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
         {
             impl->failed = true;
             for (const auto& e : impl->view->errors())
+            {
                 std::fprintf (stderr, "[ov] qml error: %s\n", e.toString().toStdString().c_str());
+                ovlog::error (juce::String ("QML error: ") + e.toString().toStdString().c_str());
+            }
         }
         else if (auto* ro = impl->view->rootObject())
         {
             ro->setProperty ("engine", QVariant::fromValue<QObject*> (impl->engine.get()));
+            ovlog::info ("QML scene loaded: qrc:/qml/main.qml");
         }
 
         if (! impl->failed)
@@ -515,10 +524,15 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
     // What is already on disk.  resized() compares against it, so simply
     // opening and closing the editor at the stored size writes nothing.
     lastSavedSize = proc.loadEditorSize();
+
+    ovlog::info ("editor opened: " + juce::String (getWidth()) + "x" + juce::String (getHeight())
+                 + (impl->failed ? ", no UI" : ", QML embedded"));
 }
 
 OvQmlEditor::~OvQmlEditor()
 {
+    ovlog::info ("editor closed");
+
     // One last chance to persist the size: the debounce may not have fired yet
     // if the editor was closed right after a drag.
     if (getWidth() > 0 && getHeight() > 0)
