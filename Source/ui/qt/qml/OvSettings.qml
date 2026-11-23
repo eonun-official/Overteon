@@ -431,8 +431,9 @@ Item {
 
                 Text {
                     width: parent.width
-                    text: "Sends this session's ~/Overteon log to the GitHub issue tracker. " +
-                          "Review it first: it contains your preset names and local paths."
+                    text: "Uploads this session's log to path86/bugreportREP under " +
+                          "Ot/<version>/. Review it first: it contains your preset names " +
+                          "and local paths."
                     color: OvTheme.faint
                     font.family: OvTheme.uiFont
                     font.pixelSize: 9

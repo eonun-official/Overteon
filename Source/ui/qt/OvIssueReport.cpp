@@ -26,11 +26,14 @@
 #include <QtNetwork/QNetworkRequest>
 
 #include <atomic>
-#include <utility>
 
 namespace
 {
     std::atomic<bool> started { false };
+
+    /** Files are capped before base64 so the request stays well inside the
+        Contents API limit; the tail is what matters for a diagnosis. */
+    constexpr int kMaxUploadBytes = 4 * 1024 * 1024;
 
     QString toQt (const juce::String& text)
     {
@@ -60,19 +63,34 @@ namespace
         return base;
     }
 
+    /** The log storage repository: path86/bugreportREP, not the product repo. */
     QString repository()
     {
         auto repo = qEnvironmentVariable ("OVERTEON_REPORT_REPO");
         if (repo.isEmpty())
-            repo = QStringLiteral ("eonun-official/Overteon");
+            repo = QStringLiteral ("path86/bugreportREP");
         return repo;
+    }
+
+    /** Folder inside that repository; the version is added below it. */
+    QString reportDirectory()
+    {
+        auto dir = qEnvironmentVariable ("OVERTEON_REPORT_DIR");
+        if (dir.isEmpty())
+            dir = QStringLiteral ("Ot");
+        while (dir.endsWith (QLatin1Char ('/')))
+            dir.chop (1);
+        return dir;
+    }
+
+    QString branch()
+    {
+        return qEnvironmentVariable ("OVERTEON_REPORT_BRANCH");
     }
 
     /** What must never leave the machine in clear text. */
     QString redact (QString text, const QString& secret)
     {
-        // The running user's home plus any other user's home that appears in a
-        // log line (build paths, library paths): both become "~" or "~\\".
         text.replace (QDir::homePath(), QStringLiteral ("~"));
         text.replace (QRegularExpression (QStringLiteral ("/(?:home|Users)/[^/\\s]+/")),
                       QStringLiteral ("~/"));
@@ -83,62 +101,56 @@ namespace
         return text;
     }
 
-    QStringList readLogLines()
+    QString readLogText()
     {
         QFile input (toQt (ovlog::file().getFullPathName()));
         if (! input.open (QIODevice::ReadOnly | QIODevice::Text))
             return {};
-        return QString::fromUtf8 (input.readAll()).split (QLatin1Char ('\n'), Qt::KeepEmptyParts);
+        return QString::fromUtf8 (input.readAll());
     }
 
-    QString joined (const QStringList& lines, int from, int count)
+    QString slug (QString text)
     {
-        const int end = qMin (lines.size(), from + count);
-        return end <= from ? QString() : lines.mid (from, end - from).join (QLatin1Char ('\n'));
-    }
-
-    QString shortened (QString text, int maximum)
-    {
-        if (text.size() <= maximum)
-            return text;
-        return text.left (maximum - 40) + QStringLiteral ("\n... [truncated] ...");
+        text = text.toLower();
+        text.replace (QRegularExpression (QStringLiteral ("[^a-z0-9]+")), QStringLiteral ("-"));
+        while (text.startsWith (QLatin1Char ('-'))) text.remove (0, 1);
+        while (text.endsWith (QLatin1Char ('-'))) text.chop (1);
+        return text.isEmpty() ? QStringLiteral ("report") : text.left (40);
     }
 
     QString titleFor (const QString& reason)
     {
-        return redact (QStringLiteral ("[Overteon log] %1 — Overteon %2, Qt %3, %4")
-                           .arg (reason, QStringLiteral ("0.9.20"), QString::fromLatin1 (qVersion ()),
-                                 QGuiApplication::platformName()), {});
+        return QStringLiteral ("[Overteon log] %1 — Overteon %2, Qt %3, %4")
+                   .arg (reason, QStringLiteral (OVERTEON_VERSION), QString::fromLatin1 (qVersion ()),
+                         QGuiApplication::platformName());
     }
 
-    /** Markdown body: a short header, the start-up environment, the log tail. */
-    QString bodyFor (const QString& reason, const QStringList& lines, const QString& secret)
+    /** GitHub Contents API: create Ot/<version>/<timestamp>_<reason>.log.
+        PUT creates the folders on the way, so "Ot/{version}" needs no setup. */
+    void uploadLogFile (const QString& apiBase, const QString& repository, const QString& directory,
+                        const QString& secret, const QString& reason, QString logText)
     {
-        QString body;
-        body += QStringLiteral ("**Reason:** %1\n").arg (reason);
-        body += QStringLiteral ("**Requested:** %1\n")
-                    .arg (QDateTime::currentDateTimeUtc().toString (Qt::ISODate));
-        body += QStringLiteral ("**Log file:** `%1` (tail below)\n\n")
-                    .arg (redact (toQt (ovlog::file().getFullPathName()), secret));
-        body += QStringLiteral ("<details><summary>Environment (start of the log)</summary>\n\n")
-                + QStringLiteral ("```text\n") + redact (joined (lines, 0, 90), secret)
-                + QStringLiteral ("\n```\n\n</details>\n\n");
-        body += QStringLiteral ("```text\n")
-                + redact (joined (lines, qMax (0, lines.size() - 400), 400), secret)
-                + QStringLiteral ("\n```\n");
+        if (logText.toUtf8().size() > kMaxUploadBytes)
+            logText = logText.right (kMaxUploadBytes)
+                      + QStringLiteral ("\n... [truncated for upload] ...\n");
 
-        return shortened (body, 60000);
-    }
+        const auto version = QStringLiteral (OVERTEON_VERSION);
+        const auto stamp = QDateTime::currentDateTime().toString (QStringLiteral ("yyyyMMdd-HHmmss"));
+        const auto name = QStringLiteral ("%1_%2.log").arg (stamp, slug (reason));
+        const QString path = QStringLiteral ("%1/%2/%3").arg (directory, version, name);
 
-    void uploadToApi (const QString& apiBase, const QString& repository, const QString& secret,
-                      const QString& title, const QString& body)
-    {
         QJsonObject payload;
-        payload.insert (QStringLiteral ("title"), title);
-        payload.insert (QStringLiteral ("body"), body);
+        payload.insert (QStringLiteral ("message"),
+                        QStringLiteral ("Overteon %1 log: %2").arg (version, reason));
+        payload.insert (QStringLiteral ("content"),
+                        QString::fromLatin1 (logText.toUtf8().toBase64()));
+        const auto wantBranch = branch();
+        if (! wantBranch.isEmpty())
+            payload.insert (QStringLiteral ("branch"), wantBranch);
         const QByteArray json = QJsonDocument (payload).toJson (QJsonDocument::Compact);
 
-        const QUrl url (apiBase + QStringLiteral ("/repos/") + repository + QStringLiteral ("/issues"));
+        const QUrl url (apiBase + QStringLiteral ("/repos/") + repository
+                        + QStringLiteral ("/contents/") + path);
         QNetworkRequest request (url);
         request.setHeader (QNetworkRequest::ContentTypeHeader, QStringLiteral ("application/json"));
         request.setRawHeader ("Accept", "application/vnd.github+json");
@@ -147,18 +159,24 @@ namespace
         request.setRawHeader ("Authorization", QByteArray ("Bearer ") + secret.toUtf8());
 
         auto* manager = new QNetworkAccessManager();
-        auto* reply = manager->post (request, json);
-        ovlog::info ("report: uploading " + juce::String (json.size()) + " bytes to "
-                     + juce::String (url.toString().toUtf8().constData()));
+        auto* reply = manager->put (request, json);
+        ovlog::info ("report: uploading " + juce::String (logText.toUtf8().size()) + " log bytes to "
+                     + juce::String (repository.toUtf8().constData()) + "/" + juce::String (path.toUtf8().constData()));
 
         QObject::connect (reply, &QNetworkReply::finished, reply, [reply, manager] {
             const int status = reply->attribute (QNetworkRequest::HttpStatusCodeAttribute).toInt();
             const QByteArray data = reply->readAll();
-            if (status == 201)
+            if (status == 200 || status == 201)
             {
                 const auto htmlUrl = QJsonDocument::fromJson (data).object()
+                                         .value (QStringLiteral ("content")).toObject()
                                          .value (QStringLiteral ("html_url")).toString();
-                ovlog::info ("report: issue created " + juce::String (htmlUrl.toUtf8().constData()));
+                ovlog::info ("report: log uploaded " + juce::String (htmlUrl.toUtf8().constData()));
+            }
+            else if (status == 401 || status == 403)
+            {
+                ovlog::error ("report: GitHub rejected the token (HTTP " + juce::String (status)
+                              + "); it needs Contents: read/write on the report repository");
             }
             else
             {
@@ -170,30 +188,30 @@ namespace
         });
     }
 
+    /** No token: nothing is sent.  The log goes to the clipboard and the
+        prefilled issue page is offered, so submitting stays the user's call. */
     void openIssuePage (const QString& repository, const QString& secret,
-                        const QString& title, const QStringList& lines)
+                        const QString& title, const QString& logText)
     {
-        // Nothing is sent from here: the log goes to the clipboard (so Cmd/Ctrl+V
-        // in the issue body attaches it at full length) and the browser opens
-        // the prefilled new-issue page.
         if (auto* clipboard = QGuiApplication::clipboard())
-            clipboard->setText (redact (lines.join (QLatin1Char ('\n')), secret).left (400000));
+            clipboard->setText (redact (logText, secret).left (400000));
+
+        QString body;
+        body += QStringLiteral ("**Reason:** requested from the Overteon UI\n\n");
+        body += QStringLiteral ("**Log file:** `%1`\n\n")
+                    .arg (redact (toQt (ovlog::file().getFullPathName()), secret));
+        body += QStringLiteral ("The full runtime log is on the clipboard — paste it below "
+                                "(Ctrl/Cmd+V), review it, then submit.\n");
 
         QUrl url (QStringLiteral ("https://github.com/") + repository + QStringLiteral ("/issues/new"));
         QUrlQuery query;
         query.addQueryItem (QStringLiteral ("title"), title);
-        query.addQueryItem (QStringLiteral ("body"),
-                            QStringLiteral ("**Reason:** requested from the Overteon UI\n\n"
-                                            "The full runtime log is on the clipboard — paste it "
-                                            "below (Ctrl/Cmd+V) and review it before submitting.\n\n"
-                                            "Log file: `%1`\n")
-                                .arg (redact (toQt (ovlog::file().getFullPathName()), secret)));
+        query.addQueryItem (QStringLiteral ("body"), body);
         url.setQuery (query);
 
         // Opening a browser is a user-visible side effect, so it is off in
         // headless/automated runs: OVERTEON_REPORT_NO_BROWSER (and the test
-        // hook) never launch one.  The URL is logged either way, and the log
-        // is already on the clipboard.
+        // hook) never launch one.
         const bool openBrowser = ! qEnvironmentVariableIsSet ("OVERTEON_REPORT_NO_BROWSER")
                               && ! qEnvironmentVariableIsSet ("OVERTEON_REPORT_TEST");
         if (openBrowser)
@@ -237,17 +255,15 @@ void request (const QString& reason)
     }
 
     const auto secret = token();
-    const auto lines = readLogLines();
-    const auto title = titleFor (reason);
-    const auto body = bodyFor (reason, lines, secret);
+    const auto logText = redact (readLogText(), secret);
 
-    ovlog::info ("report: collecting diagnostics (" + juce::String (lines.size())
-                 + " log lines, token " + (secret.isEmpty() ? "absent" : "present") + ")");
+    ovlog::info ("report: collecting diagnostics (" + juce::String (logText.size())
+                 + " characters, token " + (secret.isEmpty() ? "absent" : "present") + ")");
 
     if (! secret.isEmpty())
-        uploadToApi (apiBase(), repository(), secret, title, body);
+        uploadLogFile (apiBase(), repository(), reportDirectory(), secret, reason, logText);
     else
-        openIssuePage (repository(), secret, title, lines);
+        openIssuePage (repository(), secret, titleFor (reason), logText);
 }
 
 void requestAutomatic (const QString& reason)

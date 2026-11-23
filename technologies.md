@@ -154,28 +154,34 @@ nor any file, and leaves the host's JUCE logger untouched.
 
 #### Reporting a problem
 
-A log build also carries an issue reporter, compiled in only when
+A log build also carries a log uploader, compiled in only when
 `OVERTEON_FILE_LOG=ON`. The Settings panel grows a **DIAGNOSTICS → REPORT
 ISSUE (LOG)** row; the editor offers the same action automatically when the UI
 could not start.
 
 * With `OVERTEON_GITHUB_TOKEN` set (or a token compiled in with
-  `-DOVERTEON_REPORT_TOKEN=...`) the log tail is posted to
-  `https://api.github.com/repos/eonun-official/Overteon/issues` and the new
-  issue URL is written to the log.
+  `-DOVERTEON_REPORT_TOKEN=...`) the redacted log is uploaded with the GitHub
+  Contents API to `path86/bugreportREP` as
+  `Ot/<version>/<yyyyMMdd-HHmmss>_<reason>.log`. `PUT` creates the folder on
+  the way, so no repository setup is needed; the resulting file URL is written
+  to the log. The token needs **Contents: read/write** on that repository.
 * Without a token nothing is sent: the full log is copied to the clipboard and
-  the prefilled new-issue page is opened, so pasting and submitting stays the
-  user's decision.
+  the prefilled new-issue page of the report repository is opened, so pasting
+  and submitting stays the user's decision.
 
 The home directory and any other user's home in log lines are redacted to `~`,
-and the token never appears in the uploaded text or the log. A token compiled
+and the token never appears in the uploaded file or the log. A token compiled
 into a distributed binary can be extracted from it — use a fine-grained,
-issues-only token and rotate it, or prefer the environment variable.
+contents-only token on `path86/bugreportREP` and rotate it, or prefer the
+environment variable.
+
 `OVERTEON_REPORT_DISABLE=1` turns reporting off, `OVERTEON_REPORT_AUTO=1`
 allows the automatic path without a token, `OVERTEON_REPORT_NO_BROWSER=1`
 suppresses opening a browser, and `OVERTEON_REPORT_API_BASE` /
-`OVERTEON_REPORT_REPO` point the uploader at a test server or a fork. The
-whole reporter is absent from an OFF build: no row, no code, no network.
+`OVERTEON_REPORT_REPO` (`path86/bugreportREP`) / `OVERTEON_REPORT_DIR` (`Ot`) /
+`OVERTEON_REPORT_BRANCH` point the uploader at a test server, a fork or
+another folder. The whole reporter is absent from an OFF build: no row, no
+code, no network.
 
 ##### A build with the token compiled in
 
@@ -189,12 +195,12 @@ OVERTEON_REPORT_TOKEN=github_pat_xxx Scripts/log-report-build.sh
 The script puts the token in the CMake environment only; CMake writes it to
 `ov_report_token.h` inside the build tree instead of a compiler command line.
 The result is a release build whose REPORT ISSUE button (and the automatic
-report on a failed editor start) creates issues directly. `strings` on the
+report on a failed editor start) uploads the log directly. `strings -el` on the
 binary will reveal the token: keep such builds on a channel you control, use a
-fine-grained token with only `Issues: write` on this repository, and rotate it
-when an artifact leaks. A run-time `OVERTEON_GITHUB_TOKEN` overrides the
-compiled-in value, which makes rotating a test build possible without
-rebuilding.
+fine-grained token with only `Contents: read/write` on `path86/bugreportREP`,
+and rotate it when an artifact leaks. A run-time `OVERTEON_GITHUB_TOKEN`
+overrides the compiled-in value, which makes rotating a test build possible
+without rebuilding.
 
 ### Windows x64 cross-compile
 
