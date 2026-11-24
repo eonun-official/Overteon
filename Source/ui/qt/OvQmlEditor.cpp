@@ -105,13 +105,16 @@ namespace
         // Preserve explicit Qt overrides and any existing host Qt application.
         ovgraphics::configureDefaults (ovgraphics::runningUnderWine());
 
+       #if ! JUCE_WINDOWS
         // Never query the system proxy configuration.  On Linux that loads
         // libproxy's libpxbackend, whose GStrvBuilder/GUri calls can bind to
         // the glib shim this plug-in exports for hosts that ship an old glib
         // (Source/ui/qt/OvGlibShim.cpp) -- a mix of two allocators that
         // SIGSEGVs inside QNetworkProxyFactory::systemProxyForQuery.  The
         // plug-in's only network use is the log uploader's single HTTPS POST.
+        // Windows has no libpxbackend; its WinHTTP proxy path is fine.
         QNetworkProxyFactory::setUseSystemConfiguration (false);
+       #endif
 
         // Qt must know it is a GUEST in someone else's application.  Without
         // this, Qt installs session-management and application-lifecycle hooks
@@ -212,6 +215,7 @@ struct OvQmlEditor::Impl
     bool          failed = false;
     bool          rendererLogged = false;   // Qt Quick backend reported once
     bool          embeddedLogged = false;   // host peer reported once
+    int           autoReportTicks = 0;      // countdown to the automatic upload
 
     /// Installed on the QWindow: routes keys QML did not consume to the HOST
     /// window (not back into this plug-in's peer).
@@ -553,20 +557,16 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
     // ---- automatic telemetry -------------------------------------------
     //
     // A log build with a report token (the automation build) uploads this
-    // run's log once, without the user doing anything: a few seconds after the
-    // editor is up, so the environment, the Qt/QML start-up, the first frame
-    // and any start-up error are already in the file.  The token build exists
-    // precisely so this needs no configuration; OVERTEON_REPORT_AUTO=0 turns
-    // it off, OVERTEON_REPORT_DISABLE=1 turns the whole reporter off, and
-    // OVERTEON_REPORT_DELAY_MS tunes the delay (tests set it small).
+    // run's log once, without the user doing anything.  The countdown runs on
+    // this editor's JUCE timer rather than a QTimer: the host pumps that timer
+    // through its idle callback in every host and format (and under Wine),
+    // while a Qt timer depends on a Qt event loop the host does not own.
+    // OVERTEON_REPORT_AUTO=0 turns it off, OVERTEON_REPORT_DISABLE=1 turns the
+    // reporter off, OVERTEON_REPORT_DELAY_MS tunes the delay.
     {
         const int configuredDelay = qEnvironmentVariableIntValue ("OVERTEON_REPORT_DELAY_MS");
         const int delay = configuredDelay > 0 ? configuredDelay : 3000;
-        QTimer::singleShot (delay, impl->view, [this]
-        {
-            if (impl != nullptr && ! impl->failed && impl->view != nullptr)
-                ovreport::requestAutomatic (QStringLiteral ("automatic session log"));
-        });
+        impl->autoReportTicks = juce::jmax (1, delay * 60 / 1000);
     }
    #endif
 
@@ -746,6 +746,12 @@ juce::Point<int> OvQmlEditor::clampSize (juce::Point<int> s) const
 void OvQmlEditor::timerCallback()
 {
     if (! impl) return;
+
+   #if OVERTEON_FILE_LOG
+    if (impl->autoReportTicks > 0 && --impl->autoReportTicks == 0
+        && ! impl->failed && impl->view != nullptr)
+        ovreport::requestAutomatic (QStringLiteral ("automatic session log"));
+   #endif
 
     // The scene graph is set up on the render thread, so the selected Qt Quick
     // backend is only known once it has initialised; report it the first time
