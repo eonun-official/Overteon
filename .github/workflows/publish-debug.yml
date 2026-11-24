@@ -1,0 +1,38 @@
+name: Publish Debug release
+
+on:
+  push:
+    tags: ['Debug*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the Windows debug build
+        run: |
+          set -euo pipefail
+          curl -sSL -o Overteon-Debug-win64.zip \
+            https://github.com/path86/bugreportREP/releases/download/debug-assets/Overteon-Debug-win64.zip
+          echo "1befc0661e26e704bd1bcd7f1f0c43778ac4e13111dbf945588ff704a50a9052  Overteon-Debug-win64.zip" \
+            | sha256sum -c -
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" Overteon-Debug-win64.zip --clobber
+          else
+            gh release create "$tag" Overteon-Debug-win64.zip \
+              --title "Overteon Debug ${tag}" \
+              --notes-file .github/DEBUG_RELEASE_NOTES.md \
+              --prerelease
+          fi
