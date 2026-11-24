@@ -1,7 +1,14 @@
 #include "OverteonProcessor.h"
 #include "Oversampling.h"
 #include "OvBallistics.h"   // ovb::Rms / ovb::onePoleCoef — the meters' detector
-#include "OvRuntimeLog.h"   // optional -DOVERTEON_FILE_LOG=ON diagnostics
+#include "OvRuntimeLog.h"
+
+#if JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX          // the SDK's max/min macros break std::max/std::min
+ #endif
+ #include <windows.h>
+#endif   // optional -DOVERTEON_FILE_LOG=ON diagnostics
 
 namespace
 {
@@ -1181,5 +1188,22 @@ juce::AudioProcessorEditor* OverteonProcessor::createEditor()
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
+   #if JUCE_WINDOWS
+    // Pin this module for the lifetime of the host process.
+    //
+    // FL Studio unloads a plug-in's DLL as soon as the last rack slot is
+    // removed.  Qt is an application framework: even with the editor's
+    // QGuiApplication torn down, its platform plugin, thread pools and static
+    // data live in this module, and unloading the module underneath them is the
+    // crash-on-removal report.  Pinning is the Windows equivalent of the
+    // "-z,nodelete" flag the Linux plug-in already links with.
+    {
+        HMODULE pinned = nullptr;
+        GetModuleHandleExW (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                              | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                            reinterpret_cast<LPCWSTR> (&createPluginFilter),
+                            &pinned);
+    }
+   #endif
     return new OverteonProcessor();
 }

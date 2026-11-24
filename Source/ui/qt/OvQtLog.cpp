@@ -149,6 +149,18 @@ void install()
     {
         ovlog::info ("Qt logging: QT_LOGGING_RULES=" + toJuce (rules));
     }
+    else if (! qEnvironmentVariableIsSet ("OVERTEON_QTLOG_VERBOSE")
+             && ! qEnvironmentVariableIsSet ("OVERTEON_QTLOG_FULL"))
+    {
+        // Verbose Qt categories are a diagnosis switch, not a default.  Every
+        // Qt debug line goes through the file logger synchronously, and during
+        // mouse interaction in a host that is hundreds of lines per second --
+        // measurable as the host's GUI stuttering.  Warnings and errors are
+        // still recorded; our own lifecycle lines are unaffected.
+        QLoggingCategory::setFilterRules (QStringLiteral ("*.debug=false\n*.info=false\n"));
+        ovlog::info ("Qt logging: warnings/errors only "
+                     "(set OVERTEON_QTLOG_VERBOSE=1 for debug categories)");
+    }
     else
     {
         // Default: every Qt category at debug level except the internal traces

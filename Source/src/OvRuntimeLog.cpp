@@ -14,6 +14,32 @@
 
 namespace
 {
+    // A file logger that keeps its stream open.  juce::FileLogger opens and
+    // closes the file for every message; with Qt diagnostics enabled that was
+    // thousands of open/close cycles per second and showed up as host UI lag.
+    class OpenFileLogger final : public juce::Logger
+    {
+    public:
+        explicit OpenFileLogger (const juce::File& file)
+            : stream (file)
+        {
+        }
+
+        bool ok() const { return stream.openedOk(); }
+
+        void logMessage (const juce::String& message) override
+        {
+            const juce::ScopedLock lock (mutex);
+            if (! stream.openedOk()) return;
+            stream << message << juce::newLine;
+            stream.flush();          // still per line: a crash must not lose it
+        }
+
+    private:
+        juce::FileOutputStream stream;
+        juce::CriticalSection mutex;
+    };
+
     int currentProcessId()
     {
        #if JUCE_WINDOWS
@@ -31,7 +57,7 @@ namespace
     }
 
     std::mutex loggerLock;
-    std::unique_ptr<juce::FileLogger> logger;
+    std::unique_ptr<OpenFileLogger> logger;
     juce::Logger* previousLogger = nullptr;
     juce::File logFile;
     int activeUsers = 0;
@@ -110,9 +136,19 @@ void start()
 
     // -1: keep the whole file. The name is unique per run, so this constructor
     // can never truncate or append to a previous session's log.
-    logger = std::make_unique<juce::FileLogger> (logFile, "Overteon " OVERTEON_VERSION " runtime log", -1);
+    logger = std::make_unique<OpenFileLogger> (logFile);
+    if (! logger->ok())
+    {
+        logger.reset();
+        --activeUsers;
+        logFile = juce::File();
+        return;
+    }
     previousLogger = juce::Logger::getCurrentLogger();
     juce::Logger::setCurrentLogger (logger.get());
+    logger->logMessage ("\n**********************************************************\n"
+                        "Overteon " OVERTEON_VERSION " runtime log\n"
+                        "Log started: " + juce::Time::getCurrentTime().toString (true, true));
 
     writeLocked ("INFO", juce::String ("session start: Overteon ") + OVERTEON_VERSION
                          + ", pid " + juce::String (currentProcessId())

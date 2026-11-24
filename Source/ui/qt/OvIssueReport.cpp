@@ -159,7 +159,7 @@ namespace
         request.setRawHeader ("X-GitHub-Api-Version", "2022-11-28");
         request.setRawHeader ("Authorization", QByteArray ("Bearer ") + secret.toUtf8());
 
-        auto* manager = new QNetworkAccessManager();
+        auto* manager = new QNetworkAccessManager (QCoreApplication::instance());
         // Same reason as the proxy factory switch in OvQmlEditor: stay away
         // from libproxy, upload directly.
         manager->setProxy (QNetworkProxy (QNetworkProxy::NoProxy));

@@ -79,14 +79,21 @@ namespace
     }
 #endif
 
-    // One QGuiApplication per process, created on first editor use. It has to
-    // outlive every editor, hence the intentional leak.
+    // One QGuiApplication per process while any editor exists.
+    //
+    // It is reference counted: the first editor creates it, the last editor
+    // destroys it.  A host that removes the plug-in unloads this module, and a
+    // leaked QGuiApplication (plus its event dispatcher, DBus and thread-pool
+    // threads) then calls into unloaded code -- the crash FL Studio reports when
+    // a rack slot is removed.  Reopening the editor recreates the application.
+    int  qtAppUsers = 0;
+    bool qtAppAttempted = false;
+    bool qtAppOk = false;
+
     bool ensureQtApp()
     {
-        static bool attempted = false;
-        static bool ok = false;
-        if (attempted) return ok;
-        attempted = true;
+        if (qtAppAttempted) return qtAppOk;
+        qtAppAttempted = true;
 
 #if JUCE_WINDOWS
         configureBundledQtPaths();
@@ -94,13 +101,26 @@ namespace
 
         if (qobject_cast<QGuiApplication*> (QCoreApplication::instance()) != nullptr)
         {
-            ok = true;
-            return ok;
+            qtAppOk = true;
+            return qtAppOk;
         }
 
         // Keep the embedded editor's frame pacing while respecting the environment.
+        //
+        // Threaded rendering gives Qt its own render thread paced by the
+        // display's vsync -- on a 120 Hz panel inside a DAW that is 120 frames
+        // of QML per second competing with the host's GUI thread, which is a
+        // large part of the "FL Studio stutters while the editor is open"
+        // report.  The basic loop renders inside the editor's own 60 Hz timer
+        // instead, so the ceiling is 60 fps and there is no second thread.
+        //   OVERTEON_RENDERLOOP=threaded|basic   override
+       #if JUCE_WINDOWS
+        const char* defaultLoop = "basic";
+       #else
+        const char* defaultLoop = "threaded";
+       #endif
         if (qEnvironmentVariableIsEmpty ("QSG_RENDER_LOOP"))
-            qputenv ("QSG_RENDER_LOOP", qEnvironmentVariable ("OVERTEON_RENDERLOOP", "threaded").toLatin1());
+            qputenv ("QSG_RENDER_LOOP", qEnvironmentVariable ("OVERTEON_RENDERLOOP", defaultLoop).toLatin1());
         // RHI selects Metal, D3D or Vulkan for the Slang shader package.
         // Preserve explicit Qt overrides and any existing host Qt application.
         ovgraphics::configureDefaults (ovgraphics::runningUnderWine());
@@ -142,9 +162,25 @@ namespace
                                ":/res/edix.otf" })
             QFontDatabase::addApplicationFont (QString::fromLatin1 (f));
 
-        ok = true;
-        return ok;
+        qtAppOk = true;
+        return qtAppOk;
     }
+
+    void releaseQtApp()
+    {
+        if (qtAppUsers <= 0 || --qtAppUsers > 0)
+            return;
+
+        if (QCoreApplication::instance() != nullptr)
+        {
+            QCoreApplication::sendPostedEvents();
+            QCoreApplication::sendPostedEvents (nullptr, QEvent::DeferredDelete);
+            delete QCoreApplication::instance();
+        }
+        qtAppAttempted = false;
+        qtAppOk = false;
+    }
+
     /// QWindow::installEventFilter wants a QObject; OvQmlEditor is a JUCE
     /// object, so this thin adapter holds a callback into the editor.
     class KeyFilter : public QObject
@@ -255,6 +291,7 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
     impl->qtOk = ensureQtApp();
     if (impl->qtOk)
     {
+        ++qtAppUsers;
         // Qt's own diagnostics (QML warnings, qt.qpa, qt.scenegraph) only go to
         // stderr by default.  Route them into the runtime log before the QML
         // engine is created, then record the environment they are running in.
@@ -646,6 +683,11 @@ OvQmlEditor::~OvQmlEditor()
     // are still valid, keeps teardown synchronous instead of "later, maybe".
     if (QCoreApplication::instance() != nullptr)
         QCoreApplication::sendPostedEvents();
+
+    // Last editor in this process: tear the Qt application down so no event,
+    // DBus, thread-pool or network thread outlives the module that owns it.
+    // releaseQtApp() is a no-op when Qt never came up or another editor is open.
+    releaseQtApp();
 }
 
 void OvQmlEditor::paint (juce::Graphics& g)
@@ -682,10 +724,21 @@ juce::Point<int> OvQmlEditor::targetSize() const
     // stored per user, so closing the editor, removing the plug-in or adding a
     // second instance all reopen at that size instead of making the user drag
     // the corner again.
-    if (const auto saved = proc.loadEditorSize(); saved.x > 0 && saved.y > 0)
-        return clampSize (saved);
+    const auto design = designSize();
 
-    return designSize();
+    if (const auto saved = proc.loadEditorSize(); saved.x > 0 && saved.y > 0)
+    {
+        // A saved size far below the design is the unit bug from older builds:
+        // a HiDPI session saved the host's LOGICAL size (e.g. 640x475 at
+        // dpr 1.3), and later runs then opened the editor at 640 DEVICE pixels
+        // -- 492 logical px, a UI at 47 %.  Only trust a size that could
+        // plausibly be the design at this display scale; otherwise reopen at
+        // the design size.
+        if (saved.x >= design.x * 3 / 4 && saved.y >= design.y * 3 / 4)
+            return clampSize (saved);
+    }
+
+    return design;
 }
 
 juce::Point<int> OvQmlEditor::designSize() const
