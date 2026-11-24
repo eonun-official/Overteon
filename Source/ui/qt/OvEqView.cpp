@@ -745,6 +745,15 @@ struct EqRenderNode : QSGNode
         QSGNode* slot = new QSGNode;
         std::unique_ptr<QSGTexture> texture;
         std::unique_ptr<QSGImageNode> image;
+        // The pixels the current texture was built from.  createTextureFromImage
+        // does not necessarily copy: with a Vulkan RHI the upload is committed
+        // during the render pass, after updatePaintNode has returned, so the
+        // source image must still be alive.  The old code kept a copy for the
+        // same reason; the Slang rewrite dropped it, which corrupted exactly the
+        // frames made while dragging (a new texture every frame) and left static
+        // frames looking fine.
+        QImage pixels;
+        QImage previousPixels;
 
         void show (bool visible)
         {
@@ -777,11 +786,14 @@ struct EqRenderNode : QSGNode
         if (! layer.image) return;
         if (! pixels.isNull() && ! rect.isEmpty())
         {
-            if (auto* texture = window->createTextureFromImage (pixels))
+            layer.pixels = pixels.copy();
+            if (auto* texture = window->createTextureFromImage (layer.pixels))
             {
                 layer.image->setTexture (texture);
-                if (layer.texture) retired.push_back (std::move (layer.texture));
+                if (layer.texture)
+                    retired.push_back ({ std::move (layer.texture), std::move (layer.previousPixels) });
                 layer.texture.reset (texture);
+                layer.previousPixels = layer.pixels;
             }
         }
         if (layer.texture) layer.image->setRect (rect);
@@ -797,7 +809,16 @@ struct EqRenderNode : QSGNode
     Layer background, light, glow, overlay;
     QSGNode* spectrumSlot = new QSGNode;
     SpectrumNode spectrum;
-    std::vector<std::unique_ptr<QSGTexture>> retired;
+
+    // Textures replaced during frame N may still be referenced by frame N's
+    // command buffers, so keep them (and their pixels) for two updates before
+    // deleting.  Gives the RHI a full frame of grace without leaking.
+    struct Retired
+    {
+        std::unique_ptr<QSGTexture> texture;
+        QImage pixels;
+    };
+    std::vector<Retired> retired, olderRetired;
     quint64 glowKey = 0;
 };
 
@@ -857,7 +878,8 @@ QSGNode* OvEqView::updatePaintNode (QSGNode* old, UpdatePaintNodeData*)
     if (ovEnvFlag ("OVERTEON_NONODE")) return old;
 
     auto* node = old ? static_cast<EqRenderNode*> (old) : new EqRenderNode (window());
-    node->retired.clear();
+    node->olderRetired.clear();
+    node->olderRetired.swap (node->retired);
 
     Layers layers;
     buildLayers (layers, old == nullptr);
