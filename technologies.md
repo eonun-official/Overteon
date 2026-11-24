@@ -159,6 +159,15 @@ A log build also carries a log uploader, compiled in only when
 ISSUE (LOG)** row; the editor offers the same action automatically when the UI
 could not start.
 
+A build with the token compiled in is an automation/telemetry build: **every
+process run uploads its log automatically**, three seconds after the editor
+opens (early enough to cover a crash, and after the environment, Qt/QML
+start-up and first frame are in the file). A run that closes before that delay
+uploads at editor destruction instead. Uploads happen once per process. The
+delay can be changed with `OVERTEON_REPORT_DELAY_MS`, and the automatic path
+is switched off by `OVERTEON_REPORT_AUTO=0` (`OVERTEON_REPORT_DISABLE=1`
+disables the whole reporter).
+
 * With `OVERTEON_GITHUB_TOKEN` set (or a token compiled in with
   `-DOVERTEON_REPORT_TOKEN=...`) the redacted log is uploaded with the GitHub
   Contents API to `path86/bugreportREP` as

@@ -22,6 +22,7 @@
 #include <QtGui/QDesktopServices>
 #include <QtGui/QGuiApplication>
 #include <QtNetwork/QNetworkAccessManager>
+#include <QtNetwork/QNetworkProxy>
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
 
@@ -159,6 +160,9 @@ namespace
         request.setRawHeader ("Authorization", QByteArray ("Bearer ") + secret.toUtf8());
 
         auto* manager = new QNetworkAccessManager();
+        // Same reason as the proxy factory switch in OvQmlEditor: stay away
+        // from libproxy, upload directly.
+        manager->setProxy (QNetworkProxy (QNetworkProxy::NoProxy));
         auto* reply = manager->put (request, json);
         ovlog::info ("report: uploading " + juce::String (logText.toUtf8().size()) + " log bytes to "
                      + juce::String (repository.toUtf8().constData()) + "/" + juce::String (path.toUtf8().constData()));
@@ -268,6 +272,12 @@ void request (const QString& reason)
 
 void requestAutomatic (const QString& reason)
 {
+    if (qEnvironmentVariable ("OVERTEON_REPORT_AUTO") == QStringLiteral ("0"))
+    {
+        ovlog::info ("report: automatic upload disabled by OVERTEON_REPORT_AUTO=0");
+        return;
+    }
+
     const bool forced = qEnvironmentVariable ("OVERTEON_REPORT_AUTO") == QStringLiteral ("1");
     if (token().isEmpty() && ! forced)
     {

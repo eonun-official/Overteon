@@ -34,6 +34,7 @@
 #include <QKeyEvent>
 #include <QQuickItem>
 #include <QPointingDevice>
+#include <QNetworkProxyFactory>
 #include <QFileInfo>
 
 #include <functional>
@@ -103,6 +104,14 @@ namespace
         // RHI selects Metal, D3D or Vulkan for the Slang shader package.
         // Preserve explicit Qt overrides and any existing host Qt application.
         ovgraphics::configureDefaults (ovgraphics::runningUnderWine());
+
+        // Never query the system proxy configuration.  On Linux that loads
+        // libproxy's libpxbackend, whose GStrvBuilder/GUri calls can bind to
+        // the glib shim this plug-in exports for hosts that ship an old glib
+        // (Source/ui/qt/OvGlibShim.cpp) -- a mix of two allocators that
+        // SIGSEGVs inside QNetworkProxyFactory::systemProxyForQuery.  The
+        // plug-in's only network use is the log uploader's single HTTPS POST.
+        QNetworkProxyFactory::setUseSystemConfiguration (false);
 
         // Qt must know it is a GUEST in someone else's application.  Without
         // this, Qt installs session-management and application-lifecycle hooks
@@ -540,6 +549,27 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
         impl->failed = true;
     }
 
+   #if OVERTEON_FILE_LOG
+    // ---- automatic telemetry -------------------------------------------
+    //
+    // A log build with a report token (the automation build) uploads this
+    // run's log once, without the user doing anything: a few seconds after the
+    // editor is up, so the environment, the Qt/QML start-up, the first frame
+    // and any start-up error are already in the file.  The token build exists
+    // precisely so this needs no configuration; OVERTEON_REPORT_AUTO=0 turns
+    // it off, OVERTEON_REPORT_DISABLE=1 turns the whole reporter off, and
+    // OVERTEON_REPORT_DELAY_MS tunes the delay (tests set it small).
+    {
+        const int configuredDelay = qEnvironmentVariableIntValue ("OVERTEON_REPORT_DELAY_MS");
+        const int delay = configuredDelay > 0 ? configuredDelay : 3000;
+        QTimer::singleShot (delay, impl->view, [this]
+        {
+            if (impl != nullptr && ! impl->failed && impl->view != nullptr)
+                ovreport::requestAutomatic (QStringLiteral ("automatic session log"));
+        });
+    }
+   #endif
+
     // The host's idle callback is what actually pumps this timer, and jalv
     // idles at ~15 Hz.  Asking for 120 only fills a backlog we can never drain;
     // 60 is the rate the scene is designed for and the most any host delivers.
@@ -574,6 +604,14 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
 OvQmlEditor::~OvQmlEditor()
 {
     ovlog::info ("editor closed");
+
+   #if OVERTEON_FILE_LOG
+    // A run that closed the editor before the automatic delay fired still
+    // reports; the request starts here and the log is complete up to this
+    // point.  request() is idempotent per process, so a run that already
+    // uploaded does nothing.
+    ovreport::requestAutomatic (QStringLiteral ("editor closed"));
+   #endif
 
     // One last chance to persist the size: the debounce may not have fired yet
     // if the editor was closed right after a drag.
