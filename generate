@@ -75,6 +75,14 @@ product_dir() {
         # Preview/test outputs (Overteon_rhi-preview_*...) sort after digits and must
         # not win the "newest" race just because of their name.
         [[ $(basename "$d") =~ ^Overteon_[0-9]{8}-[0-9]{6}_ ]] || continue
+        # A configure creates the directory before anything is built in it, so
+        # the newest name can still be an empty shell -- packaging that would
+        # produce a payload-less installer.  Require a real product inside.
+        local has=0 part
+        for part in Standalone VST3 VST LV2 AU; do
+            [ -e "$d/$part" ] && { has=1; break; }
+        done
+        [ "$has" = 1 ] || continue
         latest=${d%/}
     done
     [ -n "$latest" ] || return 1

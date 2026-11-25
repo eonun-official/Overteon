@@ -165,11 +165,24 @@ if(CMAKE_BUILD_TYPE AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     string(APPEND OVERTEON_BUILD_NAME "-${CMAKE_BUILD_TYPE}")
 endif()
 
-if(NOT OVERTEON_BUILD_STAMP)
+# Regenerated on EVERY configure.
+#
+# This used to be a cache variable, so the second "cmake .." kept the timestamp
+# of the first one and a fresh build silently landed in a directory named after
+# an old date.  A stamp is a property of this configure, not of the build tree.
+# To reproduce one specific name (e.g. to re-package an existing build), pass
+# -DOVERTEON_BUILD_STAMP_OVERRIDE=YYYYmmdd-HHMMSS.
+if(DEFINED OVERTEON_BUILD_STAMP)
+    unset(OVERTEON_BUILD_STAMP CACHE)
+    unset(OVERTEON_BUILD_STAMP)
+endif()
+
+if(DEFINED OVERTEON_BUILD_STAMP_OVERRIDE AND NOT "${OVERTEON_BUILD_STAMP_OVERRIDE}" STREQUAL "")
+    set(OVERTEON_BUILD_STAMP "${OVERTEON_BUILD_STAMP_OVERRIDE}")
+    message(STATUS "Overteon build stamp: ${OVERTEON_BUILD_STAMP} (override)")
+else()
     # Local time, of the host named in the same directory name.
     string(TIMESTAMP OVERTEON_BUILD_STAMP "%Y%m%d-%H%M%S")
-    set(OVERTEON_BUILD_STAMP "${OVERTEON_BUILD_STAMP}" CACHE STRING
-        "Timestamp in the product directory name (configure time)")
 endif()
 
 # A host that reports itself as UNKNOWN (this one does -- it has no /etc/hostname)
