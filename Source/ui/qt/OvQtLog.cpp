@@ -79,20 +79,17 @@ namespace
     // Qt reports a QML compile error as one message containing one line per
     // diagnostic.  Each of those becomes its own timestamped record so that a
     // multi-line error stays readable and greppable.
-    void writeMessage (QtMsgType type, const QString& message)
+    ovlog::Level levelFor (QtMsgType type)
     {
-        for (const auto& line : message.split (QLatin1Char ('\n')))
+        switch (type)
         {
-            if (line.trimmed().isEmpty())
-                continue;
-
-            if (type == QtDebugMsg || type == QtInfoMsg)
-                ovlog::info (toJuce (line));
-            else if (type == QtWarningMsg)
-                ovlog::warn (toJuce (line));
-            else
-                ovlog::error (toJuce (line));
+            case QtDebugMsg:    return ovlog::Level::debug;
+            case QtInfoMsg:     return ovlog::Level::info;
+            case QtWarningMsg:  return ovlog::Level::warn;
+            case QtCriticalMsg: return ovlog::Level::error;
+            case QtFatalMsg:    return ovlog::Level::error;
         }
+        return ovlog::Level::info;
     }
 
     void messageHandler (QtMsgType type, const QMessageLogContext& context, const QString& message)
@@ -100,30 +97,24 @@ namespace
         if (! ovlog::enabled())
             return;
 
-        QString line = QStringLiteral ("qt(%1)").arg (QString::fromLatin1 (typeName (type)));
+        const auto level = levelFor (type);
+        juce::String category ("qt");
         if (context.category != nullptr && qstrcmp (context.category, "default") != 0)
-            line += QStringLiteral (" [%1]").arg (QString::fromLatin1 (context.category));
-        line += QLatin1Char (' ');
-        line += message;
+            category = juce::String ("qt/") + juce::String::fromUTF8 (context.category);
 
-        if (context.file != nullptr)
+        for (const auto& line : message.split (QLatin1Char ('\n')))
         {
-            QString location = QStringLiteral (" (%1:%2")
-                .arg (QFileInfo (QString::fromLatin1 (context.file)).fileName())
-                .arg (context.line);
-            if (context.function != nullptr)
-                location += QStringLiteral (", %1").arg (QString::fromLatin1 (context.function));
-            location += QLatin1Char (')');
-            line += location;
+            if (line.trimmed().isEmpty())
+                continue;
+            ovlog::log (level, category, toJuce (line), context.file, context.line);
         }
-
-        writeMessage (type, line);
 
         // Warnings and worse also stay on stderr: CI logs and a terminal
         // session are the other place a failing UI is diagnosed.
         if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
-            std::fprintf (stderr, "%s\n", line.toUtf8().constData());
+            std::fprintf (stderr, "%s\n", message.toUtf8().constData());
     }
+
 }
 
 namespace ovqtlog
@@ -140,39 +131,37 @@ void install()
 
     qInstallMessageHandler (messageHandler);
 
-    // Qt filters debug/info out unless a rule says otherwise.  The log build is
-    // a diagnostics build, so turn everything on -- and let QT_LOGGING_RULES
-    // win when the user set it, because narrowing is the usual reason to set
-    // it at all.
+    // Which Qt categories reach the logger.  The handler itself enforces the
+    // log level and the per-category rate limit, so "all categories" is safe
+    // for performance now; debug categories are only asked for when the level
+    // is debug or the explicit switches are set.
     const auto rules = qEnvironmentVariable ("QT_LOGGING_RULES");
+    const bool verbose = int (ovlog::level()) >= int (ovlog::Level::debug)
+                         || qEnvironmentVariableIsSet ("OVERTEON_QTLOG_VERBOSE")
+                         || qEnvironmentVariableIsSet ("OVERTEON_QTLOG_FULL");
+
     if (! rules.isEmpty())
     {
-        ovlog::info ("Qt logging: QT_LOGGING_RULES=" + toJuce (rules));
+        QLoggingCategory::setFilterRules (rules);
+        ovlog::info ("qt", "logging: QT_LOGGING_RULES=" + toJuce (rules));
     }
-    else if (! qEnvironmentVariableIsSet ("OVERTEON_QTLOG_VERBOSE")
-             && ! qEnvironmentVariableIsSet ("OVERTEON_QTLOG_FULL"))
+    else if (! verbose)
     {
-        // Verbose Qt categories are a diagnosis switch, not a default.  Every
-        // Qt debug line goes through the file logger synchronously, and during
-        // mouse interaction in a host that is hundreds of lines per second --
-        // measurable as the host's GUI stuttering.  Warnings and errors are
-        // still recorded; our own lifecycle lines are unaffected.
-        QLoggingCategory::setFilterRules (QStringLiteral ("*.debug=false\n*.info=false\n"));
-        ovlog::info ("Qt logging: warnings/errors only "
-                     "(set OVERTEON_QTLOG_VERBOSE=1 for debug categories)");
+        QLoggingCategory::setFilterRules (QStringLiteral ("*.debug=false"));
+        ovlog::info ("qt", "logging: info/warn/error only "
+                           "(OVERTEON_LOG_LEVEL=debug or OVERTEON_QTLOG_VERBOSE=1 "
+                           "for Qt debug categories)");
     }
     else
     {
-        // Default: every Qt category at debug level except the internal traces
-        // that fire per item or per frame -- at 60 Hz the font database, the
-        // emoji segmenter and the dirty/clip bookkeeping alone produced more
-        // than three thousand lines a second, which buries the events a bug
-        // report actually needs.  OVERTEON_QTLOG_FULL=1 turns those back on
-        // (and QT_LOGGING_RULES overrides both).
-        QString rules = QStringLiteral ("*.debug=true\n*.info=true\n");
+        // Every category, minus the internals that fire per item or per frame.
+        // At 60 Hz the font database, the emoji segmenter and the dirty/clip
+        // bookkeeping alone produce thousands of records a second; they are
+        // still available with OVERTEON_QTLOG_FULL=1 or QT_LOGGING_RULES.
+        QString ruleText = QStringLiteral ("*.debug=true\n*.info=true\n");
         const bool full = ! qEnvironmentVariableIsEmpty ("OVERTEON_QTLOG_FULL");
         if (! full)
-            rules += QStringLiteral (
+            ruleText += QStringLiteral (
                 "qt.qpa.xcb.debug=false\n"
                 "qt.qpa.wayland.debug=false\n"
                 "qt.text.emojisegmenter.debug=false\n"
@@ -196,11 +185,11 @@ void install()
                 "qt.scenegraph.softwarecontext.*=false\n"
                 "qt.quick.hover.cursor.debug=false\n"
                 "qt.quick.mouse.debug=false\n");
-        QLoggingCategory::setFilterRules (rules);
-        ovlog::info (full ? "Qt logging: every category enabled, including per-frame internals "
-                            "(OVERTEON_QTLOG_FULL=1)"
-                          : "Qt logging: verbose categories enabled; per-frame internals filtered "
-                            "(set OVERTEON_QTLOG_FULL=1 for those, or QT_LOGGING_RULES to override)");
+        QLoggingCategory::setFilterRules (ruleText);
+        ovlog::info ("qt", full
+            ? "logging: every category enabled, including per-frame internals"
+            : "logging: your categories at debug; per-frame internals filtered "
+              "(OVERTEON_QTLOG_FULL=1 for those)");
     }
 }
 
@@ -252,7 +241,7 @@ void logEnvironment()
     }
 
     for (const auto& line : lines)
-        ovlog::info (toJuce (line));
+        ovlog::info ("qt", toJuce (line));
 }
 
 void logQuickWindow (QQuickWindow* window)

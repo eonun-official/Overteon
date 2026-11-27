@@ -280,6 +280,17 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
     // no-op in a clean process -- see OvCryptoShim.cpp.
     ovqt::bindQtToRealLibcrypto();
 
+    ovlog::debug ("editor", "ctor: design " + juce::String (OvThemeWidth) + "x"
+                             + juce::String (OvThemeHeight)
+                             + ", resizable="
+                           #if OVERTEON_RESIZABLE_WINDOW
+                             "yes"
+                           #else
+                             "no"
+                           #endif
+                             + ", target=" + juce::String (targetSize().x) + "x"
+                             + juce::String (targetSize().y));
+
     // Qt FIRST, then the size.
     //
     // The size has to be the design size AFTER the desktop scale, and only Qt
@@ -297,11 +308,11 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
         // engine is created, then record the environment they are running in.
         ovqtlog::install();
         ovqtlog::logEnvironment();
-        ovlog::info (juce::String ("Qt initialised: ") + qVersion());
+        ovlog::info ("editor", juce::String ("Qt initialised: ") + qVersion());
     }
     else
     {
-        ovlog::error ("Qt could not be initialised; the editor starts without a UI");
+        ovlog::error ("editor", "Qt could not be initialised; the editor starts without a UI");
     }
     {
         // Ask the host for the size.  JUCE turns this into the format's own
@@ -460,6 +471,7 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
                 ovqtlog::event (QStringLiteral ("preset: %1").arg (QString::fromStdString (n.toStdString())));
             };
 
+        ovlog::debug ("editor", "creating QQuickView");
         impl->view = new QQuickView();
 
         // One pointer service for the whole scene.  QML popups ask it whether
@@ -550,6 +562,7 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
             // Hand the window to the embedding component.  From here on all
             // positioning, parenting and show/hide is ovqt::Component's job —
             // cross-platform, no raw window handles.
+            ovlog::debug ("editor", "attaching QQuickView to the host window");
             qtComponent = std::make_unique<ovqt::Component>();
             qtComponent->setWindow (impl->view);
             addAndMakeVisible (*qtComponent);
@@ -634,13 +647,13 @@ OvQmlEditor::OvQmlEditor (OverteonProcessor& p)
         ovreport::request (QStringLiteral ("test hook"));
    #endif
 
-    ovlog::info ("editor opened: " + juce::String (getWidth()) + "x" + juce::String (getHeight())
+    ovlog::info ("editor", "opened: " + juce::String (getWidth()) + "x" + juce::String (getHeight())
                  + (impl->failed ? ", no UI" : ", QML embedded"));
 }
 
 OvQmlEditor::~OvQmlEditor()
 {
-    ovlog::info ("editor closed");
+    ovlog::info ("editor", "closed");
 
    #if OVERTEON_FILE_LOG
     // A run that closed the editor before the automatic delay fired still
@@ -670,8 +683,10 @@ OvQmlEditor::~OvQmlEditor()
     // wrapper; destroying it detaches the window from the host first (see the
     // note in OvQtComponent.h about the double destroy).  Only then is it safe
     // to drop the rest.
+    ovlog::debug ("editor", "teardown: destroying the Qt window component");
     qtComponent.reset();
     impl.reset();
+    ovlog::debug ("editor", "teardown: Qt window component gone");
 
     // Drain Qt's queue before this editor goes away.
     //
@@ -799,6 +814,32 @@ juce::Point<int> OvQmlEditor::clampSize (juce::Point<int> s) const
 void OvQmlEditor::timerCallback()
 {
     if (! impl) return;
+
+   #if OVERTEON_FILE_LOG
+    // Deliberate crash, for testing the crash handler end to end:
+    //   OVERTEON_LOG_CRASH_TEST=2  (seconds)
+    {
+        static const int crashAfter = qEnvironmentVariableIntValue ("OVERTEON_LOG_CRASH_TEST");
+        static int crashTicks = crashAfter * 60;
+        if (crashTicks > 0 && --crashTicks == 0)
+        {
+            ovlog::error ("log", "OVERTEON_LOG_CRASH_TEST: crashing on purpose");
+            ovlog::flush();
+            volatile int* crash = nullptr;
+            *crash = 42;
+        }
+    }
+
+    // A resource sample every five seconds at debug level.
+    {
+        static int perfTicks = 0;
+        if (++perfTicks >= 300)
+        {
+            perfTicks = 0;
+            ovlog::logProcessSample();
+        }
+    }
+   #endif
 
    #if OVERTEON_FILE_LOG
     if (impl->autoReportTicks > 0 && --impl->autoReportTicks == 0

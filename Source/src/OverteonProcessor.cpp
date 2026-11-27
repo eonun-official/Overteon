@@ -228,6 +228,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout OverteonProcessor::createLay
     return { ps.begin(), ps.end() };
 }
 
+static juce::Atomic<int> gOverteonInstanceCounter { 0 };
+
 OverteonProcessor::OverteonProcessor()
     : juce::AudioProcessor (BusesProperties()
           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
@@ -235,7 +237,12 @@ OverteonProcessor::OverteonProcessor()
       apvts (*this, nullptr, "HINJ", createLayout())
 {
     ovlog::start();
-    ovlog::info (juce::String ("instance created: Overteon ") + OVERTEON_VERSION);
+    instanceId = ++gOverteonInstanceCounter;
+    ovlog::info ("app", "instance #" + juce::String (instanceId)
+                       + " created: Overteon " OVERTEON_VERSION
+                       + ", wrapper=" + getWrapperTypeDescription (wrapperType)
+                       + ", " + juce::String (getTotalNumInputChannels()) + " in / "
+                       + juce::String (getTotalNumOutputChannels()) + " out");
 
     cacheParams();
 
@@ -248,7 +255,7 @@ OverteonProcessor::OverteonProcessor()
 
 OverteonProcessor::~OverteonProcessor()
 {
-    ovlog::info ("instance destroyed");
+    ovlog::info ("app", "instance #" + juce::String (instanceId) + " destroyed");
     ovlog::stop();
 }
 
@@ -461,7 +468,7 @@ void OverteonProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     {
         loggedSampleRate = sampleRate;
         loggedBlockSize  = samplesPerBlock;
-        ovlog::info ("audio prepared: " + juce::String (sampleRate, 1) + " Hz, "
+        ovlog::info ("audio", "prepared: " + juce::String (sampleRate, 1) + " Hz, "
                      + juce::String (samplesPerBlock) + " samples/block, "
                      + juce::String (getTotalNumInputChannels()) + " in / "
                      + juce::String (getTotalNumOutputChannels()) + " out");
@@ -520,6 +527,11 @@ void OverteonProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     meterGrPk.store (0.0f);
 }
 
+void OverteonProcessor::releaseResources()
+{
+    ovlog::debug ("audio", "released");
+}
+
 void OverteonProcessor::updateReportedLatency()
 {
     const bool schranz = (int) par.mode->load() == 2;
@@ -530,8 +542,18 @@ void OverteonProcessor::updateReportedLatency()
 void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+   #if OVERTEON_FILE_LOG
+    const auto ovBlockStart = juce::Time::getHighResolutionTicks();
+    const auto ovLogBlock = [this, ovBlockStart]
+    {
+        logBlockTiming (1000.0 * juce::Time::highResolutionTicksToSeconds (
+            juce::Time::getHighResolutionTicks() - ovBlockStart));
+    };
+   #else
+    const auto ovLogBlock = [] {};
+   #endif
     const int n = buffer.getNumSamples();
-    if (n == 0) return;
+    if (n == 0) { ovLogBlock(); return; }
 
     // ---- bypass ---------------------------------------------------------
     //
@@ -569,6 +591,7 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         grSmooth = 0.0;
         meterGr.store (0.0f);
         meterGrPk.store (0.0f);
+        ovLogBlock();
         return;
     }
     const int nCh = juce::jmin (2, buffer.getNumChannels());
@@ -1175,6 +1198,7 @@ void OverteonProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         meterOutPkL.store (pkL);
         meterOutPkR.store (pkR);
     }
+    ovLogBlock();
 }
 
 juce::AudioProcessorEditor* OverteonProcessor::createEditor()

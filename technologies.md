@@ -131,23 +131,54 @@ ls -t ~/Overteon/*.log | head -1
 The file is `~/Overteon/<date>.<time>.log`, for example
 `~/Overteon/2026-11-23.19-26-25.log`. One file is created per run: a later run
 never appends to or overwrites an earlier log, so two sessions cannot
-interleave. It records the version and process id, instance creation and
-destruction, the audio format passed to `prepareToPlay`, host state restores,
-the Qt version (or the reason Qt could not start), whether the QML scene loaded
-and any QML error text, and the editor open/close with its size.
+interleave.
 
-Qt's own diagnostics go into the same file: `qDebug`/`qInfo`/`qWarning`/
-`qCritical`, the QML engine's warnings, and the platform and scene-graph
-categories, with the category, source file and line. Debug categories are
-switched on in this build; the per-item and per-frame internals (font database,
-emoji segmenter, dirty/clip bookkeeping, software-context renderables) are
-filtered because at 60 Hz they alone produce thousands of lines a second and
-bury the events a report needs. `OVERTEON_QTLOG_FULL=1` turns even those back on,
-and `QT_LOGGING_RULES` overrides both. The log also records the Qt and JUCE versions, the platform
-plug-in, every screen (geometry, DPR, DPI, refresh rate), the selected RHI
-backend and shader configuration, the `QSG_*`/`QT_*`/`OVERTEON_*` switches in
-effect, editor embedding and resize events, display-setting changes and preset
-loads.
+Every record carries a timestamp with milliseconds, the level, the thread, the
+category and the message (`file:line` when the caller supplied it):
+
+```
+2026-11-27 18:02:15.103  INFO   [Overteon/1541052] audio: prepared: 44100.0 Hz, 512 samples/block, 2 in / 2 out
+2026-11-27 18:02:20.193  DEBUG  [Overteon/1541052] perf: cpu=25.3% mem=126.1MB threads=15 uptime=5.2s ...
+```
+
+Levels are `off < error < warn < info < debug < trace`; the default is `info`.
+The writer is asynchronous (a dedicated thread with a bounded queue, batch
+writes and periodic flushes), so logging never blocks the audio or GUI thread.
+A category that exceeds 400 records/second is throttled and the number of
+suppressed records is reported in the shutdown summary and in the `perf`
+sample, which is why the Qt debug categories can be enabled without turning
+into host UI lag.
+
+Runtime control:
+
+| Variable | Meaning |
+|---|---|
+| `OVERTEON_LOG_LEVEL` | `off`, `error`, `warn`, `info`, `debug`, `trace` |
+| `OVERTEON_LOG_CATEGORIES` | comma-separated category prefixes to keep |
+| `OVERTEON_LOG_ALL=1` | ignore the filter |
+| `OVERTEON_LOG_MAX_MB` | size cap (default 64), after which records are dropped |
+| `OVERTEON_LOG_CRASH_TEST=<s>` | deliberate crash after N seconds, for testing the handler |
+
+The log records the process (version, executable, working directory, user,
+CPU count, memory, OS, build date), every instance created/destroyed with its
+wrapper and channel layout, `prepareToPlay`/`releaseResources`, audio callback
+statistics (callbacks, average/maximum block time every five seconds), host
+state save/restore sizes, editor construction/embedding/open/close, the Qt and
+JUCE versions, the platform plug-in, every screen (geometry, DPR, DPI, refresh
+rate), the selected RHI backend and shader configuration, and the
+`QSG_*`/`QT_*`/`OVERTEON_*` switches in effect.
+
+Qt's own diagnostics (`qDebug`/`qInfo`/`qWarning`/`qCritical`, QML warnings,
+platform and scene-graph categories) go into the same file with their category
+and source location. Debug categories are only requested when the level is
+`debug` (or `OVERTEON_QTLOG_VERBOSE=1`); `OVERTEON_QTLOG_FULL=1` also enables
+the per-item/per-frame internals, and `QT_LOGGING_RULES` overrides both.
+
+Crash safety: on POSIX a `SIGSEGV`/`SIGABRT`/`SIGFPE`/`SIGILL`/`SIGBUS`
+handler, and on Windows `SetUnhandledExceptionFilter` plus
+`std::terminate`, append a banner and a stack trace directly to the log file
+descriptor and flush it before the process dies. This path does not use the
+writer queue, so the record survives a crash.
 
 The option is OFF by default. A build without it creates neither the directory
 nor any file, and leaves the host's JUCE logger untouched.

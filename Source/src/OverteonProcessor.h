@@ -20,7 +20,7 @@ public:
     ~OverteonProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override {}
+    void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& l) const override
     {
         return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
@@ -53,11 +53,14 @@ public:
     void getStateInformation (juce::MemoryBlock& dest) override
     {
         if (auto xml = apvts.copyState().createXml())
+        {
             copyXmlToBinary (*xml, dest);
+            ovlog::debug ("state", "state save: " + juce::String ((int) dest.getSize()) + " bytes");
+        }
     }
     void setStateInformation (const void* data, int size) override
     {
-        ovlog::info ("state restore: " + juce::String (size) + " bytes");
+        ovlog::info ("state", "state restore: " + juce::String (size) + " bytes");
         if (auto xml = getXmlFromBinary (data, size))
             if (xml->hasTagName (apvts.state.getType()))
             {
@@ -232,6 +235,41 @@ private:
     // prepareToPlay calls from a host do not flood the file.
     double loggedSampleRate = -1.0;
     int    loggedBlockSize  = 0;
+
+    // ---- audio callback diagnostics ------------------------------------
+    // One record per five seconds, at debug level: enough to see whether a
+    // host is starving the callback or a block takes unexpectedly long,
+    // without a line per block (which would itself become the problem).
+    void logBlockTiming (double blockMs)
+    {
+       #if OVERTEON_FILE_LOG
+        ++logBlocks;
+        logBlockMsSum += blockMs;
+        logBlockMsMax = juce::jmax (logBlockMsMax, blockMs);
+        const auto now = juce::Time::getMillisecondCounterHiRes();
+        if (now - logLastStatsMs >= 5000.0)
+        {
+            const auto avg = logBlockMsSum / juce::jmax (1, (int) logBlocks);
+            ovlog::debug ("audio",
+                "callbacks=" + juce::String ((juce::int64) logBlocks)
+                + " avgBlock=" + juce::String (avg, 3) + " ms"
+                + " maxBlock=" + juce::String (logBlockMsMax, 3) + " ms"
+                + " sr=" + juce::String (sr, 0));
+            logBlocks = 0;
+            logBlockMsSum = 0.0;
+            logBlockMsMax = 0.0;
+            logLastStatsMs = now;
+        }
+       #else
+        juce::ignoreUnused (blockMs);
+       #endif
+    }
+
+    int instanceId = 0;
+    juce::int64 logBlocks = 0;
+    double logBlockMsSum = 0.0;
+    double logBlockMsMax = 0.0;
+    double logLastStatsMs = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OverteonProcessor)
 };
